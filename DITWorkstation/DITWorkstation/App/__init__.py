@@ -8,8 +8,8 @@ from typing import List
 @dataclass
 class AppConfig:
     """应用全局配置"""
-    # 数据库路径
-    db_dir: Path = field(default_factory=lambda: Path.home() / ".dit_workstation")
+    # 数据库路径（代码库根目录下的 data 文件夹）
+    db_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parent.parent.parent.parent / "data")
     db_name: str = "dit_workstation.db"
 
     # 校验和配置
