@@ -14,6 +14,7 @@ from DITWorkstation.Views.shooting_log_view import ShootingLogView
 from DITWorkstation.Views.search_view import SearchView
 from DITWorkstation.Views.report_view import ReportView
 from DITWorkstation.Views.media_import_view import MediaImportView
+from DITWorkstation.Views.asset_info_view import AssetInfoView
 
 
 class MainWindow(QMainWindow):
@@ -49,6 +50,7 @@ class MainWindow(QMainWindow):
             ("✏️ 文件重命名", "批量重命名与元数据"),
             ("📋 拍摄日志", "场景/镜头/镜次管理"),
             ("🔍 素材检索", "按条件快速检索"),
+            ("ℹ️ 素材信息", "查看素材EXIF与元数据详情"),
             ("📊 报告生成", "数据管理与QC报告"),
         ]
 
@@ -69,6 +71,7 @@ class MainWindow(QMainWindow):
         self.rename_view = RenameView()
         self.log_view = ShootingLogView()
         self.search_view = SearchView()
+        self.asset_info_view = AssetInfoView()
         self.report_view = ReportView()
 
         self.stack.addWidget(self.import_view)
@@ -77,6 +80,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.rename_view)
         self.stack.addWidget(self.log_view)
         self.stack.addWidget(self.search_view)
+        self.stack.addWidget(self.asset_info_view)
         self.stack.addWidget(self.report_view)
 
         layout.addWidget(self.nav_list)

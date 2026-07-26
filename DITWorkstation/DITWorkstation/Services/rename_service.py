@@ -143,55 +143,87 @@ class MetadataService:
             file_type=path.suffix.lower()
         )
 
-        # 尝试读取EXIF信息（仅JPG/TIFF）
-        if path.suffix.lower() in ('.jpg', '.jpeg', '.tiff', '.tif'):
+        # 尝试读取EXIF信息（JPG/TIFF/RAW）
+        ext = path.suffix.lower()
+        if ext in ('.jpg', '.jpeg', '.tiff', '.tif', '.png', '.webp',
+                   '.cr2', '.cr3', '.nef', '.arw', '.dng', '.orf',
+                   '.rw2', '.raf', '.pef', '.srw'):
             self._read_exif(path, metadata)
 
         return metadata
 
     def _read_exif(self, path: Path, metadata: MediaMetadata):
-        """读取EXIF信息"""
+        """读取EXIF信息（支持 JPG/TIFF/RAW，使用 exifread）"""
+        # 1. 用 exifread 读取 EXIF（支持所有 RAW 和 JPG 格式）
+        try:
+            import exifread
+
+            with open(path, 'rb') as fh:
+                tags = exifread.process_file(fh, details=False)
+
+            if tags:
+                def _get(tag_name):
+                    """获取 exifread 标签的字符串值"""
+                    val = tags.get(tag_name)
+                    return str(val) if val else ""
+
+                make = _get("Image Make") or _get("EXIF Make")
+                if make:
+                    metadata.camera_make = make.strip()
+
+                model = _get("Image Model") or _get("EXIF Model")
+                if model:
+                    metadata.camera_model = model.strip()
+
+                lens = _get("EXIF LensModel") or _get("Image LensModel")
+                if lens:
+                    metadata.lens_model = lens.strip()
+
+                iso_str = _get("EXIF ISOSpeedRatings")
+                if iso_str:
+                    try:
+                        metadata.iso = int(iso_str)
+                    except ValueError:
+                        pass
+
+                fnumber_str = _get("EXIF FNumber")
+                if fnumber_str:
+                    try:
+                        # exifread 返回 "f/2.8" 或 "2.8" 格式
+                        val = fnumber_str.replace("f/", "").strip()
+                        metadata.aperture = f"f/{float(val):.1f}"
+                    except (ValueError, TypeError):
+                        metadata.aperture = fnumber_str
+
+                exposure_str = _get("EXIF ExposureTime")
+                if exposure_str:
+                    metadata.shutter_speed = exposure_str.strip()
+
+                focal_str = _get("EXIF FocalLength")
+                if focal_str:
+                    # exifread 返回 "50.0 mm" 格式
+                    metadata.focal_length = focal_str.strip()
+
+                dto_str = _get("EXIF DateTimeOriginal") or _get("Image DateTimeOriginal")
+                if dto_str:
+                    try:
+                        metadata.date_taken = datetime.strptime(
+                            dto_str.strip(), "%Y:%m:%d %H:%M:%S"
+                        )
+                    except (ValueError, TypeError):
+                        pass
+        except Exception:
+            pass
+
+        # 2. 用 Pillow 读取图像尺寸（仅对 Pillow 能打开的格式）
         try:
             from PIL import Image
-            from PIL.ExifTags import TAGS
 
             with Image.open(path) as img:
                 metadata.width = img.width
                 metadata.height = img.height
-
-                exif_data = img._getexif()
-                if exif_data:
-                    for tag_id, value in exif_data.items():
-                        tag = TAGS.get(tag_id, tag_id)
-                        if tag == "Make":
-                            metadata.camera_make = str(value)
-                        elif tag == "Model":
-                            metadata.camera_model = str(value)
-                        elif tag == "LensModel":
-                            metadata.lens_model = str(value)
-                        elif tag == "ISOSpeedRatings":
-                            metadata.iso = int(value) if value else 0
-                        elif tag == "FNumber":
-                            if hasattr(value, 'numerator'):
-                                metadata.aperture = f"f/{value.numerator / value.denominator:.1f}"
-                            else:
-                                metadata.aperture = f"f/{value}"
-                        elif tag == "ExposureTime":
-                            if hasattr(value, 'numerator'):
-                                if value.numerator == 1:
-                                    metadata.shutter_speed = f"1/{value.denominator}s"
-                                else:
-                                    metadata.shutter_speed = f"{value.numerator / value.denominator:.2f}s"
-                        elif tag == "FocalLength":
-                            if hasattr(value, 'numerator'):
-                                metadata.focal_length = f"{value.numerator / value.denominator:.0f}mm"
-                        elif tag == "DateTimeOriginal":
-                            try:
-                                metadata.date_taken = datetime.strptime(str(value), "%Y:%m:%d %H:%M:%S")
-                            except (ValueError, TypeError):
-                                pass
         except Exception:
-            pass  # EXIF读取失败不影响基本功能
+            pass
 
     def batch_read_metadata(self, file_paths: List[str]) -> List[MediaMetadata]:
         """批量读取元数据"""

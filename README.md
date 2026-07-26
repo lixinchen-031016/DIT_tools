@@ -205,7 +205,7 @@ App（配置）→ Models（数据模型）→ Services（业务逻辑）→ Vie
 
 | 用途 | 路径 |
 |------|------|
-| 数据库文件 | `~/.dit_workstation/dit_workstation.db` |
+| 数据库文件 | DIT_tools/data/dit_workstation.db |
 | 日志目录 | `~/.dit_workstation/logs/` |
 | 报告输出目录 | `~/Documents/DIT_Reports/` |
 
