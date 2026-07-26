@@ -184,6 +184,10 @@ class MediaImportService:
         assets: List[MediaAsset] = []
         details = []
 
+        # 查询项目名称，用于在工作区下创建项目子文件夹
+        project = self.db_service.get_project(project_id)
+        project_name = project.name if project else project_id
+
         for i, file_path in enumerate(file_paths):
             if cancel_check and cancel_check():
                 cancelled = True
@@ -213,7 +217,7 @@ class MediaImportService:
                 if copy_to_workspace:
                     if not workspace_dir:
                         raise ValueError("复制模式需要指定工作区目录")
-                    dest_path = self._copy_to_workspace(path, workspace_dir)
+                    dest_path = self._copy_to_workspace(path, workspace_dir, project_name)
                     final_path = str(dest_path)
                     is_copy = True
                     original_path = str(path)
@@ -345,18 +349,22 @@ class MediaImportService:
 
         return asset
 
-    def _copy_to_workspace(self, source_path: Path, workspace_dir: str) -> Path:
+    def _copy_to_workspace(self, source_path: Path, workspace_dir: str, project_name: str = "") -> Path:
         """
-        复制文件到工作区
+        复制文件到工作区（在工作区下创建项目名子文件夹）
 
         Args:
             source_path: 源文件路径
             workspace_dir: 工作区目录
+            project_name: 项目名称（用于创建子文件夹）
 
         Returns:
             目标文件路径
         """
         workspace = Path(workspace_dir)
+        # 在工作区下创建项目名子文件夹
+        if project_name:
+            workspace = workspace / project_name
         workspace.mkdir(parents=True, exist_ok=True)
 
         dest = workspace / source_path.name

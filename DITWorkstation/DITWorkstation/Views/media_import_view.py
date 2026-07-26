@@ -137,11 +137,11 @@ class MediaImportView(QWidget):
 
         self.copy_mode_check = QCheckBox("复制到工作区")
         self.copy_mode_check.setChecked(False)
-        self.copy_mode_check.setToolTip("勾选后将文件复制到项目工作区再导入，原文件保持不动")
+        self.copy_mode_check.setToolTip("勾选后将文件复制到工作区/项目名/ 文件夹下再导入，原文件保持不动")
         opt_row1.addWidget(self.copy_mode_check)
 
         self.workspace_edit = QLineEdit()
-        self.workspace_edit.setPlaceholderText("工作区目录（复制模式必填）")
+        self.workspace_edit.setPlaceholderText("工作区目录（复制模式必填，将自动创建项目名子文件夹）")
         self.workspace_edit.setReadOnly(True)
         self.workspace_edit.setEnabled(False)
         ws_browse_btn = QPushButton("选择...")
