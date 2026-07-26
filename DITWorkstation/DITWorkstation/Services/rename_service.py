@@ -212,18 +212,33 @@ class MetadataService:
                         )
                     except (ValueError, TypeError):
                         pass
+
+                # 从 EXIF 读取图像尺寸（支持 RAW 文件）
+                # EXIF 规范中高度标签名为 *Length 而非 *Height
+                for w_key, h_key in [("EXIF ExifImageWidth", "EXIF ExifImageLength"),
+                                     ("Image ImageWidth", "Image ImageLength")]:
+                    w_str = _get(w_key)
+                    h_str = _get(h_key)
+                    if w_str and h_str:
+                        try:
+                            metadata.width = int(str(w_str).split()[0])
+                            metadata.height = int(str(h_str).split()[0])
+                            break
+                        except (ValueError, TypeError):
+                            pass
         except Exception:
             pass
 
-        # 2. 用 Pillow 读取图像尺寸（仅对 Pillow 能打开的格式）
-        try:
-            from PIL import Image
+        # 2. 用 Pillow 读取图像尺寸（仅对 Pillow 能打开的格式，作为补充）
+        if not metadata.width or not metadata.height:
+            try:
+                from PIL import Image
 
-            with Image.open(path) as img:
-                metadata.width = img.width
-                metadata.height = img.height
-        except Exception:
-            pass
+                with Image.open(path) as img:
+                    metadata.width = img.width
+                    metadata.height = img.height
+            except Exception:
+                pass
 
     def batch_read_metadata(self, file_paths: List[str]) -> List[MediaMetadata]:
         """批量读取元数据"""
