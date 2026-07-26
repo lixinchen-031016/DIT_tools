@@ -1,4 +1,5 @@
 """媒体导入服务"""
+import json
 import shutil
 import uuid
 from pathlib import Path
@@ -306,8 +307,9 @@ class MediaImportService:
         date_taken = None
         camera_make = ""
         camera_model = ""
+        video_metadata = ""
 
-        # 图片/RAW 通过 PIL 读取 EXIF；视频元数据读取需第三方库，暂留默认
+        # 图片/RAW 读取 EXIF
         if read_metadata and asset_type in (AssetType.IMAGE, AssetType.RAW):
             try:
                 meta = self.metadata_service.read_metadata(file_path)
@@ -320,6 +322,23 @@ class MediaImportService:
                 camera_model = meta.camera_model or ""
             except Exception as e:
                 logger.debug(f"读取元数据失败 {file_path}: {e}")
+
+        # 视频读取元数据
+        if read_metadata and asset_type == AssetType.VIDEO:
+            try:
+                vm = self.metadata_service.read_video_metadata(file_path)
+                width = vm.width or 0
+                height = vm.height or 0
+                duration_seconds = vm.duration_seconds or 0.0
+                video_metadata = json.dumps({
+                    "codec": vm.codec,
+                    "frame_rate": vm.frame_rate,
+                    "bit_rate": vm.bit_rate,
+                    "audio_codec": vm.audio_codec,
+                    "audio_sample_rate": vm.audio_sample_rate,
+                })
+            except Exception as e:
+                logger.debug(f"读取视频元数据失败 {file_path}: {e}")
 
         asset = MediaAsset(
             asset_id=str(uuid.uuid4())[:8],
@@ -345,6 +364,7 @@ class MediaImportService:
             duration_seconds=duration_seconds,
             lens_model=lens_model,
             focal_length=focal_length,
+            video_metadata=video_metadata,
         )
 
         return asset

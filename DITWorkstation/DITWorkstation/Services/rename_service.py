@@ -6,7 +6,7 @@ from typing import List, Optional, Tuple
 from datetime import datetime
 
 from DITWorkstation.App import config
-from DITWorkstation.Models import RenameRule, MediaMetadata
+from DITWorkstation.Models import RenameRule, MediaMetadata, VideoMetadata
 
 
 class RenameService:
@@ -243,3 +243,42 @@ class MetadataService:
     def batch_read_metadata(self, file_paths: List[str]) -> List[MediaMetadata]:
         """批量读取元数据"""
         return [self.read_metadata(fp) for fp in file_paths]
+
+    def read_video_metadata(self, file_path: str) -> VideoMetadata:
+        """
+        读取视频文件元数据（时长、编码、帧率、比特率、音频信息）
+
+        使用 pymediainfo 解析，需要系统安装 MediaInfo 库。
+        macOS: brew install mediainfo
+        """
+        vm = VideoMetadata()
+        try:
+            from pymediainfo import MediaInfo
+
+            media_info = MediaInfo.parse(file_path)
+            for track in media_info.tracks:
+                if track.track_type == "General":
+                    if track.duration:
+                        vm.duration_seconds = float(track.duration) / 1000.0
+                    if track.overall_bit_rate:
+                        vm.bit_rate = int(track.overall_bit_rate)
+                elif track.track_type == "Video":
+                    if track.width:
+                        vm.width = int(track.width)
+                    if track.height:
+                        vm.height = int(track.height)
+                    if track.codec_id or track.format:
+                        vm.codec = track.codec_id or track.format or ""
+                    if track.frame_rate:
+                        try:
+                            vm.frame_rate = float(track.frame_rate)
+                        except (ValueError, TypeError):
+                            pass
+                elif track.track_type == "Audio":
+                    if track.codec_id or track.format:
+                        vm.audio_codec = track.codec_id or track.format or ""
+                    if track.sampling_rate:
+                        vm.audio_sample_rate = int(track.sampling_rate)
+        except Exception:
+            pass
+        return vm

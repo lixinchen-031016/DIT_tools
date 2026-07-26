@@ -3,6 +3,7 @@ exifread==3.5.1
 iniconfig==2.3.0
 packaging==26.2
 pillow==12.3.0
+pymediainfo==6.1.0
 pluggy==1.6.0
 Pygments==2.20.0
 PySide6==6.11.1

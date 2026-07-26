@@ -100,36 +100,54 @@ class _BatchExifWorker(QThread):
                 self.progress.emit(i + 1, total, f"跳过：{asset.file_name}（文件不存在）")
                 continue
 
-            metadata = self._metadata_service.read_metadata(file_path)
-
             update_fields = {}
-            if metadata.camera_make:
-                update_fields["camera_make"] = metadata.camera_make
-            if metadata.camera_model:
-                update_fields["camera_model"] = metadata.camera_model
-            if metadata.lens_model:
-                update_fields["lens_model"] = metadata.lens_model
-            if metadata.iso:
-                update_fields["iso"] = metadata.iso
-            if metadata.aperture:
-                update_fields["aperture"] = metadata.aperture
-            if metadata.shutter_speed:
-                update_fields["shutter_speed"] = metadata.shutter_speed
-            if metadata.focal_length:
-                update_fields["focal_length"] = metadata.focal_length
-            if metadata.width:
-                update_fields["width"] = metadata.width
-            if metadata.height:
-                update_fields["height"] = metadata.height
-            if metadata.date_taken:
-                update_fields["date_taken"] = metadata.date_taken
+
+            # 视频文件读取视频元数据
+            if asset.asset_type == "video":
+                vm = self._metadata_service.read_video_metadata(file_path)
+                if vm.width:
+                    update_fields["width"] = vm.width
+                if vm.height:
+                    update_fields["height"] = vm.height
+                if vm.duration_seconds:
+                    update_fields["duration_seconds"] = vm.duration_seconds
+                update_fields["video_metadata"] = json.dumps({
+                    "codec": vm.codec,
+                    "frame_rate": vm.frame_rate,
+                    "bit_rate": vm.bit_rate,
+                    "audio_codec": vm.audio_codec,
+                    "audio_sample_rate": vm.audio_sample_rate,
+                })
+            else:
+                # 图片/RAW 读取 EXIF
+                metadata = self._metadata_service.read_metadata(file_path)
+                if metadata.camera_make:
+                    update_fields["camera_make"] = metadata.camera_make
+                if metadata.camera_model:
+                    update_fields["camera_model"] = metadata.camera_model
+                if metadata.lens_model:
+                    update_fields["lens_model"] = metadata.lens_model
+                if metadata.iso:
+                    update_fields["iso"] = metadata.iso
+                if metadata.aperture:
+                    update_fields["aperture"] = metadata.aperture
+                if metadata.shutter_speed:
+                    update_fields["shutter_speed"] = metadata.shutter_speed
+                if metadata.focal_length:
+                    update_fields["focal_length"] = metadata.focal_length
+                if metadata.width:
+                    update_fields["width"] = metadata.width
+                if metadata.height:
+                    update_fields["height"] = metadata.height
+                if metadata.date_taken:
+                    update_fields["date_taken"] = metadata.date_taken
 
             if update_fields:
                 self._db_service.update_media_asset(asset_id, **update_fields)
                 success += 1
                 self.progress.emit(i + 1, total, f"已更新：{asset.file_name}")
             else:
-                self.progress.emit(i + 1, total, f"无 EXIF：{asset.file_name}")
+                self.progress.emit(i + 1, total, f"无元数据：{asset.file_name}")
 
         self.finished_batch.emit(success, total)
 
@@ -538,32 +556,50 @@ class AssetInfoView(QWidget):
             return
         file_path = self.current_asset.file_path
         if not file_path or not Path(file_path).exists():
-            QMessageBox.warning(self, "提示", "文件不存在，无法读取 EXIF 信息。")
+            QMessageBox.warning(self, "提示", "文件不存在，无法读取元数据信息。")
             return
 
-        metadata = self.metadata_service.read_metadata(file_path)
-
         update_fields = {}
-        if metadata.camera_make:
-            update_fields["camera_make"] = metadata.camera_make
-        if metadata.camera_model:
-            update_fields["camera_model"] = metadata.camera_model
-        if metadata.lens_model:
-            update_fields["lens_model"] = metadata.lens_model
-        if metadata.iso:
-            update_fields["iso"] = metadata.iso
-        if metadata.aperture:
-            update_fields["aperture"] = metadata.aperture
-        if metadata.shutter_speed:
-            update_fields["shutter_speed"] = metadata.shutter_speed
-        if metadata.focal_length:
-            update_fields["focal_length"] = metadata.focal_length
-        if metadata.width:
-            update_fields["width"] = metadata.width
-        if metadata.height:
-            update_fields["height"] = metadata.height
-        if metadata.date_taken:
-            update_fields["date_taken"] = metadata.date_taken
+
+        # 视频文件读取视频元数据
+        if self.current_asset.asset_type == "video":
+            vm = self.metadata_service.read_video_metadata(file_path)
+            if vm.width:
+                update_fields["width"] = vm.width
+            if vm.height:
+                update_fields["height"] = vm.height
+            if vm.duration_seconds:
+                update_fields["duration_seconds"] = vm.duration_seconds
+            update_fields["video_metadata"] = json.dumps({
+                "codec": vm.codec,
+                "frame_rate": vm.frame_rate,
+                "bit_rate": vm.bit_rate,
+                "audio_codec": vm.audio_codec,
+                "audio_sample_rate": vm.audio_sample_rate,
+            })
+        else:
+            # 图片/RAW 读取 EXIF
+            metadata = self.metadata_service.read_metadata(file_path)
+            if metadata.camera_make:
+                update_fields["camera_make"] = metadata.camera_make
+            if metadata.camera_model:
+                update_fields["camera_model"] = metadata.camera_model
+            if metadata.lens_model:
+                update_fields["lens_model"] = metadata.lens_model
+            if metadata.iso:
+                update_fields["iso"] = metadata.iso
+            if metadata.aperture:
+                update_fields["aperture"] = metadata.aperture
+            if metadata.shutter_speed:
+                update_fields["shutter_speed"] = metadata.shutter_speed
+            if metadata.focal_length:
+                update_fields["focal_length"] = metadata.focal_length
+            if metadata.width:
+                update_fields["width"] = metadata.width
+            if metadata.height:
+                update_fields["height"] = metadata.height
+            if metadata.date_taken:
+                update_fields["date_taken"] = metadata.date_taken
 
         if update_fields:
             self.db_service.update_media_asset(
@@ -573,15 +609,15 @@ class AssetInfoView(QWidget):
                 self.current_asset.asset_id
             )
             self._display_properties(self.current_asset)
-            self._load_assets()  # 刷新列表的 EXIF 状态列
+            self._load_assets()
             QMessageBox.information(
                 self, "成功",
-                f"已更新 {len(update_fields)} 项 EXIF 信息。"
+                f"已更新 {len(update_fields)} 项元数据。"
             )
         else:
             QMessageBox.information(
                 self, "提示",
-                "未读取到 EXIF 信息（该文件可能不含 EXIF 数据）。"
+                "未读取到元数据信息（该文件可能不含元数据）。"
             )
 
     # ===== 一键批量重新读取全部 EXIF =====
