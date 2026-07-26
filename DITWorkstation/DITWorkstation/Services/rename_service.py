@@ -1,6 +1,7 @@
 """文件重命名与元数据管理服务"""
 import os
 import re
+import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 from datetime import datetime
@@ -249,13 +250,28 @@ class MetadataService:
         读取视频文件元数据（时长、编码、帧率、比特率、音频信息）
 
         使用 pymediainfo 解析，需要系统安装 MediaInfo 库。
-        macOS: brew install mediainfo
+        macOS:   brew install mediainfo
+        Windows: 安装 MediaInfo（https://mediaarea.net/en/MediaInfo）
         """
         vm = VideoMetadata()
         try:
             from pymediainfo import MediaInfo
 
-            media_info = MediaInfo.parse(file_path)
+            # 尝试自动加载，失败则按平台指定常见动态库路径
+            try:
+                media_info = MediaInfo.parse(file_path)
+            except OSError:
+                lib_paths = self._get_mediainfo_lib_paths()
+                media_info = None
+                for p in lib_paths:
+                    try:
+                        media_info = MediaInfo.parse(file_path, library_file=p)
+                        break
+                    except OSError:
+                        continue
+                if media_info is None:
+                    return vm
+
             for track in media_info.tracks:
                 if track.track_type == "General":
                     if track.duration:
@@ -282,3 +298,45 @@ class MetadataService:
         except Exception:
             pass
         return vm
+
+    @staticmethod
+    def _get_mediainfo_lib_paths() -> List[str]:
+        """
+        按操作系统返回 MediaInfo 动态库的常见安装路径。
+
+        macOS:   Homebrew 安装的 libmediainfo dylib
+        Windows: MediaInfo 官方安装包的 MediaInfo.dll（含 32/64 位 Program Files）
+        Linux:   包管理器安装的 libmediainfo.so
+        """
+        paths: List[str] = []
+        if sys.platform == "darwin":
+            paths.extend([
+                "/opt/homebrew/lib/libmediainfo.0.dylib",   # Apple Silicon Homebrew
+                "/usr/local/lib/libmediainfo.0.dylib",      # Intel Homebrew
+                "/opt/homebrew/lib/libmediainfo.dylib",
+                "/usr/local/lib/libmediainfo.dylib",
+            ])
+        elif sys.platform == "win32":
+            # 从环境变量读取 Program Files 路径（覆盖非系统盘安装、自定义目录）
+            pf64 = os.environ.get("ProgramW6432") or os.environ.get("ProgramFiles")
+            pf32 = os.environ.get("ProgramFiles(x86)")
+            candidates = []
+            if pf64:
+                candidates.append(Path(pf64) / "MediaInfo" / "MediaInfo.dll")
+            if pf32:
+                candidates.append(Path(pf32) / "MediaInfo" / "MediaInfo.dll")
+            # 默认安装路径兜底
+            candidates.extend([
+                Path("C:/Program Files/MediaInfo/MediaInfo.dll"),
+                Path("C:/Program Files (x86)/MediaInfo/MediaInfo.dll"),
+            ])
+            paths.extend(str(c) for c in candidates)
+        else:
+            # Linux 及其他类 Unix 系统
+            paths.extend([
+                "/usr/lib/libmediainfo.so.0",
+                "/usr/lib/x86_64-linux-gnu/libmediainfo.so.0",
+                "/usr/local/lib/libmediainfo.so.0",
+                "/usr/lib/libmediainfo.so",
+            ])
+        return paths
