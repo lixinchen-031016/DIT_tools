@@ -1,0 +1,22 @@
+# Checklist
+
+- [x] README.md 存在于项目根目录 `/Users/lixinchen/PycharmProjects/DIT_tools/README.md`
+- [x] README.md 包含项目名称与一句话简介
+- [x] README.md 包含 7 大功能模块的特性列表
+- [x] README.md 包含技术栈说明（Python 3.13 / PySide6 / SQLite / xxhash / Pillow / reportlab）
+- [x] README.md 包含虚拟环境创建与依赖安装步骤（source .venv/bin/activate + pip install -r requirements.txt）
+- [x] README.md 包含启动命令（python DITWorkstation/main.py）
+- [x] README.md 包含测试命令（激活虚拟环境后 pytest DITWorkstationTests/ -v）
+- [x] README.md 包含项目目录结构树
+- [x] README.md 包含应用配置说明（数据库路径 ~/.dit_workstation/、报告目录 ~/Documents/DIT_Reports/、支持的媒体格式列表）
+- [x] 用户手册存在于 `/Users/lixinchen/PycharmProjects/DIT_tools/DITWorkstation/docs/用户手册.md`
+- [x] 用户手册包含应用总览与功能导航
+- [x] 用户手册包含媒体导入模块操作指南
+- [x] 用户手册包含数据备份模块操作指南
+- [x] 用户手册包含 RAW 提取模块操作指南
+- [x] 用户手册包含文件重命名模块操作指南
+- [x] 用户手册包含拍摄日志模块操作指南（含素材关联两种路径与 scene/shot 同步）
+- [x] 用户手册包含素材检索模块操作指南
+- [x] 用户手册包含报告生成模块操作指南
+- [x] 用户手册包含常见问题 FAQ
+- [x] 两个文档中的文件路径、命令、配置项与实际代码一致（无虚构内容）
