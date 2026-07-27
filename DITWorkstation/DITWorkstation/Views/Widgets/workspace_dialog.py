@@ -5,11 +5,12 @@
 from typing import Optional
 
 from PySide6.QtWidgets import (
-    QDialog, QFormLayout, QLineEdit, QPushButton, QFileDialog,
+    QDialog, QFormLayout, QLineEdit, QPushButton,
     QDialogButtonBox, QMessageBox, QHBoxLayout, QWidget
 )
 
 from DITWorkstation.Models import Workspace
+from DITWorkstation.Utils import pick_directory
 
 
 class WorkspaceDialog(QDialog):
@@ -49,9 +50,7 @@ class WorkspaceDialog(QDialog):
         browse_btn = QPushButton("浏览…")
 
         def _browse():
-            d = QFileDialog.getExistingDirectory(
-                self, "选择工作区目录", self.path_edit.text()
-            )
+            d = pick_directory(self, "选择工作区目录", self.path_edit.text())
             if d:
                 self.path_edit.setText(d)
 

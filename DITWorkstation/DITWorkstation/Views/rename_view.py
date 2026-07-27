@@ -1,7 +1,7 @@
 """文件重命名页面"""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QFileDialog, QGroupBox, QFormLayout,
+    QLineEdit, QGroupBox, QFormLayout,
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
     QSpinBox, QComboBox, QProgressBar
 )
@@ -10,7 +10,7 @@ from pathlib import Path
 
 from DITWorkstation.Models import RenameRule
 from DITWorkstation.Services.rename_service import RenameService
-from DITWorkstation.Utils import WorkerThread, safe_slot, get_db_service, logger
+from DITWorkstation.Utils import WorkerThread, safe_slot, get_db_service, logger, pick_directory
 
 
 class RenameView(QWidget):
@@ -140,7 +140,7 @@ class RenameView(QWidget):
 
     @safe_slot("选择文件夹失败")
     def _select_folder(self):
-        path = QFileDialog.getExistingDirectory(self, "选择素材文件夹")
+        path = pick_directory(self, "选择素材文件夹")
         if path:
             self.folder_edit.setText(path)
             self._scan_folder(path)

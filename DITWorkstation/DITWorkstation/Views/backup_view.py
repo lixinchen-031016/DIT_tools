@@ -1,8 +1,7 @@
 """数据备份页面 - 安全拷贝与多重备份"""
-import sys
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QFileDialog, QProgressBar, QComboBox,
+    QLineEdit, QProgressBar, QComboBox,
     QGroupBox, QFormLayout, QTextEdit, QListWidget,
     QMessageBox, QCheckBox
 )
@@ -14,7 +13,7 @@ from typing import Optional
 from DITWorkstation.Models import ChecksumAlgorithm, BackupJob
 from DITWorkstation.Services.backup_service import BackupService
 from DITWorkstation.Services.media_import_service import MediaImportService
-from DITWorkstation.Utils import WorkerThread, format_size, generate_log_message, safe_slot, get_db_service
+from DITWorkstation.Utils import WorkerThread, format_size, generate_log_message, safe_slot, get_db_service, pick_directory
 
 
 class BackupView(QWidget):
@@ -170,20 +169,8 @@ class BackupView(QWidget):
             self._log(f"刷新工作区/项目列表失败: {e}")
 
     def _pick_directory(self, title: str) -> str:
-        """统一的目录选择对话框。
-
-        Windows 打包后原生 QFileDialog 可能因应用 manifest / 临时目录问题
-        返回空字符串（即使选中了目录），此处先尝试原生对话框，失败则回退到
-        Qt 非原生对话框，确保路径能正确返回。
-        """
-        path = QFileDialog.getExistingDirectory(self, title)
-        if path:
-            return path
-        # 回退：非原生对话框（Windows 打包后更可靠）
-        path = QFileDialog.getExistingDirectory(
-            self, title, options=QFileDialog.Option.DontUseNativeDialog
-        )
-        return path or ""
+        """统一的目录选择对话框（委托给共享工具函数，处理打包兼容）。"""
+        return pick_directory(self, title)
 
     def _select_source(self):
         path = self._pick_directory("选择存储卡路径")

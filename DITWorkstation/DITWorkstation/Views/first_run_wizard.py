@@ -13,10 +13,10 @@ from typing import Optional
 
 from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QWizard, QWizardPage,
-    QPushButton, QFileDialog
+    QPushButton
 )
 
-from DITWorkstation.Utils import get_db_service, logger
+from DITWorkstation.Utils import get_db_service, logger, pick_directory
 
 
 # ===== 常量 =====
@@ -170,7 +170,7 @@ class _CreateWorkspacePage(QWizardPage):
         layout.addWidget(self._status_label)
 
     def _browse_dir(self):
-        d = QFileDialog.getExistingDirectory(self, "选择工作区目录")
+        d = pick_directory(self, "选择工作区目录")
         if d:
             self.path_edit.setText(d)
 

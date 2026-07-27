@@ -1,7 +1,7 @@
 """JPG筛选后RAW提取页面"""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QFileDialog, QProgressBar, QGroupBox,
+    QLineEdit, QProgressBar, QGroupBox,
     QFormLayout, QCheckBox, QTableWidget,
     QTableWidgetItem, QHeaderView, QMessageBox
 )
@@ -10,7 +10,7 @@ from PySide6.QtCore import Slot, Signal
 from DITWorkstation.Services.raw_extraction_service import RawExtractionService
 from DITWorkstation.Services.media_import_service import MediaImportService
 from DITWorkstation.Utils.workers import SimpleWorkerThread
-from DITWorkstation.Utils import get_db_service, logger
+from DITWorkstation.Utils import get_db_service, logger, pick_directory
 
 
 class RawExtractionView(QWidget):
@@ -171,7 +171,7 @@ class RawExtractionView(QWidget):
         layout.addStretch()
 
     def _select_folder(self, edit: QLineEdit, title: str):
-        path = QFileDialog.getExistingDirectory(self, title)
+        path = pick_directory(self, title)
         if path:
             edit.setText(path)
 

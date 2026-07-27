@@ -83,6 +83,30 @@ def calculate_speed(elapsed_seconds: float, bytes_transferred: int) -> float:
     return (bytes_transferred / 1024 / 1024) / elapsed_seconds
 
 
+def pick_directory(parent=None, title: str = "选择目录", start_path: str = "") -> str:
+    """统一的目录选择对话框（打包后兼容）。
+
+    Windows 打包后原生 QFileDialog 可能因 COM 初始化 / manifest 问题返回空字符串
+    （即使选中了目录）。若先弹原生再回退非原生，会弹两次对话框，用户取消第二次
+    后路径为空，导致目标列表不显示等bug。
+
+    此处在 frozen（PyInstaller 打包）环境下直接使用 Qt 非原生对话框；
+    开发环境仍用原生以获得更好体验。
+
+    Returns: 选中的目录路径，未选择或取消返回空字符串。
+    """
+    import sys
+    from PySide6.QtWidgets import QFileDialog
+    if getattr(sys, 'frozen', False):
+        path = QFileDialog.getExistingDirectory(
+            parent, title, start_path,
+            options=QFileDialog.Option.DontUseNativeDialog,
+        )
+    else:
+        path = QFileDialog.getExistingDirectory(parent, title, start_path)
+    return path or ""
+
+
 class Logger:
     """简易日志记录器"""
 

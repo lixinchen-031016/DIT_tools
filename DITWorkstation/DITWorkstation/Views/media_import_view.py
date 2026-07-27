@@ -4,7 +4,7 @@ from typing import Optional
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QFileDialog, QProgressBar, QGroupBox,
+    QLineEdit, QProgressBar, QGroupBox,
     QTextEdit, QCheckBox, QTableWidget,
     QTableWidgetItem, QHeaderView, QMessageBox,
     QSplitter, QComboBox
@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt, Slot
 
 from DITWorkstation.Models import Project
 from DITWorkstation.Services.media_import_service import MediaImportService
-from DITWorkstation.Utils import format_size, generate_log_message, WorkerThread, get_db_service
+from DITWorkstation.Utils import format_size, generate_log_message, WorkerThread, get_db_service, pick_directory
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
 
 
@@ -283,7 +283,7 @@ class MediaImportView(QWidget):
             self.log_combo.setEnabled(False)
 
     def _select_folder(self):
-        path = QFileDialog.getExistingDirectory(self, "选择要导入的文件夹")
+        path = pick_directory(self, "选择要导入的文件夹")
         if path:
             self.source_edit.setText(path)
 
