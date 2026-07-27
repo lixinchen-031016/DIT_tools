@@ -1,11 +1,10 @@
 """通用工具模块"""
-import os
 import re
 import logging
 import functools
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Callable
 
 
 def format_size(size_bytes: int) -> str:

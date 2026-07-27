@@ -3,9 +3,9 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QFileDialog, QProgressBar, QComboBox,
     QGroupBox, QFormLayout, QTextEdit, QListWidget,
-    QListWidgetItem, QMessageBox, QCheckBox, QSplitter
+    QMessageBox, QCheckBox
 )
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Slot
 
 from pathlib import Path
 
@@ -25,12 +25,7 @@ class BackupView(QWidget):
         self.current_job: BackupJob = None
         self.worker: WorkerThread = None
         self._setup_ui()
-        # 项目下拉变化时同步全局（"不关联"即 None 不广播，避免覆盖全局项目）
-        self.project_combo.currentIndexChanged.connect(self._on_project_changed)
-        # 监听全局项目切换，同步本视图下拉
-        from DITWorkstation.Views.main_window import get_data_bus
-        get_data_bus().project_focus_changed.connect(self._on_global_project_changed)
-        get_data_bus().workspace_focus_changed.connect(self._on_global_workspace_changed)
+        # 项目切换由共享控件处理（broadcast_none=False 保留"不关联"语义）
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -50,10 +45,16 @@ class BackupView(QWidget):
         project_group = QGroupBox("关联项目（可选）")
         project_layout = QHBoxLayout(project_group)
         project_layout.addWidget(QLabel("当前备份归属的项目:"))
-        self.project_combo = QComboBox()
-        self.project_combo.setMinimumWidth(300)
-        self.project_combo.addItem("（不关联项目，仅做文件备份）", None)
-        project_layout.addWidget(self.project_combo, 1)
+        # 共享控件：broadcast_none=False 保留"不关联"语义（选 None 不清空全局项目）
+        from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
+        self.selector = WorkspaceProjectSelector(
+            project_widget="combo",
+            show_new_project=True,
+            none_label="（不关联项目，仅做文件备份）",
+            broadcast_none=False,
+            db_service=self.db_service,
+        )
+        project_layout.addWidget(self.selector, 1)
         project_layout.addStretch()
         layout.addWidget(project_group)
 
@@ -156,60 +157,9 @@ class BackupView(QWidget):
         layout.addStretch()
 
     def showEvent(self, event):
-        """每次显示时刷新项目下拉"""
+        """每次显示时刷新工作区/项目列表"""
         super().showEvent(event)
-        self._load_projects()
-
-    @safe_slot("加载项目失败")
-    def _load_projects(self):
-        """加载项目到下拉（优先同步全局当前项目，其次保留之前的选择）"""
-        prev_id = self.project_combo.currentData()
-        self.project_combo.blockSignals(True)
-        self.project_combo.clear()
-        self.project_combo.addItem("（不关联项目，仅做文件备份）", None)
-        try:
-            from DITWorkstation.Views.main_window import get_current_workspace_id
-            ws_id = get_current_workspace_id()
-            projects = self.db_service.get_projects(workspace_id=ws_id)
-        except Exception:
-            projects = []
-        for p in projects:
-            self.project_combo.addItem(f"{p.name} ({p.project_id})", p.project_id)
-        # 优先同步全局当前项目；若全局为 None，回退到本视图之前的选择
-        from DITWorkstation.Views.main_window import get_current_project_id
-        target_id = get_current_project_id() or prev_id
-        if target_id:
-            for i in range(self.project_combo.count()):
-                if self.project_combo.itemData(i) == target_id:
-                    self.project_combo.setCurrentIndex(i)
-                    break
-        self.project_combo.blockSignals(False)
-        # blockSignals 期间未触发 currentIndexChanged，手动同步一次全局（不关联时不广播）
-        self._on_project_changed(self.project_combo.currentIndex())
-
-    def _on_project_changed(self, index: int):
-        """本视图项目下拉变化时同步全局（"不关联"即 None 不广播，避免覆盖全局项目）"""
-        project_id = self.project_combo.currentData()
-        if project_id is not None:
-            from DITWorkstation.Views.main_window import set_current_project
-            set_current_project(project_id)
-
-    def _on_global_project_changed(self, project_id):
-        """全局项目切换，同步本视图下拉；None 不强制覆盖（保留"不关联"语义）"""
-        if project_id is None:
-            return
-        self.project_combo.blockSignals(True)
-        for i in range(self.project_combo.count()):
-            if self.project_combo.itemData(i) == project_id:
-                self.project_combo.setCurrentIndex(i)
-                break
-        self.project_combo.blockSignals(False)
-        # 手动触发一次本视图的 _on_project_changed 逻辑
-        self._on_project_changed(self.project_combo.currentIndex())
-
-    def _on_global_workspace_changed(self, _workspace_id):
-        """全局工作区切换 -> 重新加载项目列表（按新工作区过滤）"""
-        self._load_projects()
+        self.selector.refresh()
 
     def _select_source(self):
         path = QFileDialog.getExistingDirectory(self, "选择存储卡路径")
@@ -254,7 +204,7 @@ class BackupView(QWidget):
         algorithm = ChecksumAlgorithm.XXHASH64 if self.algorithm_combo.currentIndex() == 0 else ChecksumAlgorithm.MD5
 
         # 当前关联的项目（可空）
-        project_id = self.project_combo.currentData()
+        project_id = self.selector.get_current_project_id()
 
         # 创建备份作业
         self.current_job = self.backup_service.create_backup_job(source, targets, algorithm)

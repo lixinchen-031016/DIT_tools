@@ -3,14 +3,14 @@ import json
 import shutil
 import uuid
 from pathlib import Path
-from typing import List, Optional, Callable, Dict, Tuple
+from typing import List, Optional, Callable, Dict
 from datetime import datetime
 
 from DITWorkstation.App import config
 from DITWorkstation.Models import MediaAsset, AssetType, ChecksumAlgorithm
 from DITWorkstation.Services.checksum_service import ChecksumService
 from DITWorkstation.Services.database_service import DatabaseService
-from DITWorkstation.Services.rename_service import MetadataService
+from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Utils import logger, get_checksum_service
 
 

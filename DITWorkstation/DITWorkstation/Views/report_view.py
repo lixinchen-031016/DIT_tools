@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QGroupBox, QComboBox, QFileDialog, QMessageBox,
     QTextEdit, QLineEdit, QFormLayout
 )
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Slot
 
 from DITWorkstation.Services.report_service import ReportService
 from DITWorkstation.Utils import get_db_service, safe_slot
@@ -20,7 +20,7 @@ class ReportView(QWidget):
         self.report_service = ReportService()
         self.worker = None
         self._setup_ui()
-        self._load_projects()
+        # 项目切换由共享控件广播，本视图无需额外处理（生成时实时读取选中项目）
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -40,9 +40,15 @@ class ReportView(QWidget):
         config_group = QGroupBox("报告配置")
         config_layout = QFormLayout(config_group)
 
-        self.project_combo = QComboBox()
-        self.project_combo.setMinimumWidth(300)
-        config_layout.addRow("选择项目:", self.project_combo)
+        # 共享控件：工作区 + 项目两级选择
+        from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
+        self.selector = WorkspaceProjectSelector(
+            project_widget="combo",
+            show_new_project=True,
+            none_label="（暂无项目，请先在拍摄日志中创建）",
+            db_service=self.db_service,
+        )
+        config_layout.addRow("选择项目:", self.selector)
 
         self.report_type_combo = QComboBox()
         self.report_type_combo.addItems([
@@ -97,24 +103,9 @@ class ReportView(QWidget):
         log_layout.addWidget(self.log_text)
         layout.addWidget(log_group, 1)
 
-    def _load_projects(self):
-        # 保留当前选中的项目
-        prev_id = self.project_combo.currentData()
-        self.project_combo.clear()
-        projects = self.db_service.get_projects()
-        restore_index = 0
-        if not projects:
-            self.project_combo.addItem("（暂无项目，请先在拍摄日志中创建）", None)
-        else:
-            for i, p in enumerate(projects):
-                self.project_combo.addItem(p.name, p.project_id)
-                if prev_id and p.project_id == prev_id:
-                    restore_index = i
-            self.project_combo.setCurrentIndex(restore_index)
-
     def showEvent(self, event):
-        # report_view 原本无 showEvent，切换回来时项目列表不刷新
-        self._load_projects()
+        # 切换回本视图时刷新工作区/项目列表
+        self.selector.refresh()
         super().showEvent(event)
 
     def _select_output(self):
@@ -126,7 +117,7 @@ class ReportView(QWidget):
 
     @safe_slot("生成报告失败")
     def _generate_report(self):
-        project_id = self.project_combo.currentData()
+        project_id = self.selector.get_current_project_id()
         if not project_id:
             QMessageBox.warning(self, "提示", "请先创建项目")
             return

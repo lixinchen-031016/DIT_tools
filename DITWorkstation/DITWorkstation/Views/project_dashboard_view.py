@@ -1,27 +1,18 @@
 """项目概览看板视图 - 聚合展示当前项目进度，提供 SOP 下一步引导"""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QComboBox, QGridLayout, QFrame, QDialog, QFormLayout,
-    QLineEdit, QFileDialog, QMessageBox, QDialogButtonBox
+    QGridLayout, QFrame
 )
 from PySide6.QtCore import Slot
 
-from DITWorkstation.Utils import get_db_service, format_size, safe_slot
+from DITWorkstation.Utils import get_db_service, format_size, logger
+from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
 
 
-# 主窗口导航栏索引（与 main_window.py 的 nav_items 顺序保持一致）
-# 修改导航栏顺序时只需同步此处常量，避免按钮跳转到错误视图
-_NAV_INDEX = {
-    "dashboard": 0,   # 🏠 项目概览
-    "import": 1,      # 📁 媒体导入
-    "backup": 2,      # 📦 数据备份
-    "raw": 3,         # 🎞 RAW提取
-    "rename": 4,      # ✏️ 文件重命名
-    "log": 5,         # 📋 拍摄日志
-    "search": 6,      # 🔍 素材检索
-    "asset_info": 7,  # ℹ️ 素材信息
-    "report": 8,      # 📊 报告生成
-}
+def _nav_index(key: str) -> int:
+    """从 main_window 单一事实源查询导航索引（延迟导入避免循环依赖）"""
+    from DITWorkstation.Views.main_window import get_nav_index
+    return get_nav_index(key)
 
 
 class _StatCard(QFrame):
@@ -70,14 +61,14 @@ class ProjectDashboardView(QWidget):
         super().__init__()
         self.db_service = get_db_service()
         self._setup_ui()
-        # 监听全局工作区与项目切换
+        # 监听选择控件的项目切换，刷新统计卡片
+        self.selector.project_changed.connect(self._on_project_changed_from_selector)
+        # 监听数据变更广播（素材/日志/备份变更后刷新卡片）
         try:
             from DITWorkstation.Views.main_window import get_data_bus
-            get_data_bus().workspace_focus_changed.connect(self._on_global_workspace_changed)
-            get_data_bus().project_focus_changed.connect(self._on_global_project_changed)
             get_data_bus().data_changed.connect(self._on_data_changed)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"项目概览连接 data_bus 失败: {e}")
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -92,46 +83,14 @@ class ProjectDashboardView(QWidget):
 
         header.addStretch()
 
-        header.addWidget(QLabel("工作区:"))
-        self.workspace_combo = QComboBox()
-        self.workspace_combo.setMinimumWidth(180)
-        self.workspace_combo.addItem("（全部工作区）", None)
-        self.workspace_combo.currentIndexChanged.connect(self._on_workspace_changed)
-        header.addWidget(self.workspace_combo)
-
-        # 新建/编辑工作区按钮
-        new_ws_btn = QPushButton("+ 新建工作区")
-        new_ws_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #34c759; color: white;
-                padding: 6px 12px; border-radius: 6px;
-                font-size: 12px; font-weight: 600;
-            }
-            QPushButton:hover { background-color: #2db84e; }
-        """)
-        new_ws_btn.clicked.connect(self._create_workspace)
-        header.addWidget(new_ws_btn)
-
-        edit_ws_btn = QPushButton("编辑")
-        edit_ws_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f0f0f0; color: #1d1d1f;
-                padding: 6px 12px; border-radius: 6px;
-                font-size: 12px; border: 1px solid #d1d1d6;
-            }
-            QPushButton:hover { background-color: #e5e5ea; }
-            QPushButton:disabled { color: #c7c7cc; background-color: #f5f5f7; }
-        """)
-        edit_ws_btn.clicked.connect(self._edit_workspace)
-        self._edit_ws_btn = edit_ws_btn  # 保存引用，便于根据是否选中工作区启用/禁用
-        header.addWidget(edit_ws_btn)
-
-        header.addWidget(QLabel("项目:"))
-        self.project_combo = QComboBox()
-        self.project_combo.setMinimumWidth(260)
-        self.project_combo.addItem("（未选择项目）", None)
-        self.project_combo.currentIndexChanged.connect(self._on_project_changed)
-        header.addWidget(self.project_combo)
+        # 工作区 + 项目两级选择控件（combo 模式 + 编辑按钮）
+        self.selector = WorkspaceProjectSelector(
+            project_widget="combo",
+            show_edit_workspace=True,
+            show_new_project=True,
+            db_service=self.db_service,
+        )
+        header.addWidget(self.selector)
 
         layout.addLayout(header)
 
@@ -164,22 +123,22 @@ class ProjectDashboardView(QWidget):
         guide_layout = QHBoxLayout()
         guide_layout.setSpacing(8)
 
-        # 4 个快捷跳转按钮（索引来自 _NAV_INDEX，与 main_window 导航栏顺序对齐）
+        # 4 个快捷跳转按钮（索引通过 _nav_index 从 main_window 单一事实源查询）
         self.btn_import = QPushButton("① 媒体导入")
         self.btn_import.setToolTip("去导入素材到当前项目")
-        self.btn_import.clicked.connect(lambda: self._jump_to(_NAV_INDEX["import"]))
+        self.btn_import.clicked.connect(lambda: self._jump_to(_nav_index("import")))
 
         self.btn_backup = QPushButton("② 数据备份")
         self.btn_backup.setToolTip("去把存储卡安全备份")
-        self.btn_backup.clicked.connect(lambda: self._jump_to(_NAV_INDEX["backup"]))
+        self.btn_backup.clicked.connect(lambda: self._jump_to(_nav_index("backup")))
 
         self.btn_log = QPushButton("③ 拍摄日志")
         self.btn_log.setToolTip("去补录场景/镜头/镜次并关联素材")
-        self.btn_log.clicked.connect(lambda: self._jump_to(_NAV_INDEX["log"]))
+        self.btn_log.clicked.connect(lambda: self._jump_to(_nav_index("log")))
 
         self.btn_report = QPushButton("④ 生成报告")
         self.btn_report.setToolTip("去生成项目数据管理与 QC 报告")
-        self.btn_report.clicked.connect(lambda: self._jump_to(_NAV_INDEX["report"]))
+        self.btn_report.clicked.connect(lambda: self._jump_to(_nav_index("report")))
 
         for btn in (self.btn_import, self.btn_backup, self.btn_log, self.btn_report):
             btn.setStyleSheet("""
@@ -211,220 +170,29 @@ class ProjectDashboardView(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        self._load_workspaces()
-        self._load_projects()
-        self._refresh()
-
-    def _load_workspaces(self):
-        """加载工作区下拉，优先选中全局 current_workspace_id"""
-        from DITWorkstation.Views.main_window import get_current_workspace_id
-        prev_id = get_current_workspace_id()
-        self.workspace_combo.blockSignals(True)
-        self.workspace_combo.clear()
-        self.workspace_combo.addItem("（全部工作区）", None)
-        try:
-            workspaces = self.db_service.get_workspaces()
-        except Exception:
-            workspaces = []
-        target_index = 0
-        for i, ws in enumerate(workspaces, start=1):
-            label = ws.name
-            if ws.path:
-                label += f"  [{ws.path}]"
-            self.workspace_combo.addItem(label, ws.workspace_id)
-            if prev_id and ws.workspace_id == prev_id:
-                target_index = i
-        self.workspace_combo.setCurrentIndex(target_index)
-        self.workspace_combo.blockSignals(False)
-        # 编辑按钮仅在选中具体工作区时启用
-        self._edit_ws_btn.setEnabled(target_index > 0)
-
-    def _open_workspace_dialog(self, workspace=None) -> bool:
-        """新建/编辑工作区对话框。
-
-        Args:
-            workspace: 为 None 时新建；为 Workspace 实例时编辑现有
-
-        Returns:
-            是否成功保存
-        """
-        is_edit = workspace is not None
-        dlg = QDialog(self)
-        dlg.setWindowTitle("编辑工作区" if is_edit else "新建工作区")
-        dlg.setMinimumWidth(420)
-        form = QFormLayout(dlg)
-
-        name_edit = QLineEdit(workspace.name if is_edit else "")
-        name_edit.setPlaceholderText("如「2026 春季广告片」")
-
-        path_edit = QLineEdit(workspace.path if is_edit else "")
-        path_edit.setPlaceholderText("工作区物理目录（可选，建议填写以便导入时复制素材）")
-        path_row = QHBoxLayout()
-        path_row.addWidget(path_edit, 1)
-        browse_btn = QPushButton("浏览…")
-        def _browse():
-            d = QFileDialog.getExistingDirectory(dlg, "选择工作区目录", path_edit.text())
-            if d:
-                path_edit.setText(d)
-        browse_btn.clicked.connect(_browse)
-        path_row.addWidget(browse_btn)
-        path_container = QWidget()
-        path_container.setLayout(path_row)
-        path_container.layout().setContentsMargins(0, 0, 0, 0)
-
-        desc_edit = QLineEdit(workspace.description if is_edit else "")
-        desc_edit.setPlaceholderText("描述（可选）")
-
-        form.addRow("名称 *:", name_edit)
-        form.addRow("目录:", path_container)
-        form.addRow("描述:", desc_edit)
-
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.button(QDialogButtonBox.Ok).setText("保存")
-        btns.button(QDialogButtonBox.Cancel).setText("取消")
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-        form.addRow(btns)
-
-        if dlg.exec() != QDialog.Accepted:
-            return False
-
-        name = name_edit.text().strip()
-        if not name:
-            QMessageBox.warning(self, "提示", "工作区名称不能为空")
-            return False
-
-        try:
-            if is_edit:
-                ok = self.db_service.update_workspace(
-                    workspace.workspace_id,
-                    name=name,
-                    path=path_edit.text().strip(),
-                    description=desc_edit.text().strip()
-                )
-                if not ok:
-                    QMessageBox.warning(self, "提示", "更新失败")
-                    return False
-            else:
-                ws = self.db_service.create_workspace(
-                    name=name,
-                    path=path_edit.text().strip(),
-                    description=desc_edit.text().strip()
-                )
-                # 新建后自动设为当前工作区
-                from DITWorkstation.Views.main_window import set_current_workspace
-                set_current_workspace(ws.workspace_id)
-
-            # 广播工作区变更，触发各视图刷新
-            from DITWorkstation.Views.main_window import get_data_bus
-            get_data_bus().emit_data_changed("workspaces_changed")
-            self._load_workspaces()
-            self._load_projects()
-            self._refresh()
-            return True
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"保存失败：{e}")
-            return False
-
-    @safe_slot("新建工作区失败")
-    def _create_workspace(self):
-        self._open_workspace_dialog(workspace=None)
-
-    @safe_slot("编辑工作区失败")
-    def _edit_workspace(self):
-        ws_id = self.workspace_combo.currentData()
-        if not ws_id:
-            QMessageBox.information(self, "提示", "请先选择一个工作区")
-            return
-        ws = self.db_service.get_workspace(ws_id)
-        if not ws:
-            QMessageBox.warning(self, "提示", "工作区不存在")
-            return
-        self._open_workspace_dialog(workspace=ws)
-
-    def _load_projects(self):
-        """加载项目下拉，按当前选中工作区过滤；优先选中全局 current_project_id"""
-        from DITWorkstation.Views.main_window import get_current_project_id
-        prev_id = get_current_project_id()
-        ws_id = self.workspace_combo.currentData()
-
-        self.project_combo.blockSignals(True)
-        self.project_combo.clear()
-        self.project_combo.addItem("（未选择项目）", None)
-        try:
-            # 按工作区过滤；ws_id 为 None 时返回全部项目（与"全部工作区"语义一致）
-            projects = self.db_service.get_projects(workspace_id=ws_id)
-        except Exception:
-            projects = []
-        target_index = 0
-        for i, p in enumerate(projects, start=1):
-            self.project_combo.addItem(f"{p.name} ({p.project_id})", p.project_id)
-            if prev_id and p.project_id == prev_id:
-                target_index = i
-        self.project_combo.setCurrentIndex(target_index)
-        self.project_combo.blockSignals(False)
-        # 手动触发刷新
-        self._refresh()
-
-    @Slot(int)
-    def _on_workspace_changed(self, _index: int):
-        """本视图工作区下拉切换 -> 广播到全局，并重载项目下拉"""
-        from DITWorkstation.Views.main_window import set_current_workspace
-        set_current_workspace(self.workspace_combo.currentData())
-        # 工作区切换会触发 _on_global_workspace_changed -> _load_projects，避免重复加载
-        # 但若全局未变化（同 ID），仍需手动重载
-        self._load_projects()
-
-    @Slot(int)
-    def _on_project_changed(self, _index: int):
-        """本视图项目下拉切换 -> 广播到全局"""
-        from DITWorkstation.Views.main_window import set_current_project
-        set_current_project(self.project_combo.currentData())
+        self.selector.refresh()
         self._refresh()
 
     @Slot(object)
-    def _on_global_workspace_changed(self, workspace_id):
-        """全局工作区切换 -> 同步本视图工作区下拉（项目下拉由 _load_projects 重新加载）"""
-        self.workspace_combo.blockSignals(True)
-        if workspace_id is None:
-            self.workspace_combo.setCurrentIndex(0)
-        else:
-            for i in range(self.workspace_combo.count()):
-                if self.workspace_combo.itemData(i) == workspace_id:
-                    self.workspace_combo.setCurrentIndex(i)
-                    break
-        self.workspace_combo.blockSignals(False)
-        self._load_projects()
-
-    @Slot(object)
-    def _on_global_project_changed(self, project_id):
-        """全局项目切换 -> 同步本视图项目下拉"""
-        self.project_combo.blockSignals(True)
-        if project_id is None:
-            self.project_combo.setCurrentIndex(0)
-        else:
-            for i in range(self.project_combo.count()):
-                if self.project_combo.itemData(i) == project_id:
-                    self.project_combo.setCurrentIndex(i)
-                    break
-        self.project_combo.blockSignals(False)
+    def _on_project_changed_from_selector(self, _project_id):
+        """选择控件的项目切换 → 刷新统计卡片（全局广播由 selector 内部处理）"""
         self._refresh()
 
     @Slot(str)
     def _on_data_changed(self, event: str):
-        """收到数据变更广播时刷新卡片"""
-        # 仅当前视图可见时刷新
+        """收到数据变更广播时刷新卡片
+
+        工作区/项目列表变更由 selector 自行同步；本视图只需刷新统计卡片。
+        """
         if self.isVisible():
-            # 工作区/项目列表也可能变了（如新建项目后），重载下拉
             if event in ("all", "workspaces_changed", "projects_changed"):
-                self._load_workspaces()
-                self._load_projects()
-            else:
-                self._refresh()
+                # 工作区/项目可能新增，让 selector 重新加载下拉
+                self.selector.refresh()
+            self._refresh()
 
     def _refresh(self):
         """根据当前项目刷新统计卡片与 SOP 提示"""
-        project_id = self.project_combo.currentData()
+        project_id = self.selector.get_current_project_id()
         if not project_id:
             self.card_assets.set_value("—", "未选择项目")
             self.card_backups.set_value("—", "")
@@ -488,7 +256,8 @@ class ProjectDashboardView(QWidget):
         try:
             assets = self.db_service.get_media_assets(project_id)
             return sum(1 for a in assets if a.log_id)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"统计已关联日志素材失败 project_id={project_id}: {e}")
             return 0
 
     def _build_sop_hint(self, asset_count: int, backed_up: int,
@@ -506,7 +275,7 @@ class ProjectDashboardView(QWidget):
         if log_count == 0:
             return ("③ 下一步：去「拍摄日志」补录场景/镜头/镜次，并关联已导入的素材。\n"
                     "  提示：可在日志视图用「从代表素材填充 EXIF」自动带出相机/镜头/ISO。")
-        unlinked = asset_count - self._count_assets_with_log(self.project_combo.currentData())
+        unlinked = asset_count - self._count_assets_with_log(self.selector.get_current_project_id())
         if unlinked > 0:
             return (f"⚠ 还有 {unlinked} 个素材未关联到任何拍摄日志。\n"
                     "  下一步：去「拍摄日志」选中日志后点「关联素材」补全关联。")

@@ -2,7 +2,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
 from typing import Optional, List
 
 
@@ -38,6 +37,27 @@ class BackupStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     PARTIAL = "partial"  # 部分成功
+
+
+class AssetRating(Enum):
+    """镜次评级 - MediaAsset.rating 字段的枚举化引用
+
+    数据库存储为 INTEGER（0/1/2/3），MediaAsset.rating 仍为 int 类型以兼容
+    旧代码与 SQLite 列类型；本枚举仅作为常量引用，消除散落的魔法数字。
+    """
+    NONE = 0       # 未评级
+    USABLE = 1     # 可用
+    BACKUP = 2     # 备选
+    PREFERRED = 3  # 优选
+
+
+# 评级标签：单一事实源，供 report_service / asset_info_view / search_view 共用
+RATING_LABELS = {
+    AssetRating.NONE.value: "未评级",
+    AssetRating.USABLE.value: "★ 可用",
+    AssetRating.BACKUP.value: "★★ 备选",
+    AssetRating.PREFERRED.value: "★★★ 优选",
+}
 
 
 @dataclass
@@ -215,3 +235,4 @@ class MediaAsset:
     lens_model: str = ""
     focal_length: str = ""
     video_metadata: str = ""  # VideoMetadata 的 JSON 序列化（codec/frame_rate/bit_rate/audio_codec/audio_sample_rate）
+    rating: int = 0  # 镜次评级：0=未评级, 1=可用, 2=备选, 3=优选

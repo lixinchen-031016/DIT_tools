@@ -747,6 +747,102 @@ class TestDatabaseService(unittest.TestCase):
         for r in results:
             self.assertEqual(r.scene, "S001")
 
+    def test_media_asset_rating_default(self):
+        """TR: 新建素材 rating 默认为 0（未评级）"""
+        project = self.db.create_project(name="评级默认测试")
+        asset = MediaAsset(
+            asset_id=str(uuid.uuid4())[:8],
+            project_id=project.project_id,
+            file_path="/path/IMG_R001.cr2",
+            file_name="IMG_R001.cr2",
+            file_size=1024,
+            file_type=".cr2",
+        )
+        self.db.add_media_asset(asset)
+        fetched = self.db.get_media_asset(asset.asset_id)
+        self.assertEqual(fetched.rating, 0)
+
+    def test_media_asset_rating_save_and_retrieve(self):
+        """TR: rating 字段能正确保存和读取"""
+        project = self.db.create_project(name="评级读写测试")
+        asset = MediaAsset(
+            asset_id=str(uuid.uuid4())[:8],
+            project_id=project.project_id,
+            file_path="/path/IMG_R002.cr2",
+            file_name="IMG_R002.cr2",
+            file_size=1024,
+            file_type=".cr2",
+            rating=3,
+        )
+        self.db.add_media_asset(asset)
+        fetched = self.db.get_media_asset(asset.asset_id)
+        self.assertEqual(fetched.rating, 3)
+
+    def test_update_media_asset_rating(self):
+        """TR: update_media_asset 能更新 rating"""
+        project = self.db.create_project(name="评级更新测试")
+        asset = MediaAsset(
+            asset_id=str(uuid.uuid4())[:8],
+            project_id=project.project_id,
+            file_path="/path/IMG_R003.cr2",
+            file_name="IMG_R003.cr2",
+            file_size=1024,
+            file_type=".cr2",
+        )
+        self.db.add_media_asset(asset)
+
+        ok = self.db.update_media_asset(asset.asset_id, rating=2)
+        self.assertTrue(ok)
+        fetched = self.db.get_media_asset(asset.asset_id)
+        self.assertEqual(fetched.rating, 2)
+
+    def test_search_assets_by_rating(self):
+        """TR: search_assets 按 rating 过滤（>=rating）"""
+        project = self.db.create_project(name="评级过滤测试")
+        ratings = [0, 0, 1, 1, 2, 3]
+        for i, r in enumerate(ratings):
+            asset = MediaAsset(
+                asset_id=f"rt_{i}",
+                project_id=project.project_id,
+                file_path=f"/p/rt_{i}.cr2",
+                file_name=f"rt_{i}.cr2",
+                file_size=100,
+                file_type=".cr2",
+                rating=r,
+            )
+            self.db.add_media_asset(asset)
+
+        # rating>=1 应返回 4 条（1,1,2,3）
+        results = self.db.search_assets(rating=1)
+        self.assertEqual(len(results), 4)
+        # rating>=3 应返回 1 条
+        results = self.db.search_assets(rating=3)
+        self.assertEqual(len(results), 1)
+        # rating>=0 不过滤（约定：rating>0 才生效）
+        results = self.db.search_assets(rating=0)
+        self.assertEqual(len(results), 6)
+
+    def test_search_assets_rating_with_other_filters(self):
+        """TR: rating 过滤与其他条件组合"""
+        project = self.db.create_project(name="评级组合测试")
+        for i in range(6):
+            scene = "S001" if i < 3 else "S002"
+            asset = MediaAsset(
+                asset_id=f"rc_{i}",
+                project_id=project.project_id,
+                file_path=f"/p/rc_{i}.cr2",
+                file_name=f"rc_{i}.cr2",
+                file_size=100,
+                file_type=".cr2",
+                scene=scene,
+                rating=i % 3 + 1,  # S001: 1,2,3  S002: 1,2,3
+            )
+            self.db.add_media_asset(asset)
+
+        # S001 + rating>=2 应返回 2 条（rating=2 和 rating=3）
+        results = self.db.search_assets(scene="S001", rating=2)
+        self.assertEqual(len(results), 2)
+
 
 class TestWorkspaceManagement(unittest.TestCase):
     """工作区管理测试 - 验证 Workspace→Project 两级层级"""

@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
     QSpinBox, QComboBox, QProgressBar
 )
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Slot
 from pathlib import Path
 
 from DITWorkstation.Models import RenameRule

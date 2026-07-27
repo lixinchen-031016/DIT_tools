@@ -8,7 +8,8 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from DITWorkstation.Services.rename_service import RenameService, MetadataService
+from DITWorkstation.Services.rename_service import RenameService
+from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Models import RenameRule
 
 

@@ -4,14 +4,14 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QComboBox, QTableWidget, QTableWidgetItem, QHeaderView,
+    QTableWidget, QTableWidgetItem, QHeaderView,
     QSplitter, QGroupBox, QFormLayout, QScrollArea,
     QMessageBox, QAbstractItemView, QProgressBar, QFrame, QSizePolicy
 )
 from PySide6.QtCore import Qt, QThread, Signal
 
-from DITWorkstation.Services.rename_service import MetadataService
-from DITWorkstation.Utils import format_size, get_db_service, safe_slot
+from DITWorkstation.Services.metadata_service import MetadataService
+from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger
 
 # 缺失值占位符
 _PLACEHOLDER = "—"
@@ -172,11 +172,8 @@ class AssetInfoView(QWidget):
         self.current_asset = None
         self._batch_worker = None
         self._setup_ui()
-        self._load_projects()
-        # 监听全局项目切换，同步本视图下拉
-        from DITWorkstation.Views.main_window import get_data_bus
-        get_data_bus().project_focus_changed.connect(self._on_global_project_changed)
-        get_data_bus().workspace_focus_changed.connect(self._on_global_workspace_changed)
+        # 项目切换由共享控件广播到全局，本视图仅需监听后刷新素材列表
+        self.selector.project_changed.connect(self._on_project_changed)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -220,21 +217,20 @@ class AssetInfoView(QWidget):
         # === 主体：左右分栏 ===
         splitter = QSplitter(Qt.Horizontal)
 
-        # --- 左侧：项目选择 + 素材列表 ---
+        # --- 左侧：工作区/项目选择 + 素材列表 ---
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(10)
 
-        proj_row = QHBoxLayout()
-        proj_label = QLabel("项目")
-        proj_label.setStyleSheet("font-weight: 600; color: #1d1d1f;")
-        proj_row.addWidget(proj_label)
-        self.project_combo = QComboBox()
-        self.project_combo.setMinimumWidth(200)
-        self.project_combo.currentIndexChanged.connect(self._on_project_changed)
-        proj_row.addWidget(self.project_combo, 1)
-        left_layout.addLayout(proj_row)
+        # 共享控件：工作区 + 项目两级选择（combo 模式，适合顶部）
+        from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
+        self.selector = WorkspaceProjectSelector(
+            project_widget="combo",
+            show_new_project=True,
+            db_service=self.db_service,
+        )
+        left_layout.addWidget(self.selector)
 
         # 素材计数标签
         self.asset_count_label = QLabel("")
@@ -301,6 +297,42 @@ class AssetInfoView(QWidget):
         single_refresh_row.addWidget(self.refresh_exif_btn)
         single_refresh_row.addStretch()
         props_layout.addLayout(single_refresh_row)
+
+        # 镜次评级快捷按钮（评级值与标签来自 Models.RATING_LABELS 单一事实源）
+        rating_row = QHBoxLayout()
+        rating_label = QLabel("⭐ 镜次评级")
+        rating_label.setStyleSheet("font-size: 13px; font-weight: 600; color: #1d1d1f; padding: 4px 0;")
+        rating_row.addWidget(rating_label)
+        rating_row.addStretch()
+
+        self._rating_buttons = []
+        from DITWorkstation.Models import RATING_LABELS
+        rating_options = sorted(RATING_LABELS.items())
+        for value, text in rating_options:
+            btn = QPushButton(text)
+            btn.setCheckable(True)
+            btn.setEnabled(False)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f0f0f0;
+                    border: 1px solid #d1d1d6;
+                    border-radius: 6px;
+                    padding: 4px 10px;
+                    font-size: 12px;
+                    color: #1d1d1f;
+                }
+                QPushButton:hover { background-color: #e5e5ea; }
+                QPushButton:checked {
+                    background-color: #0a84ff;
+                    color: white;
+                    border-color: #0a84ff;
+                }
+                QPushButton:disabled { color: #c7c7cc; border-color: #e5e5ea; }
+            """)
+            btn.clicked.connect(lambda checked, v=value: self._set_rating(v))
+            self._rating_buttons.append((value, btn))
+            rating_row.addWidget(btn)
+        props_layout.addLayout(rating_row)
 
         # 各分组（使用统一的 _create_group 方法）
         self._group_widgets = {}
@@ -430,57 +462,18 @@ class AssetInfoView(QWidget):
             lbl.setStyleSheet(_STYLE_MISSING)
 
     # ===== 数据加载 =====
-    def _load_projects(self):
-        self.project_combo.blockSignals(True)
-        self.project_combo.clear()
-        self.project_combo.addItem("请选择项目...", None)
-        from DITWorkstation.Views.main_window import get_current_workspace_id
-        ws_id = get_current_workspace_id()
-        projects = self.db_service.get_projects(workspace_id=ws_id)
-        for p in projects:
-            self.project_combo.addItem(p.name, p.project_id)
-        # 同步全局当前项目（切视图无需重选）
-        from DITWorkstation.Views.main_window import get_current_project_id
-        global_pid = get_current_project_id()
-        if global_pid:
-            for i in range(self.project_combo.count()):
-                if self.project_combo.itemData(i) == global_pid:
-                    self.project_combo.setCurrentIndex(i)
-                    break
-        self.project_combo.blockSignals(False)
-        # blockSignals 期间未触发，手动刷新一次素材列表
-        self._on_project_changed(self.project_combo.currentIndex())
-
     def showEvent(self, event):
-        self._load_projects()
+        # 切换回本视图时刷新工作区/项目列表（selector 自身监听全局信号，这里补刷列表）
+        self.selector.refresh()
+        self._load_assets()
         super().showEvent(event)
 
-    def _on_project_changed(self, index: int):
-        # 同步全局当前项目
-        from DITWorkstation.Views.main_window import set_current_project
-        set_current_project(self.project_combo.currentData())
+    def _on_project_changed(self, _project_id):
+        """项目切换（由共享控件广播）→ 刷新素材列表"""
         self._load_assets()
 
-    def _on_global_project_changed(self, project_id):
-        """全局项目切换，同步本视图下拉（避免回调循环）"""
-        self.project_combo.blockSignals(True)
-        if project_id is None:
-            self.project_combo.setCurrentIndex(0)
-        else:
-            for i in range(self.project_combo.count()):
-                if self.project_combo.itemData(i) == project_id:
-                    self.project_combo.setCurrentIndex(i)
-                    break
-        self.project_combo.blockSignals(False)
-        # 手动触发一次本视图的 _on_project_changed 逻辑（刷新素材列表）
-        self._on_project_changed(self.project_combo.currentIndex())
-
-    def _on_global_workspace_changed(self, _workspace_id):
-        """全局工作区切换 -> 重新加载项目列表（按新工作区过滤）"""
-        self._load_projects()
-
     def _load_assets(self):
-        project_id = self.project_combo.currentData()
+        project_id = self.selector.get_current_project_id()
         self.asset_table.setRowCount(0)
         self.current_file_label.setText("请选择左侧素材查看详情")
         self.refresh_exif_btn.setEnabled(False)
@@ -515,6 +508,7 @@ class AssetInfoView(QWidget):
         if row < 0:
             self.current_asset = None
             self.refresh_exif_btn.setEnabled(False)
+            self._sync_rating_buttons(None)
             self.current_file_label.setText("请选择左侧素材查看详情")
             self._clear_properties()
             return
@@ -522,8 +516,45 @@ class AssetInfoView(QWidget):
         self.current_asset = self.db_service.get_media_asset(asset_id)
         if self.current_asset:
             self.refresh_exif_btn.setEnabled(True)
+            self._sync_rating_buttons(self.current_asset.rating)
             self.current_file_label.setText(self.current_asset.file_name)
             self._display_properties(self.current_asset)
+
+    def _sync_rating_buttons(self, rating):
+        """同步评级按钮的选中/启用状态
+
+        Args:
+            rating: None 表示无选中素材（禁用所有按钮）；0-3 表示当前评级值
+        """
+        for value, btn in self._rating_buttons:
+            if rating is None:
+                btn.setEnabled(False)
+                btn.setChecked(False)
+            else:
+                btn.setEnabled(True)
+                btn.setChecked(value == rating)
+
+    @safe_slot("设置评级失败")
+    def _set_rating(self, rating: int):
+        """保存评级到数据库并刷新当前素材"""
+        if not self.current_asset:
+            return
+        ok = self.db_service.update_media_asset(
+            self.current_asset.asset_id, rating=rating
+        )
+        if not ok:
+            return
+        # 重新加载素材以同步内存状态
+        self.current_asset = self.db_service.get_media_asset(
+            self.current_asset.asset_id
+        )
+        self._sync_rating_buttons(rating)
+        # 广播素材变更，让看板/检索等视图刷新
+        try:
+            from DITWorkstation.Views.main_window import get_data_bus
+            get_data_bus().emit_data_changed("assets_changed")
+        except Exception as e:
+            logger.warning(f"广播 assets_changed 失败: {e}")
 
     # ===== 属性展示 =====
     def _display_properties(self, asset):
@@ -690,7 +721,7 @@ class AssetInfoView(QWidget):
             QMessageBox.information(self, "提示", "正在执行批量读取，请等待当前任务完成。")
             return
 
-        project_id = self.project_combo.currentData()
+        project_id = self.selector.get_current_project_id()
         if not project_id:
             return
 
@@ -759,8 +790,8 @@ class AssetInfoView(QWidget):
             try:
                 from DITWorkstation.Views.main_window import get_data_bus
                 get_data_bus().emit_data_changed("assets_changed")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"批量 EXIF 完成后广播 assets_changed 失败: {e}")
 
         # 3 秒后隐藏进度条
         from PySide6.QtCore import QTimer

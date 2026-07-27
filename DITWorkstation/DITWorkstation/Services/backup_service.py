@@ -1,6 +1,4 @@
 """安全拷贝与多重备份服务"""
-import os
-import shutil
 import time
 import uuid
 import threading

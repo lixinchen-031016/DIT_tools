@@ -5,9 +5,9 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QComboBox, QDateEdit,
     QCheckBox
 )
-from PySide6.QtCore import Qt, QDate
+from PySide6.QtCore import QDate
 
-from DITWorkstation.Utils import format_size, get_db_service, safe_slot
+from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger
 
 
 class SearchView(QWidget):
@@ -72,7 +72,7 @@ class SearchView(QWidget):
         row2.addWidget(self.type_combo)
         search_layout.addRow("", row2)
 
-        # 第三行：拍摄日志筛选
+        # 第三行：拍摄日志 + 评级筛选
         row3 = QHBoxLayout()
         self.log_combo = QComboBox()
         self.log_combo.addItem("全部日志", None)
@@ -80,6 +80,16 @@ class SearchView(QWidget):
         self.log_combo.setMinimumWidth(250)
         row3.addWidget(QLabel("拍摄日志:"))
         row3.addWidget(self.log_combo)
+
+        self.rating_combo = QComboBox()
+        self.rating_combo.addItem("全部评级", None)
+        # 评级档位标签来自 Models.RATING_LABELS 单一事实源
+        from DITWorkstation.Models import RATING_LABELS, AssetRating
+        self.rating_combo.addItem(f"{RATING_LABELS[AssetRating.USABLE.value]} 及以上", AssetRating.USABLE.value)
+        self.rating_combo.addItem(f"{RATING_LABELS[AssetRating.BACKUP.value]} 及以上", AssetRating.BACKUP.value)
+        self.rating_combo.addItem(RATING_LABELS[AssetRating.PREFERRED.value], AssetRating.PREFERRED.value)
+        row3.addWidget(QLabel("评级:"))
+        row3.addWidget(self.rating_combo)
         row3.addStretch()
         search_layout.addRow("", row3)
 
@@ -130,9 +140,9 @@ class SearchView(QWidget):
 
         # 结果表格
         self.result_table = QTableWidget()
-        self.result_table.setColumnCount(8)
+        self.result_table.setColumnCount(9)
         self.result_table.setHorizontalHeaderLabels(
-            ["文件名", "类型", "大小", "场景", "镜头", "关联日志", "校验和", "导入时间"]
+            ["文件名", "类型", "大小", "场景", "镜头", "关联日志", "评级", "校验和", "导入时间"]
         )
         self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.result_table.setAlternatingRowColors(True)
@@ -153,8 +163,8 @@ class SearchView(QWidget):
         try:
             from DITWorkstation.Views.main_window import get_data_bus
             get_data_bus().data_changed.connect(self._on_data_changed)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"素材检索连接 data_bus 失败: {e}")
 
     def _on_data_changed(self, event: str):
         """收到数据变更广播时，若已有结果则显示过期提示条"""
@@ -235,6 +245,7 @@ class SearchView(QWidget):
         shot = self.shot_edit.text() or None
         keyword = self.keyword_edit.text() or None
         log_id = self.log_combo.currentData() or None
+        rating = self.rating_combo.currentData()
 
         file_type = None
         if self.type_combo.currentIndex() > 0:
@@ -256,6 +267,7 @@ class SearchView(QWidget):
             date_to=date_to,
             keyword=keyword,
             log_id=log_id,
+            rating=rating,
             limit=self._SEARCH_LIMIT + 1
         )
 

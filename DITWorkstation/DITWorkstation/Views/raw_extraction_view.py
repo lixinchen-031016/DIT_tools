@@ -2,15 +2,15 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QFileDialog, QProgressBar, QGroupBox,
-    QFormLayout, QTextEdit, QCheckBox, QTableWidget,
-    QTableWidgetItem, QHeaderView, QMessageBox, QComboBox
+    QFormLayout, QCheckBox, QTableWidget,
+    QTableWidgetItem, QHeaderView, QMessageBox
 )
-from PySide6.QtCore import Qt, Slot, QTimer, Signal
+from PySide6.QtCore import Slot, Signal
 
 from DITWorkstation.Services.raw_extraction_service import RawExtractionService
 from DITWorkstation.Services.media_import_service import MediaImportService
 from DITWorkstation.Utils.workers import SimpleWorkerThread
-from DITWorkstation.Utils import get_db_service, safe_slot, logger
+from DITWorkstation.Utils import get_db_service, logger
 
 
 class RawExtractionView(QWidget):
@@ -28,12 +28,7 @@ class RawExtractionView(QWidget):
         self.worker = None
         self._setup_ui()
         self._progress_sig.connect(self._on_progress)
-        # 项目下拉变化时同步全局（"不关联"即 None 不广播，避免覆盖全局项目）
-        self.project_combo.currentIndexChanged.connect(self._on_project_changed)
-        # 监听全局项目切换，同步本视图下拉
-        from DITWorkstation.Views.main_window import get_data_bus
-        get_data_bus().project_focus_changed.connect(self._on_global_project_changed)
-        get_data_bus().workspace_focus_changed.connect(self._on_global_workspace_changed)
+        # 项目切换由共享控件处理（broadcast_none=False 保留"不关联"语义）
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -53,10 +48,16 @@ class RawExtractionView(QWidget):
         link_group = QGroupBox("项目关联（用于提取后自动入库）")
         link_layout = QHBoxLayout(link_group)
         link_layout.addWidget(QLabel("目标项目:"))
-        self.project_combo = QComboBox()
-        self.project_combo.setMinimumWidth(300)
-        self.project_combo.addItem("（不关联项目，仅提取文件）", None)
-        link_layout.addWidget(self.project_combo, 1)
+        # 共享控件：broadcast_none=False 保留"不关联"语义
+        from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
+        self.selector = WorkspaceProjectSelector(
+            project_widget="combo",
+            show_new_project=True,
+            none_label="（不关联项目，仅提取文件）",
+            broadcast_none=False,
+            db_service=self.db_service,
+        )
+        link_layout.addWidget(self.selector, 1)
         self.auto_import_check = QCheckBox("提取后自动入库到所选项目（继承原 JPG 的 log_id）")
         self.auto_import_check.setChecked(True)
         link_layout.addWidget(self.auto_import_check)
@@ -175,60 +176,9 @@ class RawExtractionView(QWidget):
             edit.setText(path)
 
     def showEvent(self, event):
-        """每次显示时刷新项目下拉"""
+        """每次显示时刷新工作区/项目列表"""
         super().showEvent(event)
-        self._load_projects()
-
-    @safe_slot("加载项目失败")
-    def _load_projects(self):
-        """加载项目到下拉（优先同步全局当前项目，其次保留之前的选择）"""
-        prev_id = self.project_combo.currentData()
-        self.project_combo.blockSignals(True)
-        self.project_combo.clear()
-        self.project_combo.addItem("（不关联项目，仅提取文件）", None)
-        try:
-            from DITWorkstation.Views.main_window import get_current_workspace_id
-            ws_id = get_current_workspace_id()
-            projects = self.db_service.get_projects(workspace_id=ws_id)
-        except Exception:
-            projects = []
-        for p in projects:
-            self.project_combo.addItem(f"{p.name} ({p.project_id})", p.project_id)
-        # 优先同步全局当前项目；若全局为 None，回退到本视图之前的选择
-        from DITWorkstation.Views.main_window import get_current_project_id
-        target_id = get_current_project_id() or prev_id
-        if target_id:
-            for i in range(self.project_combo.count()):
-                if self.project_combo.itemData(i) == target_id:
-                    self.project_combo.setCurrentIndex(i)
-                    break
-        self.project_combo.blockSignals(False)
-        # blockSignals 期间未触发 currentIndexChanged，手动同步一次全局（不关联时不广播）
-        self._on_project_changed(self.project_combo.currentIndex())
-
-    def _on_project_changed(self, index: int):
-        """本视图项目下拉变化时同步全局（"不关联"即 None 不广播，避免覆盖全局项目）"""
-        project_id = self.project_combo.currentData()
-        if project_id is not None:
-            from DITWorkstation.Views.main_window import set_current_project
-            set_current_project(project_id)
-
-    def _on_global_project_changed(self, project_id):
-        """全局项目切换，同步本视图下拉；None 不强制覆盖（保留"不关联"语义）"""
-        if project_id is None:
-            return
-        self.project_combo.blockSignals(True)
-        for i in range(self.project_combo.count()):
-            if self.project_combo.itemData(i) == project_id:
-                self.project_combo.setCurrentIndex(i)
-                break
-        self.project_combo.blockSignals(False)
-        # 手动触发一次本视图的 _on_project_changed 逻辑
-        self._on_project_changed(self.project_combo.currentIndex())
-
-    def _on_global_workspace_changed(self, _workspace_id):
-        """全局工作区切换 -> 重新加载项目列表（按新工作区过滤）"""
-        self._load_projects()
+        self.selector.refresh()
 
     def _scan_match(self):
         jpg_folder = self.jpg_edit.text()
@@ -321,7 +271,7 @@ class RawExtractionView(QWidget):
         self.status_label.setText(status_text)
 
         # 数据闭环：提取后自动入库到所选项目，并继承原 JPG 的 log_id
-        project_id = self.project_combo.currentData()
+        project_id = self.selector.get_current_project_id()
         auto_import = self.auto_import_check.isChecked() and project_id is not None
         imported_count = 0
         log_inherited = 0
@@ -377,18 +327,9 @@ class RawExtractionView(QWidget):
             if not jpg_path:
                 continue
             try:
-                # 按 file_path 全局查 asset（不限 project_id，因为 JPG 可能在任意项目）
+                # 通过公开方法查 JPG 关联的 log_id（不再穿透到 _get_conn 私有方法）
                 from pathlib import Path as _P
-                # 直接查 DB
-                conn = self.db_service._get_conn()
-                try:
-                    row = conn.execute(
-                        "SELECT log_id FROM media_assets WHERE file_path = ?",
-                        (jpg_path,)
-                    ).fetchone()
-                    log_id = row["log_id"] if row else None
-                finally:
-                    conn.close()
+                log_id = self.db_service.get_asset_log_id_by_path(jpg_path)
                 stem_to_log_id[_P(jpg_path).stem.lower()] = log_id
             except Exception as e:
                 logger.debug(f"查 JPG log_id 失败 {jpg_path}: {e}")

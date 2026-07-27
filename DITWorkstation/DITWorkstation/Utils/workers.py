@@ -1,7 +1,7 @@
 """后台工作线程工具"""
 import inspect
 from PySide6.QtCore import QThread, Signal, QObject
-from typing import Callable, Any, Optional
+from typing import Callable
 
 
 class WorkerSignals(QObject):

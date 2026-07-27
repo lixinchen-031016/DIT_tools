@@ -4,15 +4,16 @@ from typing import List
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QGroupBox, QFormLayout, QTableWidget,
-    QTableWidgetItem, QHeaderView, QMessageBox, QComboBox,
-    QTextEdit, QSplitter, QListWidget, QListWidgetItem,
+    QTableWidgetItem, QHeaderView, QMessageBox,
+    QTextEdit, QSplitter,
     QDialog, QDialogButtonBox, QAbstractItemView, QTabWidget
 )
 from PySide6.QtCore import Qt, Slot, QTimer
 
 from DITWorkstation.Models import Project, ShootingLog
-from DITWorkstation.Services.rename_service import MetadataService
+from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Utils import format_size, get_db_service, safe_slot
+from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
 
 
 class ShootingLogView(QWidget):
@@ -26,59 +27,24 @@ class ShootingLogView(QWidget):
         self.current_log_id: str = None
         self._pending_asset_ids: List[str] = []
         self._setup_ui()
-        self._load_projects()
-        # 监听全局项目切换，同步本视图项目列表
-        from DITWorkstation.Views.main_window import get_data_bus
-        get_data_bus().project_focus_changed.connect(self._on_global_project_changed)
-        get_data_bus().workspace_focus_changed.connect(self._on_global_workspace_changed)
+        # 监听选择控件的项目切换，做本视图业务联动
+        # （工作区/项目下拉与全局信号同步已由 WorkspaceProjectSelector 内部处理）
+        self.selector.project_changed.connect(self._on_project_changed)
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
-        # 左侧：工作区 + 项目列表
-        left_panel = QVBoxLayout()
-        left_panel.setSpacing(8)
-
-        # 工作区选择区
-        ws_label = QLabel("工作区")
-        ws_label.setStyleSheet("font-weight: bold;")
-        left_panel.addWidget(ws_label)
-
-        self.workspace_combo = QComboBox()
-        self.workspace_combo.addItem("（全部工作区）", None)
-        self.workspace_combo.currentIndexChanged.connect(self._on_workspace_changed)
-        left_panel.addWidget(self.workspace_combo)
-
-        ws_btn_layout = QHBoxLayout()
-        new_ws_btn = QPushButton("+ 新建工作区")
-        new_ws_btn.clicked.connect(self._create_workspace)
-        ws_btn_layout.addWidget(new_ws_btn)
-        left_panel.addLayout(ws_btn_layout)
-
-        # 项目选择区
-        proj_label = QLabel("项目列表")
-        proj_label.setStyleSheet("font-weight: bold;")
-        left_panel.addWidget(proj_label)
-
-        self.project_list = QListWidget()
-        self.project_list.currentRowChanged.connect(self._on_project_selected)
-        left_panel.addWidget(self.project_list, 1)
-
-        proj_btn_layout = QHBoxLayout()
-        self.new_proj_btn = QPushButton("+ 新建项目")
-        self.new_proj_btn.clicked.connect(self._create_project)
-        self.del_proj_btn = QPushButton("删除")
-        self.del_proj_btn.clicked.connect(self._delete_project)
-        # 未选中具体工作区时禁用项目操作（项目必须属于某个工作区）
-        self.new_proj_btn.setEnabled(False)
-        self.del_proj_btn.setEnabled(False)
-        proj_btn_layout.addWidget(self.new_proj_btn)
-        proj_btn_layout.addWidget(self.del_proj_btn)
-        left_panel.addLayout(proj_btn_layout)
-
-        layout.addLayout(left_panel, 1)
+        # 左侧：工作区 + 项目两级选择控件（封装下拉/列表/新建对话框/全局信号同步）
+        self.selector = WorkspaceProjectSelector(
+            project_widget="list",
+            show_edit_workspace=False,
+            show_new_project=True,
+            show_delete_project=True,
+            db_service=self.db_service,
+        )
+        layout.addWidget(self.selector, 1)
 
         # 右侧：上下 Splitter（上：日志管理，下：关联素材）
         right_splitter = QSplitter(Qt.Vertical)
@@ -296,228 +262,33 @@ class ShootingLogView(QWidget):
 
         layout.addWidget(right_splitter, 3)
 
-    def _load_workspaces(self):
-        """加载工作区下拉，优先选中全局 current_workspace_id"""
-        from DITWorkstation.Views.main_window import get_current_workspace_id
-        prev_id = get_current_workspace_id()
-        self.workspace_combo.blockSignals(True)
-        self.workspace_combo.clear()
-        self.workspace_combo.addItem("（全部工作区）", None)
-        try:
-            workspaces = self.db_service.get_workspaces()
-        except Exception:
-            workspaces = []
-        target_index = 0
-        for i, ws in enumerate(workspaces, start=1):
-            label = ws.name
-            if ws.path:
-                label += f"  [{ws.path}]"
-            self.workspace_combo.addItem(label, ws.workspace_id)
-            if prev_id and ws.workspace_id == prev_id:
-                target_index = i
-        self.workspace_combo.setCurrentIndex(target_index)
-        self.workspace_combo.blockSignals(False)
-        # 同步项目操作按钮启用状态：未选具体工作区时禁用
-        has_ws = target_index > 0
-        self.new_proj_btn.setEnabled(has_ws)
-        self.del_proj_btn.setEnabled(has_ws)
-
-    def _load_projects(self):
-        # 记录当前选中的项目 ID，刷新后恢复
-        prev_id = None
-        if self.project_list.currentItem() is not None:
-            prev_id = self.project_list.currentItem().data(Qt.UserRole)
-
-        self.project_list.clear()
-        # 按本视图工作区下拉的选择过滤（与全局状态保持同步）
-        ws_id = self.workspace_combo.currentData() if hasattr(self, 'workspace_combo') else None
-        if ws_id is None:
-            # 兜底：本视图下拉未初始化时退回全局
-            from DITWorkstation.Views.main_window import get_current_workspace_id
-            ws_id = get_current_workspace_id()
-        projects = self.db_service.get_projects(workspace_id=ws_id)
-        restore_row = -1
-        for i, p in enumerate(projects):
-            item = QListWidgetItem(f"{p.name}\n{p.created_at.strftime('%Y-%m-%d')}")
-            item.setData(Qt.UserRole, p.project_id)
-            self.project_list.addItem(item)
-            if prev_id and p.project_id == prev_id:
-                restore_row = i
-
-        # 恢复选中，避免"幽灵选中"
-        if restore_row >= 0:
-            self.project_list.setCurrentRow(restore_row)
-        else:
-            # 本视图无选中时，回退到全局当前项目（切视图无需重选）
-            from DITWorkstation.Views.main_window import get_current_project_id
-            global_pid = get_current_project_id()
-            global_row = -1
-            if global_pid:
-                for i in range(self.project_list.count()):
-                    if self.project_list.item(i).data(Qt.UserRole) == global_pid:
-                        global_row = i
-                        break
-            if global_row >= 0:
-                self.project_list.setCurrentRow(global_row)
-            elif projects:
-                # 无选中时清空右侧明细，防止残留
-                self.current_project = None
-                self.log_table.setRowCount(0)
-                self.proj_asset_table.setRowCount(0)
-                self.asset_table.setRowCount(0)
-
     def showEvent(self, event):
-        # 刷新工作区与项目列表（保留选中），但不强制重载明细
-        self._load_workspaces()
-        self._load_projects()
+        # 刷新选择控件（工作区/项目列表），全局信号同步由 selector 内部处理
+        self.selector.refresh()
         super().showEvent(event)
 
-    @safe_slot("新建工作区失败")
-    def _create_workspace(self):
-        """新建工作区对话框（与媒体导入/项目概览看板共用同一交互模式）"""
-        from PySide6.QtWidgets import QFileDialog
-        dlg = QDialog(self)
-        dlg.setWindowTitle("新建工作区")
-        dlg.setMinimumWidth(420)
-        form = QFormLayout(dlg)
+    @Slot(object)
+    def _on_project_changed(self, project_id):
+        """选择控件的项目切换 → 加载日志列表与项目素材
 
-        name_edit = QLineEdit()
-        name_edit.setPlaceholderText("如「2026 春季广告片」")
-        path_edit = QLineEdit()
-        path_edit.setPlaceholderText("工作区物理目录（可选，建议填写）")
-
-        path_row = QHBoxLayout()
-        path_row.addWidget(path_edit, 1)
-        browse_btn = QPushButton("浏览…")
-        def _browse():
-            d = QFileDialog.getExistingDirectory(dlg, "选择工作区目录", path_edit.text())
-            if d:
-                path_edit.setText(d)
-        browse_btn.clicked.connect(_browse)
-        path_row.addWidget(browse_btn)
-        path_container = QWidget()
-        path_container.setLayout(path_row)
-        path_container.layout().setContentsMargins(0, 0, 0, 0)
-
-        desc_edit = QLineEdit()
-        desc_edit.setPlaceholderText("描述（可选）")
-
-        form.addRow("名称 *:", name_edit)
-        form.addRow("目录:", path_container)
-        form.addRow("描述:", desc_edit)
-
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.button(QDialogButtonBox.Ok).setText("保存")
-        btns.button(QDialogButtonBox.Cancel).setText("取消")
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-        form.addRow(btns)
-
-        if dlg.exec() != QDialog.Accepted:
-            return
-
-        name = name_edit.text().strip()
-        if not name:
-            QMessageBox.warning(self, "提示", "工作区名称不能为空")
-            return
-
-        try:
-            ws = self.db_service.create_workspace(
-                name=name,
-                path=path_edit.text().strip(),
-                description=desc_edit.text().strip()
-            )
-            # 新建后自动设为当前工作区
-            from DITWorkstation.Views.main_window import set_current_workspace, get_data_bus
-            set_current_workspace(ws.workspace_id)
-            get_data_bus().emit_data_changed("workspaces_changed")
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"创建工作区失败：{e}")
-
-    @safe_slot("新建项目失败")
-    def _create_project(self):
-        from PySide6.QtWidgets import QInputDialog
-        # 使用本视图下拉选中的工作区（未选时按钮已禁用，此处兜底防御）
-        ws_id = self.workspace_combo.currentData()
-        if not ws_id:
-            QMessageBox.warning(self, "提示", "请先选择或新建一个工作区")
-            return
-        name, ok = QInputDialog.getText(self, "新建项目", "项目名称:")
-        if ok and name:
-            project = self.db_service.create_project(name=name, workspace_id=ws_id)
-            self._load_projects()
-            # 选中新项目
-            for i in range(self.project_list.count()):
-                if self.project_list.item(i).data(Qt.UserRole) == project.project_id:
-                    self.project_list.setCurrentRow(i)
-                    break
-
-    @safe_slot("删除项目失败")
-    def _delete_project(self):
-        row = self.project_list.currentRow()
-        if row < 0:
-            return
-        item = self.project_list.item(row)
-        project_id = item.data(Qt.UserRole)
-        project_name = item.text().split("\n")[0]
-        reply = QMessageBox.question(
-            self, "确认",
-            f"确定删除项目「{project_name}」及所有关联数据？\n此操作不可撤销。",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            self.db_service.delete_project(project_id)
+        全局项目广播已由 WorkspaceProjectSelector 内部处理，本方法只做本视图业务联动。
+        """
+        if project_id is None:
             self.current_project = None
             self.current_log_id = None
-            self._load_projects()
-            # 广播项目变更
-            from DITWorkstation.Views.main_window import get_data_bus
-            get_data_bus().emit_data_changed("projects_changed")
-
-    def _on_project_selected(self, row: int):
-        if row < 0:
+            self.log_table.setRowCount(0)
+            self.asset_table.setRowCount(0)
+            self.proj_asset_table.setRowCount(0)
+            self.asset_count_label.setText("")
+            self.proj_asset_count_label.setText("")
+            self.link_asset_btn.setEnabled(False)
+            self.unlink_asset_btn.setEnabled(False)
+            self.log_selected_btn.setEnabled(False)
             return
-        item = self.project_list.item(row)
-        project_id = item.data(Qt.UserRole)
-        # 同步全局当前项目
-        from DITWorkstation.Views.main_window import set_current_project
-        set_current_project(project_id)
         self.current_project = self.db_service.get_project(project_id)
-        self._load_logs()
-        self._load_project_assets()
-
-    def _on_global_project_changed(self, project_id):
-        """全局项目切换，同步本视图列表选择（避免回调循环）"""
-        self.project_list.blockSignals(True)
-        target_row = -1
-        if project_id is not None:
-            for i in range(self.project_list.count()):
-                if self.project_list.item(i).data(Qt.UserRole) == project_id:
-                    target_row = i
-                    break
-        self.project_list.setCurrentRow(target_row)
-        self.project_list.blockSignals(False)
-        # 手动触发一次本视图的项目选择逻辑（刷新日志列表等）
-        self._on_project_selected(self.project_list.currentRow())
-
-    def _on_workspace_changed(self, _index: int):
-        """本视图工作区下拉切换 -> 广播到全局，并重载项目列表"""
-        ws_id = self.workspace_combo.currentData()
-        from DITWorkstation.Views.main_window import set_current_workspace
-        set_current_workspace(ws_id)
-        # set_current_workspace 会触发 _on_global_workspace_changed，但若全局未变（同 ID）则不会，
-        # 此处手动重载保证一致性
-        self._load_projects()
-        # 同步项目操作按钮启用状态
-        has_ws = ws_id is not None
-        self.new_proj_btn.setEnabled(has_ws)
-        self.del_proj_btn.setEnabled(has_ws)
-
-    def _on_global_workspace_changed(self, _workspace_id):
-        """全局工作区切换 -> 同步本视图工作区下拉，连带重载项目列表"""
-        # 重新加载工作区下拉会触发 _on_workspace_changed -> _load_projects
-        self._load_workspaces()
+        if self.current_project:
+            self._load_logs()
+            self._load_project_assets()
 
     def _load_logs(self):
         if not self.current_project:

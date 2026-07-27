@@ -9,12 +9,14 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 from DITWorkstation.App import config
-from DITWorkstation.Models import Project, BackupJob, MediaAsset, ShootingLog
+from DITWorkstation.Models import (
+    Project, BackupJob, MediaAsset, ShootingLog, RATING_LABELS, AssetRating
+)
 from DITWorkstation.Utils import format_size, logger
 
 
@@ -233,6 +235,13 @@ class ReportService:
         raw_count = sum(1 for a in assets if a.file_type in config.raw_extensions)
         jpg_count = sum(1 for a in assets if a.file_type in ('.jpg', '.jpeg'))
 
+        # 评级分布：仅统计已评级（rating > 0）的素材
+        rated_count = sum(1 for a in assets if a.rating and a.rating > 0)
+        rating_dist = {r: 0 for r in RATING_LABELS}
+        for a in assets:
+            r = a.rating or 0
+            rating_dist[r] = rating_dist.get(r, 0) + 1
+
         stats = [
             ["项目", project.name],
             ["素材总数", str(len(assets))],
@@ -240,6 +249,7 @@ class ReportService:
             ["JPG文件数", str(jpg_count)],
             ["总数据量", self._format_size(total_size)],
             ["拍摄日志数", str(len(logs))],
+            ["已评级素材", f"{rated_count} / {len(assets)}"],
             ["报告时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
         ]
         t = Table(stats, colWidths=[40*mm, 120*mm])
@@ -271,6 +281,27 @@ class ReportService:
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ]))
             elements.append(t)
+            elements.append(Spacer(1, 8*mm))
+
+        elements.append(Paragraph("按评级统计", heading_style))
+        rating_data = [["评级", "文件数", "占比"]]
+        total = len(assets) or 1  # 避免除零
+        for r in sorted(RATING_LABELS.keys()):
+            count = rating_dist.get(r, 0)
+            percent = f"{(count / total) * 100:.1f}%"
+            rating_data.append([RATING_LABELS[r], str(count), percent])
+        t = Table(rating_data, colWidths=[60*mm, 40*mm, 40*mm])
+        t.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), self._chinese_font_name),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4472C4')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            # 优选行高亮：表头占 index 0，rating=PREFERRED(3) 对应行索引 = 3 + 1 = 4
+            ('BACKGROUND', (0, AssetRating.PREFERRED.value + 1),
+             (-1, AssetRating.PREFERRED.value + 1), colors.HexColor('#FFF4E5')),
+        ]))
+        elements.append(t)
 
         doc.build(elements)
         logger.info(f"素材报告生成成功: {output_path}")

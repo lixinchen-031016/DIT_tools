@@ -3,7 +3,7 @@ import sqlite3
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Any
+from typing import List, Optional
 
 from DITWorkstation.App import config
 from DITWorkstation.Models import Project, ShootingLog, MediaAsset, Workspace
@@ -98,6 +98,7 @@ class DatabaseService:
                     lens_model TEXT DEFAULT '',
                     focal_length TEXT DEFAULT '',
                     video_metadata TEXT DEFAULT '',
+                    rating INTEGER DEFAULT 0,
                     FOREIGN KEY (project_id) REFERENCES projects(project_id),
                     FOREIGN KEY (log_id) REFERENCES shooting_logs(log_id)
                 );
@@ -145,6 +146,7 @@ class DatabaseService:
                 ("lens_model", "TEXT DEFAULT ''"),
                 ("focal_length", "TEXT DEFAULT ''"),
                 ("video_metadata", "TEXT DEFAULT ''"),
+                ("rating", "INTEGER DEFAULT 0"),
             ],
             "projects": [
                 ("workspace_id", "TEXT"),
@@ -463,14 +465,21 @@ class DatabaseService:
             conn.close()
 
     def delete_project(self, project_id: str):
-        """删除项目"""
+        """删除项目（事务级联清理 media_assets + shooting_logs + projects）
+
+        注意：backup_jobs 表无 project_id 外键，保留备份历史记录不级联删除。
+        """
         conn = self._get_conn()
         try:
+            conn.execute("BEGIN TRANSACTION")
             conn.execute("DELETE FROM media_assets WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM shooting_logs WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
             conn.commit()
             logger.info(f"删除项目: {project_id}")
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -619,8 +628,8 @@ class DatabaseService:
                     asset_type, checksum_algorithm, checksum_value, scene, shot, take, date_imported,
                     date_taken, camera_make, camera_model, backup_locations, log_id,
                     is_working_copy, original_path, width, height, duration_seconds,
-                    lens_model, focal_length, video_metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    lens_model, focal_length, video_metadata, rating)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (asset.asset_id, asset.project_id, asset.file_path, asset.file_name,
                  asset.file_size, asset.file_type, asset.asset_type,
                  asset.checksum_algorithm, asset.checksum_value,
@@ -632,7 +641,8 @@ class DatabaseService:
                  1 if asset.is_working_copy else 0,
                  asset.original_path,
                  asset.width, asset.height, asset.duration_seconds,
-                 asset.lens_model, asset.focal_length, asset.video_metadata)
+                 asset.lens_model, asset.focal_length, asset.video_metadata,
+                 asset.rating)
             )
             conn.commit()
             logger.info(f"添加素材资产: {asset.asset_id} - {asset.file_name}")
@@ -655,8 +665,8 @@ class DatabaseService:
                         asset_type, checksum_algorithm, checksum_value, scene, shot, take, date_imported,
                         date_taken, camera_make, camera_model, backup_locations, log_id,
                         is_working_copy, original_path, width, height, duration_seconds,
-                        lens_model, focal_length, video_metadata)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        lens_model, focal_length, video_metadata, rating)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (asset.asset_id, asset.project_id, asset.file_path, asset.file_name,
                      asset.file_size, asset.file_type, asset.asset_type,
                      asset.checksum_algorithm, asset.checksum_value,
@@ -668,7 +678,8 @@ class DatabaseService:
                      1 if asset.is_working_copy else 0,
                      asset.original_path,
                      asset.width, asset.height, asset.duration_seconds,
-                     asset.lens_model, asset.focal_length, asset.video_metadata)
+                     asset.lens_model, asset.focal_length, asset.video_metadata,
+                     asset.rating)
                 )
             conn.commit()
             logger.info(f"批量添加素材资产: {len(assets)} 个")
@@ -716,7 +727,8 @@ class DatabaseService:
                        'backup_locations', 'log_id',
                        'is_working_copy', 'original_path',
                        'width', 'height', 'duration_seconds',
-                       'lens_model', 'focal_length', 'video_metadata']:
+                       'lens_model', 'focal_length', 'video_metadata',
+                       'rating']:
                 if key == 'backup_locations' and isinstance(value, list):
                     value = "|".join(value)
                 if key == 'is_working_copy' and isinstance(value, bool):
@@ -762,6 +774,22 @@ class DatabaseService:
                 (project_id, file_path)
             ).fetchone()
             return row[0] > 0
+        finally:
+            conn.close()
+
+    def get_asset_log_id_by_path(self, file_path: str) -> Optional[str]:
+        """按文件路径全局查询素材关联的 log_id（不限 project_id）。
+
+        供 RAW 提取等场景使用：JPG 可能在任意项目，按路径反查其 log_id
+        以便把提取出的 RAW 文件继承同一日志关联。
+        """
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT log_id FROM media_assets WHERE file_path = ?",
+                (file_path,)
+            ).fetchone()
+            return row["log_id"] if row else None
         finally:
             conn.close()
 
@@ -847,11 +875,13 @@ class DatabaseService:
         date_to: Optional[str] = None,
         keyword: Optional[str] = None,
         log_id: Optional[str] = None,
+        rating: Optional[int] = None,
         limit: Optional[int] = None
     ) -> List[MediaAsset]:
         """搜索素材
 
         Args:
+            rating: 按 rating 过滤（>=rating）。None 表示不过滤。
             limit: 返回结果上限。None 表示不限制；达到上限时调用方应提示用户缩小条件。
         """
         conn = self._get_conn()
@@ -883,6 +913,9 @@ class DatabaseService:
             if log_id:
                 query += " AND log_id = ?"
                 params.append(log_id)
+            if rating is not None and rating > 0:
+                query += " AND rating >= ?"
+                params.append(rating)
 
             query += " ORDER BY date_imported DESC"
             if limit is not None and limit > 0:
@@ -1185,4 +1218,5 @@ class DatabaseService:
             lens_model=row["lens_model"] if "lens_model" in row.keys() else "",
             focal_length=row["focal_length"] if "focal_length" in row.keys() else "",
             video_metadata=row["video_metadata"] if "video_metadata" in row.keys() else "",
+            rating=row["rating"] if "rating" in row.keys() else 0,
         )
