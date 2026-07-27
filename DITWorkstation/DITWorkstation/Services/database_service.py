@@ -767,11 +767,17 @@ class DatabaseService:
 
     def asset_exists_by_path(self, project_id: str, file_path: str) -> bool:
         """按文件路径查重"""
+        # asset.file_path 在导入时存的是 str(Path(...).resolve()) 规范化路径，
+        # 查询键同样 resolve，避免符号链接环境下查重失效导致重复入库。
+        try:
+            fp_key = str(Path(file_path).resolve())
+        except (OSError, ValueError):
+            fp_key = file_path
         conn = self._get_conn()
         try:
             row = conn.execute(
                 "SELECT COUNT(*) FROM media_assets WHERE project_id = ? AND file_path = ?",
-                (project_id, file_path)
+                (project_id, fp_key)
             ).fetchone()
             return row[0] > 0
         finally:
@@ -1119,17 +1125,24 @@ class DatabaseService:
         try:
             updated = 0
             for fp in file_paths:
+                # asset.file_path 在导入时存的是 str(Path(...).resolve()) 规范化路径，
+                # 这里对查询键同样 resolve，避免符号链接环境（如 macOS /var -> /private/var）
+                # 下因路径表示不一致而匹配失败。
+                try:
+                    fp_key = str(Path(fp).resolve())
+                except (OSError, ValueError):
+                    fp_key = fp
                 if project_id:
                     row = conn.execute(
                         "SELECT asset_id, backup_locations FROM media_assets "
                         "WHERE project_id = ? AND file_path = ?",
-                        (project_id, fp)
+                        (project_id, fp_key)
                     ).fetchone()
                 else:
                     row = conn.execute(
                         "SELECT asset_id, backup_locations FROM media_assets "
                         "WHERE file_path = ?",
-                        (fp,)
+                        (fp_key,)
                     ).fetchone()
 
                 if not row:

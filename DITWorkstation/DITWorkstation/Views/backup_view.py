@@ -1,4 +1,5 @@
 """数据备份页面 - 安全拷贝与多重备份"""
+import sys
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QFileDialog, QProgressBar, QComboBox,
@@ -8,9 +9,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Slot
 
 from pathlib import Path
+from typing import Optional
 
 from DITWorkstation.Models import ChecksumAlgorithm, BackupJob
 from DITWorkstation.Services.backup_service import BackupService
+from DITWorkstation.Services.media_import_service import MediaImportService
 from DITWorkstation.Utils import WorkerThread, format_size, generate_log_message, safe_slot, get_db_service
 
 
@@ -22,8 +25,12 @@ class BackupView(QWidget):
         # 注入共享 db_service，使备份完成后能持久化 job + 回写 asset.backup_locations
         self.db_service = get_db_service()
         self.backup_service = BackupService(db_service=self.db_service)
+        # 复用 db_service 与 checksum_service，与备份共享哈希缓存
+        self.import_service = MediaImportService(db_service=self.db_service)
         self.current_job: BackupJob = None
         self.worker: WorkerThread = None
+        # 本次备份关联的项目（在 _start_backup 时锁定，_on_finished 时用于自动导入）
+        self._backup_project_id: Optional[str] = None
         self._setup_ui()
         # 项目切换由共享控件处理（broadcast_none=False 保留"不关联"语义）
 
@@ -42,9 +49,8 @@ class BackupView(QWidget):
         layout.addWidget(subtitle)
 
         # 关联项目（可选，但建议选择以便回写 asset.backup_locations）
-        project_group = QGroupBox("关联项目（可选）")
+        project_group = QGroupBox("关联项目（可选，不选则仅做文件备份）")
         project_layout = QHBoxLayout(project_group)
-        project_layout.addWidget(QLabel("当前备份归属的项目:"))
         # 共享控件：broadcast_none=False 保留"不关联"语义（选 None 不清空全局项目）
         from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
         self.selector = WorkspaceProjectSelector(
@@ -55,7 +61,6 @@ class BackupView(QWidget):
             db_service=self.db_service,
         )
         project_layout.addWidget(self.selector, 1)
-        project_layout.addStretch()
         layout.addWidget(project_group)
 
         # 源路径选择
@@ -159,10 +164,29 @@ class BackupView(QWidget):
     def showEvent(self, event):
         """每次显示时刷新工作区/项目列表"""
         super().showEvent(event)
-        self.selector.refresh()
+        try:
+            self.selector.refresh()
+        except Exception as e:
+            self._log(f"刷新工作区/项目列表失败: {e}")
+
+    def _pick_directory(self, title: str) -> str:
+        """统一的目录选择对话框。
+
+        Windows 打包后原生 QFileDialog 可能因应用 manifest / 临时目录问题
+        返回空字符串（即使选中了目录），此处先尝试原生对话框，失败则回退到
+        Qt 非原生对话框，确保路径能正确返回。
+        """
+        path = QFileDialog.getExistingDirectory(self, title)
+        if path:
+            return path
+        # 回退：非原生对话框（Windows 打包后更可靠）
+        path = QFileDialog.getExistingDirectory(
+            self, title, options=QFileDialog.Option.DontUseNativeDialog
+        )
+        return path or ""
 
     def _select_source(self):
-        path = QFileDialog.getExistingDirectory(self, "选择存储卡路径")
+        path = self._pick_directory("选择存储卡路径")
         if path:
             self.source_edit.setText(path)
             # 扫描文件信息
@@ -175,10 +199,12 @@ class BackupView(QWidget):
                 self._log(f"扫描失败: {e}")
 
     def _add_target(self):
-        path = QFileDialog.getExistingDirectory(self, "选择备份目标路径")
+        path = self._pick_directory("选择备份目标路径")
         if path:
             self.target_list.addItem(path)
             self._log(f"添加备份目标: {path}")
+        else:
+            self._log("未选择目录")
 
     def _remove_target(self):
         row = self.target_list.currentRow()
@@ -205,6 +231,8 @@ class BackupView(QWidget):
 
         # 当前关联的项目（可空）
         project_id = self.selector.get_current_project_id()
+        # 锁定本次备份关联的项目，避免备份过程中用户切换项目导致导入到错误项目
+        self._backup_project_id = project_id
 
         # 创建备份作业
         self.current_job = self.backup_service.create_backup_job(source, targets, algorithm)
@@ -272,6 +300,43 @@ class BackupView(QWidget):
             status_icon = "✅" if target.status.value == "completed" else "❌"
             self._log(f"  {status_icon} {target.name}: {target.status.value} "
                       f"({target.completed_files}/{target.total_files} 文件)")
+
+        # 数据闭环：备份关联项目时，把未入库的源文件自动导入为 asset，
+        # 并把成功的备份目标回写到 asset.backup_locations。
+        # execute_backup 内部已尝试回写 backup_locations，但只对已存在的 asset 生效；
+        # 因此这里先导入（幂等：已存在的会跳过），再对刚入库的 asset 补写 backup_locations。
+        project_id = self._backup_project_id
+        if project_id and job.status.value in ("completed", "partial"):
+            try:
+                files = getattr(job, '_files_cache', None)
+                if files is None:
+                    files = self.backup_service.scan_source(job.source_path)
+                source_paths = [f["path"] for f in files]
+
+                self._log(f"正在将 {len(source_paths)} 个源文件登记到项目...")
+                import_result = self.import_service.import_assets(
+                    project_id=project_id,
+                    file_paths=source_paths,
+                    compute_checksum=True,
+                    read_metadata=True,
+                    copy_to_workspace=False,  # 引用模式：文件已被备份，不再二次复制
+                )
+
+                imported = import_result.get("imported", 0)
+                skipped = import_result.get("skipped", 0)
+                failed = import_result.get("failed", 0)
+                self._log(f"登记完成: 新增 {imported}, 跳过 {skipped}（已存在）, 失败 {failed}")
+
+                # 对刚入库的 asset 补写 backup_locations（execute_backup 内部那次回写
+                # 发生在导入之前，未覆盖新入库 asset）
+                if imported > 0:
+                    for t in job.targets:
+                        if t.status.value == "completed":
+                            self.db_service.add_backup_location_to_assets(
+                                source_paths, t.path, project_id=project_id
+                            )
+            except Exception as e:
+                self._log(f"自动登记素材失败（不影响备份结果）: {e}")
 
         # 广播 assets_changed，让 asset_info_view / search_view 知道 backup_locations 已更新
         if job.status.value in ("completed", "partial"):
