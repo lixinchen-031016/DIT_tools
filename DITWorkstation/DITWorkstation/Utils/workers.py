@@ -40,15 +40,37 @@ class WorkerThread(QThread):
 
     def run(self):
         try:
-            # 仅在函数接受时注入回调，避免 unexpected keyword argument
-            if 'progress_callback' not in self.kwargs and self._accepts_kwarg(self.func, 'progress_callback'):
-                self.kwargs['progress_callback'] = self._on_progress
-            if 'file_completed_callback' not in self.kwargs and self._accepts_kwarg(self.func, 'file_completed_callback'):
-                self.kwargs['file_completed_callback'] = self._on_file_completed
+            # 仅在调用方未显式提供回调时（无论位置参数还是关键字参数）才自动注入，
+            # 避免 "got multiple values for argument" 错误
+            self._maybe_inject_callback('progress_callback', self._on_progress)
+            self._maybe_inject_callback('file_completed_callback', self._on_file_completed)
             self._result = self.func(*self.args, **self.kwargs)
             self.finished.emit(self._result)
         except Exception as e:
             self.error.emit(str(e))
+
+    def _maybe_inject_callback(self, name: str, callback: Callable) -> None:
+        """判断是否需要自动注入回调参数。
+
+        跳过注入的条件（任一即可）：
+        1. 函数不接受该关键字参数
+        2. 调用方已通过 kwargs 显式传递（即使值为 None）
+        3. 调用方已通过位置参数覆盖该参数在签名中的位置
+        """
+        if name in self.kwargs:
+            return  # 调用方已通过关键字参数显式传递
+        if not self._accepts_kwarg(self.func, name):
+            return  # 函数不接受该参数
+        # 检查位置参数是否已覆盖该参数位置
+        try:
+            sig = inspect.signature(self.func)
+            params = list(sig.parameters.values())
+            for i, p in enumerate(params):
+                if p.name == name and i < len(self.args):
+                    return  # 位置参数已覆盖
+        except (ValueError, TypeError):
+            return  # 无法分析签名，保守起见不注入
+        self.kwargs[name] = callback
 
     def _on_progress(self, target: str, progress: float, message: str):
         self.progress.emit(target, progress, message)
