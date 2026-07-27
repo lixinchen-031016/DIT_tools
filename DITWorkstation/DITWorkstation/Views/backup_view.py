@@ -11,7 +11,7 @@ from pathlib import Path
 
 from DITWorkstation.Models import ChecksumAlgorithm, BackupJob
 from DITWorkstation.Services.backup_service import BackupService
-from DITWorkstation.Utils import WorkerThread, format_size, generate_log_message
+from DITWorkstation.Utils import WorkerThread, format_size, generate_log_message, safe_slot, get_db_service
 
 
 class BackupView(QWidget):
@@ -19,10 +19,18 @@ class BackupView(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.backup_service = BackupService()
+        # 注入共享 db_service，使备份完成后能持久化 job + 回写 asset.backup_locations
+        self.db_service = get_db_service()
+        self.backup_service = BackupService(db_service=self.db_service)
         self.current_job: BackupJob = None
         self.worker: WorkerThread = None
         self._setup_ui()
+        # 项目下拉变化时同步全局（"不关联"即 None 不广播，避免覆盖全局项目）
+        self.project_combo.currentIndexChanged.connect(self._on_project_changed)
+        # 监听全局项目切换，同步本视图下拉
+        from DITWorkstation.Views.main_window import get_data_bus
+        get_data_bus().project_focus_changed.connect(self._on_global_project_changed)
+        get_data_bus().workspace_focus_changed.connect(self._on_global_workspace_changed)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -37,6 +45,17 @@ class BackupView(QWidget):
         subtitle = QLabel("从存储卡安全拷贝素材，支持多目标并行备份与校验和验证")
         subtitle.setStyleSheet("font-size: 13px; color: #86868b;")
         layout.addWidget(subtitle)
+
+        # 关联项目（可选，但建议选择以便回写 asset.backup_locations）
+        project_group = QGroupBox("关联项目（可选）")
+        project_layout = QHBoxLayout(project_group)
+        project_layout.addWidget(QLabel("当前备份归属的项目:"))
+        self.project_combo = QComboBox()
+        self.project_combo.setMinimumWidth(300)
+        self.project_combo.addItem("（不关联项目，仅做文件备份）", None)
+        project_layout.addWidget(self.project_combo, 1)
+        project_layout.addStretch()
+        layout.addWidget(project_group)
 
         # 源路径选择
         source_group = QGroupBox("源路径（存储卡）")
@@ -136,6 +155,62 @@ class BackupView(QWidget):
 
         layout.addStretch()
 
+    def showEvent(self, event):
+        """每次显示时刷新项目下拉"""
+        super().showEvent(event)
+        self._load_projects()
+
+    @safe_slot("加载项目失败")
+    def _load_projects(self):
+        """加载项目到下拉（优先同步全局当前项目，其次保留之前的选择）"""
+        prev_id = self.project_combo.currentData()
+        self.project_combo.blockSignals(True)
+        self.project_combo.clear()
+        self.project_combo.addItem("（不关联项目，仅做文件备份）", None)
+        try:
+            from DITWorkstation.Views.main_window import get_current_workspace_id
+            ws_id = get_current_workspace_id()
+            projects = self.db_service.get_projects(workspace_id=ws_id)
+        except Exception:
+            projects = []
+        for p in projects:
+            self.project_combo.addItem(f"{p.name} ({p.project_id})", p.project_id)
+        # 优先同步全局当前项目；若全局为 None，回退到本视图之前的选择
+        from DITWorkstation.Views.main_window import get_current_project_id
+        target_id = get_current_project_id() or prev_id
+        if target_id:
+            for i in range(self.project_combo.count()):
+                if self.project_combo.itemData(i) == target_id:
+                    self.project_combo.setCurrentIndex(i)
+                    break
+        self.project_combo.blockSignals(False)
+        # blockSignals 期间未触发 currentIndexChanged，手动同步一次全局（不关联时不广播）
+        self._on_project_changed(self.project_combo.currentIndex())
+
+    def _on_project_changed(self, index: int):
+        """本视图项目下拉变化时同步全局（"不关联"即 None 不广播，避免覆盖全局项目）"""
+        project_id = self.project_combo.currentData()
+        if project_id is not None:
+            from DITWorkstation.Views.main_window import set_current_project
+            set_current_project(project_id)
+
+    def _on_global_project_changed(self, project_id):
+        """全局项目切换，同步本视图下拉；None 不强制覆盖（保留"不关联"语义）"""
+        if project_id is None:
+            return
+        self.project_combo.blockSignals(True)
+        for i in range(self.project_combo.count()):
+            if self.project_combo.itemData(i) == project_id:
+                self.project_combo.setCurrentIndex(i)
+                break
+        self.project_combo.blockSignals(False)
+        # 手动触发一次本视图的 _on_project_changed 逻辑
+        self._on_project_changed(self.project_combo.currentIndex())
+
+    def _on_global_workspace_changed(self, _workspace_id):
+        """全局工作区切换 -> 重新加载项目列表（按新工作区过滤）"""
+        self._load_projects()
+
     def _select_source(self):
         path = QFileDialog.getExistingDirectory(self, "选择存储卡路径")
         if path:
@@ -160,6 +235,7 @@ class BackupView(QWidget):
         if row >= 0:
             self.target_list.takeItem(row)
 
+    @safe_slot("启动备份失败")
     def _start_backup(self):
         source = self.source_edit.text()
         if not source:
@@ -177,19 +253,27 @@ class BackupView(QWidget):
         # 确定算法
         algorithm = ChecksumAlgorithm.XXHASH64 if self.algorithm_combo.currentIndex() == 0 else ChecksumAlgorithm.MD5
 
+        # 当前关联的项目（可空）
+        project_id = self.project_combo.currentData()
+
         # 创建备份作业
         self.current_job = self.backup_service.create_backup_job(source, targets, algorithm)
         self._log(f"创建备份作业 [{self.current_job.job_id}]: {len(targets)} 个目标, "
-                  f"{self.current_job.total_files} 个文件")
+                  f"{self.current_job.total_files} 个文件"
+                  + (f"，关联项目 {project_id}" if project_id else ""))
 
         # 启动后台线程
         self.start_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.progress_bar.setValue(0)
 
+        # 把 project_id 通过 lambda 传给 execute_backup
         self.worker = WorkerThread(
             self.backup_service.execute_backup,
-            self.current_job
+            self.current_job,
+            None,   # progress_callback（worker 自身通过 emit 转发）
+            None,   # file_completed_callback
+            project_id
         )
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_finished)
@@ -238,6 +322,15 @@ class BackupView(QWidget):
             status_icon = "✅" if target.status.value == "completed" else "❌"
             self._log(f"  {status_icon} {target.name}: {target.status.value} "
                       f"({target.completed_files}/{target.total_files} 文件)")
+
+        # 广播 assets_changed，让 asset_info_view / search_view 知道 backup_locations 已更新
+        if job.status.value in ("completed", "partial"):
+            try:
+                from DITWorkstation.Views.main_window import get_data_bus
+                get_data_bus().emit_data_changed("assets_changed")
+                self._log("已通知其他视图刷新素材备份位置信息")
+            except Exception as e:
+                self._log(f"通知其他视图失败（不影响备份结果）: {e}")
 
     @Slot(str)
     def _on_error(self, error: str):

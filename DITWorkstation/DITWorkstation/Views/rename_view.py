@@ -3,13 +3,14 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QFileDialog, QGroupBox, QFormLayout,
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
-    QSpinBox, QComboBox
+    QSpinBox, QComboBox, QProgressBar
 )
 from PySide6.QtCore import Qt, Slot
 from pathlib import Path
 
 from DITWorkstation.Models import RenameRule
 from DITWorkstation.Services.rename_service import RenameService
+from DITWorkstation.Utils import WorkerThread, safe_slot, get_db_service, logger
 
 
 class RenameView(QWidget):
@@ -18,7 +19,10 @@ class RenameView(QWidget):
     def __init__(self):
         super().__init__()
         self.rename_service = RenameService()
+        # 共享 db_service 单例，用于重命名后同步 DB 中 asset 的 file_path/file_name
+        self.db_service = get_db_service()
         self.selected_files = []
+        self._worker = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -129,17 +133,27 @@ class RenameView(QWidget):
         preview_layout.addWidget(self.preview_table)
         layout.addWidget(preview_group, 1)
 
+        # 进度条（重命名执行时显示）
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        layout.addWidget(self.progress_bar)
+
+    @safe_slot("选择文件夹失败")
     def _select_folder(self):
         path = QFileDialog.getExistingDirectory(self, "选择素材文件夹")
         if path:
             self.folder_edit.setText(path)
-            # 扫描文件
-            folder = Path(path)
-            self.selected_files = [
-                str(f) for f in sorted(folder.iterdir())
-                if f.is_file() and not f.name.startswith(".")
-            ]
-            self.rename_btn.setEnabled(len(self.selected_files) > 0)
+            self._scan_folder(path)
+
+    def _scan_folder(self, path: str):
+        """扫描文件夹并填充待重命名文件列表"""
+        folder = Path(path)
+        self.selected_files = [
+            str(f) for f in sorted(folder.iterdir())
+            if f.is_file() and not f.name.startswith(".")
+        ]
+        self.rename_btn.setEnabled(len(self.selected_files) > 0)
+        self._preview()
 
     def _get_rule(self) -> RenameRule:
         return RenameRule(
@@ -152,6 +166,7 @@ class RenameView(QWidget):
             padding=self.padding_spin.value()
         )
 
+    @safe_slot("预览失败")
     def _preview(self):
         if not self.selected_files:
             QMessageBox.warning(self, "提示", "请先选择文件夹")
@@ -165,8 +180,14 @@ class RenameView(QWidget):
             self.preview_table.setItem(i, 0, QTableWidgetItem(Path(old).name))
             self.preview_table.setItem(i, 1, QTableWidgetItem(Path(new).name))
 
+    @safe_slot("重命名失败")
     def _execute_rename(self):
         if not self.selected_files:
+            return
+
+        # 防止重复启动
+        if self._worker is not None and self._worker.isRunning():
+            QMessageBox.information(self, "提示", "正在执行重命名，请稍候。")
             return
 
         reply = QMessageBox.question(
@@ -178,22 +199,67 @@ class RenameView(QWidget):
             return
 
         rule = self._get_rule()
-        results = self.rename_service.execute_rename(self.selected_files, rule)
+        # 禁用按钮，显示进度
+        self.rename_btn.setEnabled(False)
+        self.preview_btn.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # 不确定进度
 
-        QMessageBox.information(
-            self, "重命名完成",
-            f"成功重命名 {len(results)} 个文件"
+        # 后台线程执行，避免阻塞主线程
+        self._worker = WorkerThread(
+            self.rename_service.execute_rename, self.selected_files, rule
         )
+        self._worker.finished.connect(self._on_rename_finished)
+        self._worker.error.connect(self._on_rename_error)
+        self._worker.start()
 
-        # 刷新文件列表
-        self._select_folder_silent()
+    @Slot(object)
+    def _on_rename_finished(self, results):
+        self._restore_ui()
 
-    def _select_folder_silent(self):
+        # 数据闭环：把重命名结果回写到 DB 的 media_assets.file_path/file_name
+        synced = 0
+        unmatched = 0
+        for old_path, new_path in results:
+            try:
+                new_name = Path(new_path).name
+                ok = self.db_service.update_asset_path_by_old_path(
+                    old_path, new_path, new_name
+                )
+                if ok:
+                    synced += 1
+                else:
+                    unmatched += 1
+            except Exception as e:
+                logger.error(f"同步重命名到 DB 失败 {old_path}: {e}")
+
+        msg = f"成功重命名 {len(results)} 个文件"
+        if synced or unmatched:
+            msg += f"\n\n数据库同步：{synced} 个已入库素材路径已更新"
+            if unmatched:
+                msg += f"，{unmatched} 个未入库（仅文件系统重命名）"
+        QMessageBox.information(self, "重命名完成", msg)
+
+        # 广播 assets_changed，让 asset_info_view / search_view 刷新路径
+        if synced > 0:
+            try:
+                from DITWorkstation.Views.main_window import get_data_bus
+                get_data_bus().emit_data_changed("assets_changed")
+            except Exception as e:
+                logger.error(f"广播重命名完成事件失败: {e}")
+
+        # 刷新文件列表（静默重扫）
         path = self.folder_edit.text()
         if path:
-            folder = Path(path)
-            self.selected_files = [
-                str(f) for f in sorted(folder.iterdir())
-                if f.is_file() and not f.name.startswith(".")
-            ]
-            self._preview()
+            self._scan_folder(path)
+
+    @Slot(str)
+    def _on_rename_error(self, error: str):
+        self._restore_ui()
+        QMessageBox.critical(self, "重命名出错", error)
+
+    def _restore_ui(self):
+        """重命名结束后恢复按钮与进度条状态"""
+        self.rename_btn.setEnabled(True)
+        self.preview_btn.setEnabled(True)
+        self.progress_bar.setVisible(False)

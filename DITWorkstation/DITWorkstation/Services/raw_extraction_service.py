@@ -7,14 +7,15 @@ from typing import List, Optional, Callable, Tuple, Dict
 from DITWorkstation.App import config
 from DITWorkstation.Models import ChecksumAlgorithm
 from DITWorkstation.Services.checksum_service import ChecksumService
-from DITWorkstation.Utils import logger
+from DITWorkstation.Utils import logger, get_checksum_service
 
 
 class RawExtractionService:
     """JPG筛选后RAW文件提取服务"""
 
-    def __init__(self):
-        self.checksum_service = ChecksumService()
+    def __init__(self, checksum_service: Optional[ChecksumService] = None):
+        # 与 MediaImportService / BackupService 复用同一校验和缓存
+        self.checksum_service = checksum_service or get_checksum_service()
         self._cancelled = False
         self._cancelled_lock = threading.Lock()
 

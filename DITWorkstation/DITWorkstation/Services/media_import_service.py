@@ -11,14 +11,19 @@ from DITWorkstation.Models import MediaAsset, AssetType, ChecksumAlgorithm
 from DITWorkstation.Services.checksum_service import ChecksumService
 from DITWorkstation.Services.database_service import DatabaseService
 from DITWorkstation.Services.rename_service import MetadataService
-from DITWorkstation.Utils import logger
+from DITWorkstation.Utils import logger, get_checksum_service
 
 
 class MediaImportService:
     """媒体导入服务"""
 
-    def __init__(self, db_service: Optional[DatabaseService] = None):
-        self.checksum_service = ChecksumService()
+    def __init__(
+        self,
+        db_service: Optional[DatabaseService] = None,
+        checksum_service: Optional[ChecksumService] = None
+    ):
+        # 优先使用注入的 checksum_service，否则取全局单例（避免重复计算缓存）
+        self.checksum_service = checksum_service or get_checksum_service()
         self.metadata_service = MetadataService()
         self.db_service = db_service or DatabaseService()
 

@@ -141,6 +141,21 @@ class VideoMetadata:
 
 
 @dataclass
+class Workspace:
+    """工作区 - 项目的父级容器，对应物理目录
+
+    一个工作区下可有多个项目（严格 1:N）。工作区的 path 是该工作区下所有项目
+    的默认工作目录根（导入素材可默认复制到 path/<项目名>/ 下）。
+    """
+    workspace_id: str
+    name: str
+    path: str = ""  # 物理目录路径
+    description: str = ""
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
 class Project:
     """项目"""
     project_id: str
@@ -149,6 +164,7 @@ class Project:
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     base_path: str = ""
+    workspace_id: Optional[str] = None  # 所属工作区 ID（1:N，可空以兼容旧数据）
 
 
 @dataclass

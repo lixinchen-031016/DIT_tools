@@ -2,9 +2,10 @@
 import os
 import re
 import logging
+import functools
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable
 
 
 def format_size(size_bytes: int) -> str:
@@ -123,3 +124,66 @@ class Logger:
 
 
 logger = Logger()
+
+
+# ===== 共享数据库服务单例 =====
+_shared_db_service = None
+
+
+def get_db_service():
+    """
+    返回全局共享的 DatabaseService 单例。
+
+    各视图共用同一实例，避免启动时重复执行 _init_db / _migrate_db，
+    也避免多实例并发写时无谓的锁竞争。
+    """
+    global _shared_db_service
+    if _shared_db_service is None:
+        from DITWorkstation.Services.database_service import DatabaseService
+        _shared_db_service = DatabaseService()
+    return _shared_db_service
+
+
+# ===== 共享校验和服务单例 =====
+# ChecksumService 内部维护文件级缓存（path+size+algo -> hash），
+# 多个 Service 实例各自缓存会导致重复计算和内存浪费。
+_shared_checksum_service = None
+
+
+def get_checksum_service():
+    """返回全局共享的 ChecksumService 单例。
+
+    让 MediaImportService / BackupService / RawExtractionService 复用同一缓存，
+    避免导入时已算过的 hash 在备份时再算一次。
+    """
+    global _shared_checksum_service
+    if _shared_checksum_service is None:
+        from DITWorkstation.Services.checksum_service import ChecksumService
+        _shared_checksum_service = ChecksumService()
+    return _shared_checksum_service
+
+
+# ===== Qt 槽函数异常安全装饰器 =====
+def safe_slot(error_title: str = "操作失败"):
+    """
+    装饰 Qt 槽函数：捕获异常并弹出 QMessageBox 提示，避免槽函数崩溃。
+
+    用法：
+        @safe_slot("删除项目失败")
+        def _delete_project(self):
+            ...
+    """
+    def decorator(func: Callable) -> Callable:
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            try:
+                return func(self, *args, **kwargs)
+            except Exception as e:
+                logger.error(f"{error_title}: {e}", exc_info=True)
+                try:
+                    from PySide6.QtWidgets import QMessageBox
+                    QMessageBox.critical(self, error_title, f"{error_title}：\n{e}")
+                except Exception:
+                    pass
+        return wrapper
+    return decorator

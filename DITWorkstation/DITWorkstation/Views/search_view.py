@@ -7,8 +7,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QDate
 
-from DITWorkstation.Services.database_service import DatabaseService
-from DITWorkstation.Utils import format_size
+from DITWorkstation.Utils import format_size, get_db_service, safe_slot
 
 
 class SearchView(QWidget):
@@ -16,11 +15,15 @@ class SearchView(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.db_service = DatabaseService()
+        self.db_service = get_db_service()
+        # 全局日志缓存：跨项目搜索时也能显示日志标签而非裸 UUID
         self._log_cache = {}
         self._setup_ui()
         self.project_combo.currentIndexChanged.connect(self._on_project_changed)
         self._load_projects()
+        # 监听全局工作区切换，重新加载项目列表（按新工作区过滤）
+        from DITWorkstation.Views.main_window import get_data_bus
+        get_data_bus().workspace_focus_changed.connect(self._on_global_workspace_changed)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -135,12 +138,51 @@ class SearchView(QWidget):
         self.result_table.setAlternatingRowColors(True)
         layout.addWidget(self.result_table, 1)
 
+        # 数据过期提示条（其他视图改了数据后，提示用户当前结果可能过期）
+        self.stale_banner = QLabel("")
+        self.stale_banner.setVisible(False)
+        self.stale_banner.setStyleSheet(
+            "background-color: #fff3cd; color: #856404; padding: 8px 12px; "
+            "border-radius: 6px; border: 1px solid #ffe08a;"
+        )
+        # 点击提示条触发重搜
+        self.stale_banner.mousePressEvent = lambda _e: self._search()
+        layout.addWidget(self.stale_banner)
+
+        # 监听全局数据总线，数据变更时显示过期提示
+        try:
+            from DITWorkstation.Views.main_window import get_data_bus
+            get_data_bus().data_changed.connect(self._on_data_changed)
+        except Exception:
+            pass
+
+    def _on_data_changed(self, event: str):
+        """收到数据变更广播时，若已有结果则显示过期提示条"""
+        if event in ("assets_changed", "logs_changed", "all"):
+            if self.result_table.rowCount() > 0:
+                self.stale_banner.setText(
+                    "⚠ 数据已变更，当前结果可能过期。点击此处或「🔍 搜索」按钮重新搜索。"
+                )
+                self.stale_banner.setVisible(True)
+
     def _load_projects(self):
+        # 保留当前选中的项目
+        prev_id = self.project_combo.currentData()
+
+        self.project_combo.blockSignals(True)
         self.project_combo.clear()
         self.project_combo.addItem("全部项目", None)
-        projects = self.db_service.get_projects()
-        for p in projects:
+        from DITWorkstation.Views.main_window import get_current_workspace_id
+        ws_id = get_current_workspace_id()
+        projects = self.db_service.get_projects(workspace_id=ws_id)
+        restore_index = 0
+        for i, p in enumerate(projects, start=1):
             self.project_combo.addItem(p.name, p.project_id)
+            if prev_id and p.project_id == prev_id:
+                restore_index = i
+        self.project_combo.setCurrentIndex(restore_index)
+        self.project_combo.blockSignals(False)
+
         self._refresh_log_combo()
 
     def showEvent(self, event):
@@ -150,11 +192,16 @@ class SearchView(QWidget):
     def _on_project_changed(self, index: int):
         self._refresh_log_combo()
 
+    def _on_global_workspace_changed(self, _workspace_id):
+        """全局工作区切换 -> 重新加载项目列表（按新工作区过滤），并清空旧结果"""
+        self._load_projects()
+        self.result_table.setRowCount(0)
+        self.result_label.setText("")
+
     def _refresh_log_combo(self):
         project_id = self.project_combo.currentData()
         self.log_combo.clear()
         self.log_combo.addItem("全部日志", None)
-        self._log_cache.clear()
         if project_id:
             logs = self.db_service.get_shooting_logs(project_id)
             if logs:
@@ -170,6 +217,18 @@ class SearchView(QWidget):
         else:
             self.log_combo.setEnabled(False)
 
+    def _ensure_log_cached(self, log_id: str):
+        """跨项目时按需补齐日志缓存，避免显示裸 UUID"""
+        if not log_id or log_id in self._log_cache:
+            return
+        log = self.db_service.get_shooting_log(log_id)
+        if log:
+            self._log_cache[log_id] = log
+
+    # 搜索结果上限：避免一次性加载过多导致 UI 卡顿
+    _SEARCH_LIMIT = 2000
+
+    @safe_slot("搜索失败")
     def _search(self):
         project_id = self.project_combo.currentData()
         scene = self.scene_edit.text() or None
@@ -187,6 +246,7 @@ class SearchView(QWidget):
             date_from = self.date_from.date().toString("yyyy-MM-dd")
             date_to = self.date_to.date().toString("yyyy-MM-dd") + " 23:59:59"
 
+        # 多取一条用于判断是否截断
         results = self.db_service.search_assets(
             project_id=project_id,
             scene=scene,
@@ -195,14 +255,28 @@ class SearchView(QWidget):
             date_from=date_from,
             date_to=date_to,
             keyword=keyword,
-            log_id=log_id
+            log_id=log_id,
+            limit=self._SEARCH_LIMIT + 1
         )
 
-        self._display_results(results)
+        truncated = len(results) > self._SEARCH_LIMIT
+        if truncated:
+            results = results[:self._SEARCH_LIMIT]
 
-    def _display_results(self, results):
+        self._display_results(results, truncated)
+
+    def _display_results(self, results, truncated: bool = False):
         self.result_table.setRowCount(len(results))
-        self.result_label.setText(f"找到 {len(results)} 条结果")
+        if truncated:
+            self.result_label.setText(
+                f"找到 {len(results)}+ 条结果（已截断，请缩小搜索条件以查看全部）"
+            )
+            self.result_label.setStyleSheet("color: #ff9500; font-weight: 600;")
+        else:
+            self.result_label.setText(f"找到 {len(results)} 条结果")
+            self.result_label.setStyleSheet("color: #86868b;")
+        # 新搜索完成后隐藏过期提示
+        self.stale_banner.setVisible(False)
 
         for i, asset in enumerate(results):
             self.result_table.setItem(i, 0, QTableWidgetItem(asset.file_name))
@@ -215,11 +289,14 @@ class SearchView(QWidget):
 
             log_label = ""
             if asset.log_id:
+                # 跨项目时补齐缓存，避免显示裸 UUID
+                self._ensure_log_cached(asset.log_id)
                 log = self._log_cache.get(asset.log_id)
                 if log:
                     log_label = f"{log.scene}/{log.shot}/{log.take}"
                 else:
-                    log_label = asset.log_id
+                    # 日志可能已被删除，显示为未关联
+                    log_label = "（日志已删除）"
             self.result_table.setItem(i, 5, QTableWidgetItem(log_label))
 
             checksum_short = asset.checksum_value[:12] + "..." if asset.checksum_value else ""

@@ -3,12 +3,14 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QFileDialog, QProgressBar, QGroupBox,
     QFormLayout, QTextEdit, QCheckBox, QTableWidget,
-    QTableWidgetItem, QHeaderView, QMessageBox
+    QTableWidgetItem, QHeaderView, QMessageBox, QComboBox
 )
 from PySide6.QtCore import Qt, Slot, QTimer, Signal
 
 from DITWorkstation.Services.raw_extraction_service import RawExtractionService
+from DITWorkstation.Services.media_import_service import MediaImportService
 from DITWorkstation.Utils.workers import SimpleWorkerThread
+from DITWorkstation.Utils import get_db_service, safe_slot, logger
 
 
 class RawExtractionView(QWidget):
@@ -20,9 +22,18 @@ class RawExtractionView(QWidget):
     def __init__(self):
         super().__init__()
         self.service = RawExtractionService()
+        self.db_service = get_db_service()
+        # 复用共享 db_service 单例，避免再创建一份
+        self.import_service = MediaImportService(db_service=self.db_service)
         self.worker = None
         self._setup_ui()
         self._progress_sig.connect(self._on_progress)
+        # 项目下拉变化时同步全局（"不关联"即 None 不广播，避免覆盖全局项目）
+        self.project_combo.currentIndexChanged.connect(self._on_project_changed)
+        # 监听全局项目切换，同步本视图下拉
+        from DITWorkstation.Views.main_window import get_data_bus
+        get_data_bus().project_focus_changed.connect(self._on_global_project_changed)
+        get_data_bus().workspace_focus_changed.connect(self._on_global_workspace_changed)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -37,6 +48,20 @@ class RawExtractionView(QWidget):
         subtitle = QLabel("选择客户筛选后的JPG文件夹，自动匹配并提取对应的RAW文件")
         subtitle.setStyleSheet("font-size: 13px; color: #86868b;")
         layout.addWidget(subtitle)
+
+        # 关联项目 + 自动入库
+        link_group = QGroupBox("项目关联（用于提取后自动入库）")
+        link_layout = QHBoxLayout(link_group)
+        link_layout.addWidget(QLabel("目标项目:"))
+        self.project_combo = QComboBox()
+        self.project_combo.setMinimumWidth(300)
+        self.project_combo.addItem("（不关联项目，仅提取文件）", None)
+        link_layout.addWidget(self.project_combo, 1)
+        self.auto_import_check = QCheckBox("提取后自动入库到所选项目（继承原 JPG 的 log_id）")
+        self.auto_import_check.setChecked(True)
+        link_layout.addWidget(self.auto_import_check)
+        link_layout.addStretch()
+        layout.addWidget(link_group)
 
         # 路径配置
         path_group = QGroupBox("路径配置")
@@ -149,6 +174,62 @@ class RawExtractionView(QWidget):
         if path:
             edit.setText(path)
 
+    def showEvent(self, event):
+        """每次显示时刷新项目下拉"""
+        super().showEvent(event)
+        self._load_projects()
+
+    @safe_slot("加载项目失败")
+    def _load_projects(self):
+        """加载项目到下拉（优先同步全局当前项目，其次保留之前的选择）"""
+        prev_id = self.project_combo.currentData()
+        self.project_combo.blockSignals(True)
+        self.project_combo.clear()
+        self.project_combo.addItem("（不关联项目，仅提取文件）", None)
+        try:
+            from DITWorkstation.Views.main_window import get_current_workspace_id
+            ws_id = get_current_workspace_id()
+            projects = self.db_service.get_projects(workspace_id=ws_id)
+        except Exception:
+            projects = []
+        for p in projects:
+            self.project_combo.addItem(f"{p.name} ({p.project_id})", p.project_id)
+        # 优先同步全局当前项目；若全局为 None，回退到本视图之前的选择
+        from DITWorkstation.Views.main_window import get_current_project_id
+        target_id = get_current_project_id() or prev_id
+        if target_id:
+            for i in range(self.project_combo.count()):
+                if self.project_combo.itemData(i) == target_id:
+                    self.project_combo.setCurrentIndex(i)
+                    break
+        self.project_combo.blockSignals(False)
+        # blockSignals 期间未触发 currentIndexChanged，手动同步一次全局（不关联时不广播）
+        self._on_project_changed(self.project_combo.currentIndex())
+
+    def _on_project_changed(self, index: int):
+        """本视图项目下拉变化时同步全局（"不关联"即 None 不广播，避免覆盖全局项目）"""
+        project_id = self.project_combo.currentData()
+        if project_id is not None:
+            from DITWorkstation.Views.main_window import set_current_project
+            set_current_project(project_id)
+
+    def _on_global_project_changed(self, project_id):
+        """全局项目切换，同步本视图下拉；None 不强制覆盖（保留"不关联"语义）"""
+        if project_id is None:
+            return
+        self.project_combo.blockSignals(True)
+        for i in range(self.project_combo.count()):
+            if self.project_combo.itemData(i) == project_id:
+                self.project_combo.setCurrentIndex(i)
+                break
+        self.project_combo.blockSignals(False)
+        # 手动触发一次本视图的 _on_project_changed 逻辑
+        self._on_project_changed(self.project_combo.currentIndex())
+
+    def _on_global_workspace_changed(self, _workspace_id):
+        """全局工作区切换 -> 重新加载项目列表（按新工作区过滤）"""
+        self._load_projects()
+
     def _scan_match(self):
         jpg_folder = self.jpg_edit.text()
         raw_folder = self.raw_edit.text()
@@ -239,6 +320,26 @@ class RawExtractionView(QWidget):
 
         self.status_label.setText(status_text)
 
+        # 数据闭环：提取后自动入库到所选项目，并继承原 JPG 的 log_id
+        project_id = self.project_combo.currentData()
+        auto_import = self.auto_import_check.isChecked() and project_id is not None
+        imported_count = 0
+        log_inherited = 0
+        if auto_import and success > 0:
+            try:
+                imported_count, log_inherited = self._auto_import_extracted(result, project_id)
+                if imported_count > 0:
+                    self.status_label.setText(
+                        status_text + f"，已入库 {imported_count} 个（{log_inherited} 个继承 log_id）"
+                    )
+            except Exception as e:
+                logger.error(f"RAW 提取后自动入库失败: {e}", exc_info=True)
+                QMessageBox.warning(
+                    self, "自动入库失败",
+                    f"RAW 文件已提取到输出目录，但自动入库失败：\n{e}\n"
+                    "可稍后到「媒体导入」视图手动入库。"
+                )
+
         details = []
         if failed > 0:
             for item in result['details']:
@@ -246,10 +347,93 @@ class RawExtractionView(QWidget):
                     details.append(f"- {item['raw']}: {item.get('error', '未知错误')}")
 
         msg_text = f"RAW文件提取完成！\n\n成功: {success} 个\n未找到: {not_found} 个\n失败: {failed} 个"
+        if imported_count > 0:
+            msg_text += f"\n已自动入库: {imported_count} 个（{log_inherited} 个继承原 JPG 的 log_id）"
         if details:
             msg_text += f"\n\n失败详情:\n{chr(10).join(details)}"
 
         QMessageBox.information(self, "提取完成", msg_text)
+
+        # 广播 assets_changed，让其他视图刷新
+        if imported_count > 0:
+            try:
+                from DITWorkstation.Views.main_window import get_data_bus
+                get_data_bus().emit_data_changed("assets_changed")
+            except Exception as e:
+                logger.error(f"广播 RAW 提取完成事件失败: {e}")
+
+    def _auto_import_extracted(self, result: dict, project_id: str) -> tuple:
+        """把提取出的 RAW 文件入库到 project_id，并按原 JPG 的 log_id 继承。
+
+        Returns:
+            (imported_count, log_inherited_count)
+        """
+        # 建立 jpg_stem -> log_id 映射（从 DB 查原 JPG 的 asset.log_id）
+        stem_to_log_id = {}
+        for item in result.get("details", []):
+            if item.get("status") != "success":
+                continue
+            jpg_path = item.get("jpg")
+            if not jpg_path:
+                continue
+            try:
+                # 按 file_path 全局查 asset（不限 project_id，因为 JPG 可能在任意项目）
+                from pathlib import Path as _P
+                # 直接查 DB
+                conn = self.db_service._get_conn()
+                try:
+                    row = conn.execute(
+                        "SELECT log_id FROM media_assets WHERE file_path = ?",
+                        (jpg_path,)
+                    ).fetchone()
+                    log_id = row["log_id"] if row else None
+                finally:
+                    conn.close()
+                stem_to_log_id[_P(jpg_path).stem.lower()] = log_id
+            except Exception as e:
+                logger.debug(f"查 JPG log_id 失败 {jpg_path}: {e}")
+
+        # 收集所有成功提取的 RAW 输出路径，按 stem 分组
+        output_files = []
+        for item in result.get("details", []):
+            if item.get("status") == "success" and item.get("output"):
+                output_files.append(item["output"])
+
+        if not output_files:
+            return (0, 0)
+
+        # 按 stem 分组（同 stem 共享 log_id）
+        from pathlib import Path as _P
+        file_log_pairs = []
+        for fp in output_files:
+            stem = _P(fp).stem.lower()
+            log_id = stem_to_log_id.get(stem)
+            file_log_pairs.append((fp, log_id))
+
+        imported_count = 0
+        log_inherited = 0
+        # 按 log_id 分批导入（import_assets 接受单一 log_id，所以分组）
+        from collections import defaultdict
+        groups = defaultdict(list)
+        for fp, lid in file_log_pairs:
+            groups[lid].append(fp)
+
+        for lid, files in groups.items():
+            try:
+                r = self.import_service.import_assets(
+                    project_id=project_id,
+                    file_paths=files,
+                    compute_checksum=True,
+                    read_metadata=True,
+                    log_id=lid,
+                )
+                imported_count += r.get("imported", 0)
+                if lid:
+                    log_inherited += r.get("imported", 0)
+            except Exception as e:
+                logger.error(f"RAW 批量入库失败 (log_id={lid}): {e}")
+
+        return (imported_count, log_inherited)
 
     @Slot(str)
     def _on_error(self, error: str):

@@ -3,7 +3,8 @@ from .common import (
     format_size, generate_timestamp, generate_log_message,
     sanitize_filename, ensure_directory, get_file_extension,
     get_file_stem, path_exists, is_file, is_directory,
-    get_relative_path, calculate_speed, Logger, logger
+    get_relative_path, calculate_speed, Logger, logger,
+    get_db_service, get_checksum_service, safe_slot
 )
 from .workers import WorkerSignals, WorkerThread, SimpleWorkerThread
 
@@ -12,5 +13,6 @@ __all__ = [
     'sanitize_filename', 'ensure_directory', 'get_file_extension',
     'get_file_stem', 'path_exists', 'is_file', 'is_directory',
     'get_relative_path', 'calculate_speed', 'Logger', 'logger',
-    'WorkerSignals', 'WorkerThread', 'SimpleWorkerThread'
+    'WorkerSignals', 'WorkerThread', 'SimpleWorkerThread',
+    'get_db_service', 'get_checksum_service', 'safe_slot'
 ]

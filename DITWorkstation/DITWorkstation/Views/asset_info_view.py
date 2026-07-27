@@ -10,9 +10,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QThread, Signal
 
-from DITWorkstation.Services.database_service import DatabaseService
 from DITWorkstation.Services.rename_service import MetadataService
-from DITWorkstation.Utils import format_size
+from DITWorkstation.Utils import format_size, get_db_service, safe_slot
 
 # 缺失值占位符
 _PLACEHOLDER = "—"
@@ -73,6 +72,7 @@ class _BatchExifWorker(QThread):
 
     progress = Signal(int, int, str)  # current, total, message
     finished_batch = Signal(int, int)  # success_count, total_count
+    error = Signal(str)  # 错误信息（确保异常时 UI 能恢复）
 
     def __init__(self, db_service, asset_ids):
         super().__init__()
@@ -87,69 +87,79 @@ class _BatchExifWorker(QThread):
     def run(self):
         total = len(self._asset_ids)
         success = 0
-        for i, asset_id in enumerate(self._asset_ids):
-            if self._cancelled:
-                break
-            asset = self._db_service.get_media_asset(asset_id)
-            if not asset:
-                self.progress.emit(i + 1, total, f"跳过：{asset_id}（未找到）")
-                continue
+        try:
+            for i, asset_id in enumerate(self._asset_ids):
+                if self._cancelled:
+                    break
+                try:
+                    asset = self._db_service.get_media_asset(asset_id)
+                    if not asset:
+                        self.progress.emit(i + 1, total, f"跳过：{asset_id}（未找到）")
+                        continue
 
-            file_path = asset.file_path
-            if not file_path or not Path(file_path).exists():
-                self.progress.emit(i + 1, total, f"跳过：{asset.file_name}（文件不存在）")
-                continue
+                    file_path = asset.file_path
+                    if not file_path or not Path(file_path).exists():
+                        self.progress.emit(i + 1, total, f"跳过：{asset.file_name}（文件不存在）")
+                        continue
 
-            update_fields = {}
+                    update_fields = {}
 
-            # 视频文件读取视频元数据
-            if asset.asset_type == "video":
-                vm = self._metadata_service.read_video_metadata(file_path)
-                if vm.width:
-                    update_fields["width"] = vm.width
-                if vm.height:
-                    update_fields["height"] = vm.height
-                if vm.duration_seconds:
-                    update_fields["duration_seconds"] = vm.duration_seconds
-                update_fields["video_metadata"] = json.dumps({
-                    "codec": vm.codec,
-                    "frame_rate": vm.frame_rate,
-                    "bit_rate": vm.bit_rate,
-                    "audio_codec": vm.audio_codec,
-                    "audio_sample_rate": vm.audio_sample_rate,
-                })
-            else:
-                # 图片/RAW 读取 EXIF
-                metadata = self._metadata_service.read_metadata(file_path)
-                if metadata.camera_make:
-                    update_fields["camera_make"] = metadata.camera_make
-                if metadata.camera_model:
-                    update_fields["camera_model"] = metadata.camera_model
-                if metadata.lens_model:
-                    update_fields["lens_model"] = metadata.lens_model
-                if metadata.iso:
-                    update_fields["iso"] = metadata.iso
-                if metadata.aperture:
-                    update_fields["aperture"] = metadata.aperture
-                if metadata.shutter_speed:
-                    update_fields["shutter_speed"] = metadata.shutter_speed
-                if metadata.focal_length:
-                    update_fields["focal_length"] = metadata.focal_length
-                if metadata.width:
-                    update_fields["width"] = metadata.width
-                if metadata.height:
-                    update_fields["height"] = metadata.height
-                if metadata.date_taken:
-                    update_fields["date_taken"] = metadata.date_taken
+                    # 视频文件读取视频元数据
+                    if asset.asset_type == "video":
+                        vm = self._metadata_service.read_video_metadata(file_path)
+                        if vm.width:
+                            update_fields["width"] = vm.width
+                        if vm.height:
+                            update_fields["height"] = vm.height
+                        if vm.duration_seconds:
+                            update_fields["duration_seconds"] = vm.duration_seconds
+                        update_fields["video_metadata"] = json.dumps({
+                            "codec": vm.codec,
+                            "frame_rate": vm.frame_rate,
+                            "bit_rate": vm.bit_rate,
+                            "audio_codec": vm.audio_codec,
+                            "audio_sample_rate": vm.audio_sample_rate,
+                        })
+                    else:
+                        # 图片/RAW 读取 EXIF
+                        metadata = self._metadata_service.read_metadata(file_path)
+                        if metadata.camera_make:
+                            update_fields["camera_make"] = metadata.camera_make
+                        if metadata.camera_model:
+                            update_fields["camera_model"] = metadata.camera_model
+                        if metadata.lens_model:
+                            update_fields["lens_model"] = metadata.lens_model
+                        if metadata.iso:
+                            update_fields["iso"] = metadata.iso
+                        if metadata.aperture:
+                            update_fields["aperture"] = metadata.aperture
+                        if metadata.shutter_speed:
+                            update_fields["shutter_speed"] = metadata.shutter_speed
+                        if metadata.focal_length:
+                            update_fields["focal_length"] = metadata.focal_length
+                        if metadata.width:
+                            update_fields["width"] = metadata.width
+                        if metadata.height:
+                            update_fields["height"] = metadata.height
+                        if metadata.date_taken:
+                            update_fields["date_taken"] = metadata.date_taken
 
-            if update_fields:
-                self._db_service.update_media_asset(asset_id, **update_fields)
-                success += 1
-                self.progress.emit(i + 1, total, f"已更新：{asset.file_name}")
-            else:
-                self.progress.emit(i + 1, total, f"无元数据：{asset.file_name}")
+                    if update_fields:
+                        ok = self._db_service.update_media_asset(asset_id, **update_fields)
+                        if ok:
+                            success += 1
+                            self.progress.emit(i + 1, total, f"已更新：{asset.file_name}")
+                        else:
+                            self.progress.emit(i + 1, total, f"更新失败：{asset.file_name}")
+                    else:
+                        self.progress.emit(i + 1, total, f"无元数据：{asset.file_name}")
+                except Exception as e:
+                    # 单个文件异常不中断整体流程
+                    self.progress.emit(i + 1, total, f"出错：{e}")
 
-        self.finished_batch.emit(success, total)
+            self.finished_batch.emit(success, total)
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 class AssetInfoView(QWidget):
@@ -157,12 +167,16 @@ class AssetInfoView(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.db_service = DatabaseService()
+        self.db_service = get_db_service()
         self.metadata_service = MetadataService()
         self.current_asset = None
         self._batch_worker = None
         self._setup_ui()
         self._load_projects()
+        # 监听全局项目切换，同步本视图下拉
+        from DITWorkstation.Views.main_window import get_data_bus
+        get_data_bus().project_focus_changed.connect(self._on_global_project_changed)
+        get_data_bus().workspace_focus_changed.connect(self._on_global_workspace_changed)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -420,17 +434,50 @@ class AssetInfoView(QWidget):
         self.project_combo.blockSignals(True)
         self.project_combo.clear()
         self.project_combo.addItem("请选择项目...", None)
-        projects = self.db_service.get_projects()
+        from DITWorkstation.Views.main_window import get_current_workspace_id
+        ws_id = get_current_workspace_id()
+        projects = self.db_service.get_projects(workspace_id=ws_id)
         for p in projects:
             self.project_combo.addItem(p.name, p.project_id)
+        # 同步全局当前项目（切视图无需重选）
+        from DITWorkstation.Views.main_window import get_current_project_id
+        global_pid = get_current_project_id()
+        if global_pid:
+            for i in range(self.project_combo.count()):
+                if self.project_combo.itemData(i) == global_pid:
+                    self.project_combo.setCurrentIndex(i)
+                    break
         self.project_combo.blockSignals(False)
+        # blockSignals 期间未触发，手动刷新一次素材列表
+        self._on_project_changed(self.project_combo.currentIndex())
 
     def showEvent(self, event):
         self._load_projects()
         super().showEvent(event)
 
     def _on_project_changed(self, index: int):
+        # 同步全局当前项目
+        from DITWorkstation.Views.main_window import set_current_project
+        set_current_project(self.project_combo.currentData())
         self._load_assets()
+
+    def _on_global_project_changed(self, project_id):
+        """全局项目切换，同步本视图下拉（避免回调循环）"""
+        self.project_combo.blockSignals(True)
+        if project_id is None:
+            self.project_combo.setCurrentIndex(0)
+        else:
+            for i in range(self.project_combo.count()):
+                if self.project_combo.itemData(i) == project_id:
+                    self.project_combo.setCurrentIndex(i)
+                    break
+        self.project_combo.blockSignals(False)
+        # 手动触发一次本视图的 _on_project_changed 逻辑（刷新素材列表）
+        self._on_project_changed(self.project_combo.currentIndex())
+
+    def _on_global_workspace_changed(self, _workspace_id):
+        """全局工作区切换 -> 重新加载项目列表（按新工作区过滤）"""
+        self._load_projects()
 
     def _load_assets(self):
         project_id = self.project_combo.currentData()
@@ -534,7 +581,18 @@ class AssetInfoView(QWidget):
         self._set_value("project", "scene", asset.scene)
         self._set_value("project", "shot", asset.shot)
         self._set_value("project", "take", asset.take)
-        self._set_value("project", "log_id", asset.log_id or "")
+        # 关联日志显示标签而非裸 UUID
+        log_label = ""
+        if asset.log_id:
+            log = self.db_service.get_shooting_log(asset.log_id)
+            if log:
+                log_label = f"{log.scene}/{log.shot}/{log.take}"
+                if log.description:
+                    log_label += f" - {log.description}"
+            else:
+                # 日志可能已被删除
+                log_label = "（日志已删除）"
+        self._set_value("project", "log_id", log_label, raw=asset.log_id or "")
         backup_locs = asset.backup_locations if asset.backup_locations else []
         self._set_value("project", "backup_locations",
                         "\n".join(backup_locs) if backup_locs else "")
@@ -551,6 +609,7 @@ class AssetInfoView(QWidget):
                 lbl.setToolTip("")
 
     # ===== 单个文件重新读取 EXIF =====
+    @safe_slot("读取元数据失败")
     def _refresh_single_exif(self):
         if not self.current_asset:
             return
@@ -602,9 +661,12 @@ class AssetInfoView(QWidget):
                 update_fields["date_taken"] = metadata.date_taken
 
         if update_fields:
-            self.db_service.update_media_asset(
+            ok = self.db_service.update_media_asset(
                 self.current_asset.asset_id, **update_fields
             )
+            if not ok:
+                QMessageBox.warning(self, "更新失败", "数据库更新失败，请重试。")
+                return
             self.current_asset = self.db_service.get_media_asset(
                 self.current_asset.asset_id
             )
@@ -621,7 +683,13 @@ class AssetInfoView(QWidget):
             )
 
     # ===== 一键批量重新读取全部 EXIF =====
+    @safe_slot("批量读取 EXIF 失败")
     def _batch_refresh_exif(self):
+        # 防止重复启动孤儿线程
+        if self._batch_worker is not None and self._batch_worker.isRunning():
+            QMessageBox.information(self, "提示", "正在执行批量读取，请等待当前任务完成。")
+            return
+
         project_id = self.project_combo.currentData()
         if not project_id:
             return
@@ -651,11 +719,22 @@ class AssetInfoView(QWidget):
         self._batch_worker = _BatchExifWorker(self.db_service, asset_ids)
         self._batch_worker.progress.connect(self._on_batch_progress)
         self._batch_worker.finished_batch.connect(self._on_batch_finished)
+        self._batch_worker.error.connect(self._on_batch_error)
         self._batch_worker.start()
 
     def _on_batch_progress(self, current, total, message):
         self.batch_progress.setValue(current)
         self.batch_status_label.setText(f"({current}/{total}) {message}")
+
+    def _on_batch_error(self, error_msg: str):
+        """批量任务异常时恢复 UI 状态"""
+        self.batch_status_label.setText(f"❌ 出错：{error_msg}")
+        self.batch_exif_btn.setEnabled(True)
+        if self.current_asset:
+            self.refresh_exif_btn.setEnabled(True)
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(3000, lambda: self.batch_progress_frame.setVisible(False))
+        QMessageBox.critical(self, "批量读取出错", error_msg)
 
     def _on_batch_finished(self, success, total):
         self.batch_status_label.setText(
@@ -674,6 +753,14 @@ class AssetInfoView(QWidget):
             if self.current_asset:
                 self.current_file_label.setText(self.current_asset.file_name)
                 self._display_properties(self.current_asset)
+
+        # 广播 assets_changed，让 search_view / shooting_log_view 等知道 EXIF 已更新
+        if success > 0:
+            try:
+                from DITWorkstation.Views.main_window import get_data_bus
+                get_data_bus().emit_data_changed("assets_changed")
+            except Exception:
+                pass
 
         # 3 秒后隐藏进度条
         from PySide6.QtCore import QTimer

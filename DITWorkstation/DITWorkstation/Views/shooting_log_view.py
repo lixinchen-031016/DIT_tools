@@ -8,11 +8,11 @@ from PySide6.QtWidgets import (
     QTextEdit, QSplitter, QListWidget, QListWidgetItem,
     QDialog, QDialogButtonBox, QAbstractItemView, QTabWidget
 )
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QTimer
 
 from DITWorkstation.Models import Project, ShootingLog
-from DITWorkstation.Services.database_service import DatabaseService
-from DITWorkstation.Utils import format_size
+from DITWorkstation.Services.rename_service import MetadataService
+from DITWorkstation.Utils import format_size, get_db_service, safe_slot
 
 
 class ShootingLogView(QWidget):
@@ -20,12 +20,17 @@ class ShootingLogView(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.db_service = DatabaseService()
+        self.db_service = get_db_service()
+        self.metadata_service = MetadataService()
         self.current_project: Project = None
         self.current_log_id: str = None
         self._pending_asset_ids: List[str] = []
         self._setup_ui()
         self._load_projects()
+        # 监听全局项目切换，同步本视图项目列表
+        from DITWorkstation.Views.main_window import get_data_bus
+        get_data_bus().project_focus_changed.connect(self._on_global_project_changed)
+        get_data_bus().workspace_focus_changed.connect(self._on_global_workspace_changed)
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
@@ -125,6 +130,27 @@ class ShootingLogView(QWidget):
         asset_select_row.addWidget(self.select_assets_btn)
         asset_select_row.addWidget(self.selected_assets_label, 1)
         form_layout.addRow("", asset_select_row)
+
+        # 从代表素材填充 EXIF：选择项目内一个素材，自动带出相机/镜头/ISO/光圈/快门
+        exif_row = QHBoxLayout()
+        self.fill_exif_btn = QPushButton("📷 从代表素材填充 EXIF")
+        self.fill_exif_btn.setToolTip("选择项目内一个素材，自动带出相机/镜头/ISO/光圈/快门")
+        self.fill_exif_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f0f0f0;
+                border: 1px solid #d1d1d6;
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-size: 12px;
+                color: #1d1d1f;
+            }
+            QPushButton:hover { background-color: #e5e5ea; }
+            QPushButton:disabled { color: #c7c7cc; border-color: #e5e5ea; }
+        """)
+        self.fill_exif_btn.clicked.connect(self._fill_exif_from_asset)
+        exif_row.addWidget(self.fill_exif_btn)
+        exif_row.addStretch()
+        form_layout.addRow("", exif_row)
 
         add_log_btn = QPushButton("添加日志")
         add_log_btn.setStyleSheet("""
@@ -247,22 +273,57 @@ class ShootingLogView(QWidget):
         layout.addWidget(right_splitter, 3)
 
     def _load_projects(self):
+        # 记录当前选中的项目 ID，刷新后恢复
+        prev_id = None
+        if self.project_list.currentItem() is not None:
+            prev_id = self.project_list.currentItem().data(Qt.UserRole)
+
         self.project_list.clear()
-        projects = self.db_service.get_projects()
-        for p in projects:
+        from DITWorkstation.Views.main_window import get_current_workspace_id
+        ws_id = get_current_workspace_id()
+        projects = self.db_service.get_projects(workspace_id=ws_id)
+        restore_row = -1
+        for i, p in enumerate(projects):
             item = QListWidgetItem(f"{p.name}\n{p.created_at.strftime('%Y-%m-%d')}")
             item.setData(Qt.UserRole, p.project_id)
             self.project_list.addItem(item)
+            if prev_id and p.project_id == prev_id:
+                restore_row = i
+
+        # 恢复选中，避免"幽灵选中"
+        if restore_row >= 0:
+            self.project_list.setCurrentRow(restore_row)
+        else:
+            # 本视图无选中时，回退到全局当前项目（切视图无需重选）
+            from DITWorkstation.Views.main_window import get_current_project_id
+            global_pid = get_current_project_id()
+            global_row = -1
+            if global_pid:
+                for i in range(self.project_list.count()):
+                    if self.project_list.item(i).data(Qt.UserRole) == global_pid:
+                        global_row = i
+                        break
+            if global_row >= 0:
+                self.project_list.setCurrentRow(global_row)
+            elif projects:
+                # 无选中时清空右侧明细，防止残留
+                self.current_project = None
+                self.log_table.setRowCount(0)
+                self.proj_asset_table.setRowCount(0)
+                self.asset_table.setRowCount(0)
 
     def showEvent(self, event):
+        # 刷新项目列表（保留选中），但不强制重载明细（避免覆盖用户当前操作）
         self._load_projects()
         super().showEvent(event)
 
+    @safe_slot("新建项目失败")
     def _create_project(self):
         from PySide6.QtWidgets import QInputDialog
         name, ok = QInputDialog.getText(self, "新建项目", "项目名称:")
         if ok and name:
-            project = self.db_service.create_project(name=name)
+            from DITWorkstation.Views.main_window import get_current_workspace_id
+            project = self.db_service.create_project(name=name, workspace_id=get_current_workspace_id())
             self._load_projects()
             # 选中新项目
             for i in range(self.project_list.count()):
@@ -270,25 +331,58 @@ class ShootingLogView(QWidget):
                     self.project_list.setCurrentRow(i)
                     break
 
+    @safe_slot("删除项目失败")
     def _delete_project(self):
         row = self.project_list.currentRow()
         if row < 0:
             return
         item = self.project_list.item(row)
         project_id = item.data(Qt.UserRole)
-        reply = QMessageBox.question(self, "确认", "确定删除该项目及所有关联数据？")
+        project_name = item.text().split("\n")[0]
+        reply = QMessageBox.question(
+            self, "确认",
+            f"确定删除项目「{project_name}」及所有关联数据？\n此操作不可撤销。",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
         if reply == QMessageBox.Yes:
             self.db_service.delete_project(project_id)
+            self.current_project = None
+            self.current_log_id = None
             self._load_projects()
+            # 广播项目变更
+            from DITWorkstation.Views.main_window import get_data_bus
+            get_data_bus().emit_data_changed("projects_changed")
 
     def _on_project_selected(self, row: int):
         if row < 0:
             return
         item = self.project_list.item(row)
         project_id = item.data(Qt.UserRole)
+        # 同步全局当前项目
+        from DITWorkstation.Views.main_window import set_current_project
+        set_current_project(project_id)
         self.current_project = self.db_service.get_project(project_id)
         self._load_logs()
         self._load_project_assets()
+
+    def _on_global_project_changed(self, project_id):
+        """全局项目切换，同步本视图列表选择（避免回调循环）"""
+        self.project_list.blockSignals(True)
+        target_row = -1
+        if project_id is not None:
+            for i in range(self.project_list.count()):
+                if self.project_list.item(i).data(Qt.UserRole) == project_id:
+                    target_row = i
+                    break
+        self.project_list.setCurrentRow(target_row)
+        self.project_list.blockSignals(False)
+        # 手动触发一次本视图的项目选择逻辑（刷新日志列表等）
+        self._on_project_selected(self.project_list.currentRow())
+
+    def _on_global_workspace_changed(self, _workspace_id):
+        """全局工作区切换 -> 重新加载项目列表（按新工作区过滤）"""
+        self._load_projects()
 
     def _load_logs(self):
         if not self.current_project:
@@ -307,6 +401,7 @@ class ShootingLogView(QWidget):
             # 存储log_id
             self.log_table.item(i, 0).setData(Qt.UserRole, log.log_id)
 
+    @safe_slot("添加日志失败")
     def _add_log(self):
         if not self.current_project:
             QMessageBox.warning(self, "提示", "请先选择或创建项目")
@@ -320,6 +415,19 @@ class ShootingLogView(QWidget):
             QMessageBox.warning(self, "提示", "请填写场景、镜头、镜次信息")
             return
 
+        # ISO 输入校验：非空时必须为合法整数，避免静默归零
+        iso_text = self.iso_edit.text().strip()
+        iso_value = 0
+        if iso_text:
+            try:
+                iso_value = int(iso_text)
+                if iso_value < 0:
+                    raise ValueError
+            except ValueError:
+                QMessageBox.warning(self, "输入错误", "ISO 必须为非负整数，请检查输入。")
+                self.iso_edit.setFocus()
+                return
+
         log = ShootingLog(
             log_id=str(uuid.uuid4())[:8],
             project_id=self.current_project.project_id,
@@ -329,7 +437,7 @@ class ShootingLogView(QWidget):
             description=self.desc_edit.text(),
             camera=self.camera_edit.text(),
             lens=self.lens_edit.text(),
-            iso=int(self.iso_edit.text()) if self.iso_edit.text().isdigit() else 0,
+            iso=iso_value,
             aperture=self.aperture_edit.text(),
             shutter_speed=self.shutter_edit.text(),
             notes=self.notes_edit.toPlainText()
@@ -339,6 +447,13 @@ class ShootingLogView(QWidget):
         self.db_service.create_log_with_assets(log, pending, sync_scene_shot=True)
         self._load_logs()
         self._load_project_assets()
+
+        # 广播：日志和素材关联均变更
+        from DITWorkstation.Views.main_window import get_data_bus
+        bus = get_data_bus()
+        bus.emit_data_changed("logs_changed")
+        if pending:
+            bus.emit_data_changed("assets_changed")
 
         # 清空表单与待关联素材
         self.scene_edit.clear()
@@ -358,6 +473,7 @@ class ShootingLogView(QWidget):
         if pending:
             QMessageBox.information(self, "成功", f"已创建日志并关联 {len(pending)} 个素材")
 
+    @safe_slot("删除日志失败")
     def _delete_log(self):
         row = self.log_table.currentRow()
         if row < 0:
@@ -374,6 +490,12 @@ class ShootingLogView(QWidget):
         self.asset_count_label.setText("")
         self._load_logs()
         self._load_project_assets()
+
+        # 广播：日志删除会级联清空关联素材的 log_id
+        from DITWorkstation.Views.main_window import get_data_bus
+        bus = get_data_bus()
+        bus.emit_data_changed("logs_changed")
+        bus.emit_data_changed("assets_changed")
 
     def _on_log_selected(self):
         row = self.log_table.currentRow()
@@ -404,6 +526,7 @@ class ShootingLogView(QWidget):
         has_selection = len(self.asset_table.selectedItems()) > 0
         self.unlink_asset_btn.setEnabled(has_selection)
 
+    @safe_slot("关联素材失败")
     def _link_assets_dialog(self):
         if not self.current_project or not self.current_log_id:
             return
@@ -423,8 +546,12 @@ class ShootingLogView(QWidget):
                 for aid in selected_ids:
                     self.db_service.update_media_asset_log_id(aid, self.current_log_id)
                 self._load_assets_for_log(self.current_log_id)
+                # 广播素材关联变更
+                from DITWorkstation.Views.main_window import get_data_bus
+                get_data_bus().emit_data_changed("assets_changed")
                 QMessageBox.information(self, "成功", f"已关联 {len(selected_ids)} 个素材")
 
+    @safe_slot("解除关联失败")
     def _unlink_selected_assets(self):
         if not self.current_log_id:
             return
@@ -443,6 +570,9 @@ class ShootingLogView(QWidget):
             self.db_service.update_media_asset_log_id(asset_id, None)
 
         self._load_assets_for_log(self.current_log_id)
+        # 广播素材关联变更
+        from DITWorkstation.Views.main_window import get_data_bus
+        get_data_bus().emit_data_changed("assets_changed")
 
     # ===== 媒体文件驱动的日志记录 =====
 
@@ -463,6 +593,113 @@ class ShootingLogView(QWidget):
                 self.selected_assets_label.setText(f"已选 {len(self._pending_asset_ids)} 个素材")
             else:
                 self.selected_assets_label.setText("未选择")
+
+    @safe_slot("填充 EXIF 失败")
+    def _fill_exif_from_asset(self):
+        """从项目内选择一个代表素材，读取其 EXIF 自动填充表单的相机/镜头/ISO/光圈/快门。
+
+        降低用户手动录入成本：从已导入素材中选一个代表帧，EXIF 即可整组带出。
+        """
+        if not self.current_project:
+            QMessageBox.warning(self, "提示", "请先选择项目")
+            return
+
+        all_assets = self.db_service.get_media_assets(self.current_project.project_id)
+        if not all_assets:
+            QMessageBox.information(self, "提示", "该项目下还没有导入素材，无法填充 EXIF。")
+            return
+
+        # 单选对话框：用 QListWidget 让用户挑一个代表素材
+        from PySide6.QtWidgets import QDialog as _QDialog, QListWidget as _QListWidget, \
+            QDialogButtonBox as _QBB, QVBoxLayout as _QVL
+        dlg = _QDialog(self)
+        dlg.setWindowTitle("选择代表素材以填充 EXIF")
+        dlg.resize(520, 400)
+        dl = _QVL(dlg)
+        pick_list = _QListWidget()
+        pick_list.setSelectionMode(_QListWidget.SingleSelection)
+        # 文件名 (asset_id) 格式，便于用户识别
+        for a in all_assets:
+            pick_list.addItem(f"{a.file_name}  [{a.file_type}]  {format_size(a.file_size)}")
+        if all_assets:
+            pick_list.setCurrentRow(0)
+        dl.addWidget(pick_list)
+        bb = _QBB(_QBB.Ok | _QBB.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        dl.addWidget(bb)
+        if dlg.exec() != _QDialog.Accepted:
+            return
+
+        row = pick_list.currentRow()
+        if row < 0:
+            return
+        asset = all_assets[row]
+        file_path = asset.file_path
+
+        from pathlib import Path
+        if not file_path or not Path(file_path).exists():
+            QMessageBox.warning(self, "提示", f"素材文件不存在：\n{file_path}")
+            return
+
+        # 读取 EXIF（图片/RAW）或视频元数据
+        camera_make = ""
+        camera_model = ""
+        lens_model = ""
+        iso = ""
+        aperture = ""
+        shutter = ""
+
+        try:
+            if asset.asset_type == "video":
+                vm = self.metadata_service.read_video_metadata(file_path)
+                camera_model = vm.codec or ""  # 视频没有相机概念，codec 占位
+            else:
+                meta = self.metadata_service.read_metadata(file_path)
+                camera_make = meta.camera_make or ""
+                camera_model = meta.camera_model or ""
+                lens_model = meta.lens_model or ""
+                if meta.iso:
+                    iso = str(meta.iso)
+                aperture = meta.aperture or ""
+                shutter = meta.shutter_speed or ""
+        except Exception as e:
+            QMessageBox.warning(self, "提示", f"读取 EXIF 失败：{e}")
+            return
+
+        # 合并 make+model 为 camera 字段（与 ShootingLog.camera 语义一致）
+        camera_value = " ".join(p for p in (camera_make, camera_model) if p).strip()
+
+        # 仅在字段为空时填充，避免覆盖用户已输入的内容
+        filled = []
+        if camera_value and not self.camera_edit.text().strip():
+            self.camera_edit.setText(camera_value)
+            filled.append("摄影机")
+        if lens_model and not self.lens_edit.text().strip():
+            self.lens_edit.setText(lens_model)
+            filled.append("镜头")
+        if iso and not self.iso_edit.text().strip():
+            self.iso_edit.setText(iso)
+            filled.append("ISO")
+        if aperture and not self.aperture_edit.text().strip():
+            self.aperture_edit.setText(aperture)
+            filled.append("光圈")
+        if shutter and not self.shutter_edit.text().strip():
+            self.shutter_edit.setText(shutter)
+            filled.append("快门")
+
+        if filled:
+            QMessageBox.information(
+                self, "已填充 EXIF",
+                f"从 {asset.file_name} 读取并填充：{ '、'.join(filled) }"
+            )
+        else:
+            QMessageBox.information(
+                self, "提示",
+                "未填充任何字段。\n可能原因：\n"
+                "  • 该素材没有 EXIF 信息\n"
+                "  • 表单中相关字段已被填写（不会覆盖）"
+            )
 
     def _load_project_assets(self):
         if not self.current_project:
@@ -530,7 +767,12 @@ class _AssetLinkDialog(QDialog):
         search_row.addWidget(QLabel("搜索:"))
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("输入文件名过滤...")
-        self.search_edit.textChanged.connect(self._filter)
+        # 防抖：250ms 内连续输入只触发一次过滤，避免大素材量卡顿
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(250)
+        self._filter_timer.timeout.connect(self._do_filter)
+        self.search_edit.textChanged.connect(self._on_text_changed)
         search_row.addWidget(self.search_edit, 1)
         layout.addLayout(search_row)
 
@@ -549,6 +791,16 @@ class _AssetLinkDialog(QDialog):
 
         self._populate(assets)
 
+    def _on_text_changed(self, _text: str):
+        """输入变化时启动防抖定时器，而非立即过滤"""
+        self._filter_timer.start()
+
+    def _do_filter(self):
+        """定时器触发后执行真正的过滤"""
+        text = self.search_edit.text().lower()
+        filtered = [a for a in self._assets if text in a.file_name.lower()]
+        self._populate(filtered)
+
     def _populate(self, assets):
         self.table.setRowCount(len(assets))
         for i, asset in enumerate(assets):
@@ -560,11 +812,6 @@ class _AssetLinkDialog(QDialog):
             self.table.setItem(i, 1, QTableWidgetItem(asset.file_name))
             self.table.setItem(i, 2, QTableWidgetItem(asset.file_type))
             self.table.setItem(i, 3, QTableWidgetItem(format_size(asset.file_size)))
-
-    def _filter(self, text: str):
-        text = text.lower()
-        filtered = [a for a in self._assets if text in a.file_name.lower()]
-        self._populate(filtered)
 
     def get_selected_asset_ids(self):
         ids = []

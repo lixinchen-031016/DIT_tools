@@ -11,8 +11,7 @@ from PySide6.QtCore import Qt, Slot
 
 from DITWorkstation.Models import Project
 from DITWorkstation.Services.media_import_service import MediaImportService
-from DITWorkstation.Services.database_service import DatabaseService
-from DITWorkstation.Utils import format_size, generate_log_message, WorkerThread
+from DITWorkstation.Utils import format_size, generate_log_message, WorkerThread, get_db_service, safe_slot
 
 
 class MediaImportView(QWidget):
@@ -20,14 +19,19 @@ class MediaImportView(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.import_service = MediaImportService()
-        self.db_service = DatabaseService()
+        # 注入共享 db_service 单例，避免与其它视图各自新建 DatabaseService
+        self.db_service = get_db_service()
+        self.import_service = MediaImportService(db_service=self.db_service)
         self.current_project: Project = None
         self.pending_files = []
         self.worker = None
         self._cancel_requested = False
         self._setup_ui()
         self._load_projects()
+        # 监听全局项目切换，同步本视图项目列表
+        from DITWorkstation.Views.main_window import get_data_bus
+        get_data_bus().project_focus_changed.connect(self._on_global_project_changed)
+        get_data_bus().workspace_focus_changed.connect(self._on_global_workspace_changed)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -217,22 +221,46 @@ class MediaImportView(QWidget):
         layout.addWidget(main_splitter, 1)
 
     def _load_projects(self):
+        # 保留当前选中的项目，避免切换视图后丢失
+        prev_id = None
+        if self.project_list.currentItem() is not None:
+            prev_id = self.project_list.currentItem().data(Qt.UserRole)
+
         self.project_list.clear()
-        projects = self.db_service.get_projects()
-        for p in projects:
+        from DITWorkstation.Views.main_window import get_current_workspace_id
+        ws_id = get_current_workspace_id()
+        projects = self.db_service.get_projects(workspace_id=ws_id)
+        restore_row = -1
+        for i, p in enumerate(projects):
             item = QListWidgetItem(f"{p.name}\n{p.created_at.strftime('%Y-%m-%d')}")
             item.setData(Qt.UserRole, p.project_id)
             self.project_list.addItem(item)
+            if prev_id and p.project_id == prev_id:
+                restore_row = i
+
+        if restore_row >= 0:
+            self.project_list.setCurrentRow(restore_row)
+        else:
+            # 本视图无选中时，回退到全局当前项目（切视图无需重选）
+            from DITWorkstation.Views.main_window import get_current_project_id
+            global_pid = get_current_project_id()
+            if global_pid:
+                for i in range(self.project_list.count()):
+                    if self.project_list.item(i).data(Qt.UserRole) == global_pid:
+                        self.project_list.setCurrentRow(i)
+                        break
 
     def showEvent(self, event):
         self._load_projects()
         super().showEvent(event)
 
+    @safe_slot("新建项目失败")
     def _create_project(self):
         from PySide6.QtWidgets import QInputDialog
         name, ok = QInputDialog.getText(self, "新建项目", "项目名称:")
         if ok and name:
-            project = self.db_service.create_project(name=name)
+            from DITWorkstation.Views.main_window import get_current_workspace_id
+            project = self.db_service.create_project(name=name, workspace_id=get_current_workspace_id())
             self._load_projects()
             for i in range(self.project_list.count()):
                 if self.project_list.item(i).data(Qt.UserRole) == project.project_id:
@@ -249,6 +277,9 @@ class MediaImportView(QWidget):
             return
         item = self.project_list.item(row)
         project_id = item.data(Qt.UserRole)
+        # 同步全局当前项目
+        from DITWorkstation.Views.main_window import set_current_project
+        set_current_project(project_id)
         self.current_project = self.db_service.get_project(project_id)
         if self.current_project:
             self._log(f"已选择项目: {self.current_project.name}")
@@ -257,6 +288,24 @@ class MediaImportView(QWidget):
                 self.workspace_edit.setText(str(ws_path))
             self._load_logs(project_id)
             self.import_btn.setEnabled(len(self.pending_files) > 0)
+
+    def _on_global_project_changed(self, project_id):
+        """全局项目切换，同步本视图列表选择（避免回调循环）"""
+        self.project_list.blockSignals(True)
+        target_row = -1
+        if project_id is not None:
+            for i in range(self.project_list.count()):
+                if self.project_list.item(i).data(Qt.UserRole) == project_id:
+                    target_row = i
+                    break
+        self.project_list.setCurrentRow(target_row)
+        self.project_list.blockSignals(False)
+        # 手动触发一次本视图的项目选择逻辑（刷新 logs 等）
+        self._on_project_selected(self.project_list.currentRow())
+
+    def _on_global_workspace_changed(self, _workspace_id):
+        """全局工作区切换 -> 重新加载项目列表（按新工作区过滤）"""
+        self._load_projects()
 
     def _load_logs(self, project_id: str):
         self.log_combo.clear()
@@ -377,7 +426,7 @@ class MediaImportView(QWidget):
     def _cancel_import(self):
         if self.worker and self.worker.isRunning():
             self._cancel_requested = True
-            self.worker.requestInterruption()
+            # service 通过 cancel_check 回调判断取消，无需 Qt 中断标志
             self._log("取消导入...")
             self.status_label.setText("正在取消...")
 
@@ -391,6 +440,13 @@ class MediaImportView(QWidget):
         self.import_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.progress_bar.setValue(100)
+
+        # 防御 result 为 None 或非 dict
+        if not isinstance(result, dict):
+            self.status_label.setText("❌ 导入返回异常结果")
+            self._log(f"导入返回异常: {result!r}")
+            QMessageBox.warning(self, "导入异常", "导入任务返回了异常结果，请重试。")
+            return
 
         imported = result.get('imported', 0)
         skipped = result.get('skipped', 0)
@@ -412,6 +468,11 @@ class MediaImportView(QWidget):
             fail_details = [d for d in result.get('details', []) if d.get('status') == 'failed']
             for d in fail_details[:5]:
                 self._log(f"  失败: {d['path']} - {d.get('error', '未知错误')}")
+
+        # 广播数据变更，通知日志/检索/素材信息视图刷新
+        if imported > 0:
+            from DITWorkstation.Views.main_window import get_data_bus
+            get_data_bus().emit_data_changed("assets_changed")
 
         QMessageBox.information(
             self, "导入完成",

@@ -14,7 +14,10 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 
 from DITWorkstation.App import config
-from DITWorkstation.Views.main_window import MainWindow
+from DITWorkstation.Views.main_window import (
+    MainWindow, set_current_project, set_current_workspace
+)
+from DITWorkstation.Views.first_run_wizard import maybe_show_wizard
 
 
 def _pick_default_font_family() -> str:
@@ -50,6 +53,20 @@ def main():
     # 创建并显示主窗口
     window = MainWindow()
     window.show()
+
+    # 首启向导：无任何项目时弹出，引导新用户完成「工作区→项目」初始化
+    # 在主窗口 show() 之后调用，让用户先看到主界面再弹向导
+    wizard = maybe_show_wizard(parent=window)
+    if wizard is not None:
+        # 向导创建了工作区与项目：依次设为全局当前工作区/项目，并跳转到「媒体导入」
+        if wizard._created_workspace_id:
+            set_current_workspace(wizard._created_workspace_id)
+        if wizard._created_project_id:
+            set_current_project(wizard._created_project_id)
+        try:
+            window.nav_list.setCurrentRow(1)  # 1 = 媒体导入
+        except Exception:
+            pass
 
     sys.exit(app.exec())
 

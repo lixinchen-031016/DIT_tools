@@ -13,7 +13,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from DITWorkstation.Services.database_service import DatabaseService
-from DITWorkstation.Models import Project, ShootingLog, MediaAsset
+from DITWorkstation.Models import Project, ShootingLog, MediaAsset, Workspace
 
 
 class TestDatabaseService(unittest.TestCase):
@@ -487,6 +487,93 @@ class TestDatabaseService(unittest.TestCase):
         for a in all_assets:
             self.assertIsNone(a.log_id)
 
+    def test_delete_shooting_log_also_clears_scene_and_shot(self):
+        """TR: 删除拍摄日志时同步清空关联素材的 scene/shot
+
+        背景：create_log_with_assets(sync_scene_shot=True) 会把 log.scene/shot
+        冗余写入 media_assets；删除日志若不清空，会留下"无主"字段。
+        """
+        project = self.db.create_project(name="场景镜头级联测试")
+
+        log = ShootingLog(
+            log_id="log_ss",
+            project_id=project.project_id,
+            scene="S099",
+            shot="099A",
+            take="02"
+        )
+        # 用 create_log_with_assets 关联素材并同步 scene/shot
+        asset_ids = ["ast_ss_1", "ast_ss_2"]
+        for aid in asset_ids:
+            asset = MediaAsset(
+                asset_id=aid,
+                project_id=project.project_id,
+                file_path=f"/p/{aid}.cr2",
+                file_name=f"{aid}.cr2",
+                file_size=100,
+                file_type=".cr2"
+            )
+            self.db.add_media_asset(asset)
+
+        self.db.create_log_with_assets(log, asset_ids, sync_scene_shot=True)
+
+        # 删除前：scene/shot 应为 S099/099A
+        before = self.db.get_media_assets(project.project_id)
+        self.assertEqual(len(before), 2)
+        for a in before:
+            self.assertEqual(a.scene, "S099")
+            self.assertEqual(a.shot, "099A")
+            self.assertEqual(a.log_id, "log_ss")
+
+        # 删除日志
+        self.db.delete_shooting_log("log_ss")
+
+        # 删除后：log_id 和 scene/shot 都应被清空
+        after = self.db.get_media_assets(project.project_id)
+        self.assertEqual(len(after), 2)
+        for a in after:
+            self.assertIsNone(a.log_id)
+            self.assertEqual(a.scene, "")
+            self.assertEqual(a.shot, "")
+
+    def test_unlink_asset_clears_scene_and_shot(self):
+        """TR: update_media_asset_log_id(log_id=None) 解除关联时清空 scene/shot"""
+        project = self.db.create_project(name="解除关联测试")
+
+        log = ShootingLog(
+            log_id="log_unlink",
+            project_id=project.project_id,
+            scene="S042",
+            shot="042A",
+            take="01"
+        )
+        asset = MediaAsset(
+            asset_id="ast_unlink",
+            project_id=project.project_id,
+            file_path="/p/unlink.cr2",
+            file_name="unlink.cr2",
+            file_size=100,
+            file_type=".cr2"
+        )
+        self.db.add_media_asset(asset)
+        self.db.create_log_with_assets(log, ["ast_unlink"], sync_scene_shot=True)
+
+        # 解除关联前：scene/shot 有值
+        before = self.db.get_media_asset("ast_unlink")
+        self.assertEqual(before.log_id, "log_unlink")
+        self.assertEqual(before.scene, "S042")
+        self.assertEqual(before.shot, "042A")
+
+        # 解除关联：log_id=None
+        ok = self.db.update_media_asset_log_id("ast_unlink", None)
+        self.assertTrue(ok)
+
+        # 解除关联后：log_id 与 scene/shot 都被清空
+        after = self.db.get_media_asset("ast_unlink")
+        self.assertIsNone(after.log_id)
+        self.assertEqual(after.scene, "")
+        self.assertEqual(after.shot, "")
+
     def test_create_log_with_assets_links_assets(self):
         """TR: create_log_with_assets 创建日志并关联多个素材"""
         project = self.db.create_project(name="批量关联测试")
@@ -597,6 +684,230 @@ class TestDatabaseService(unittest.TestCase):
 
         self.assertIsNotNone(self.db.get_shooting_log("log_empty"))
         self.assertEqual(len(self.db.get_assets_by_log_id("log_empty")), 0)
+
+    def _seed_assets(self, count: int) -> str:
+        """辅助：在单个项目下生成 count 个素材，返回 project_id"""
+        project = self.db.create_project(name=f"分页测试{count}")
+        for i in range(count):
+            asset = MediaAsset(
+                asset_id=f"pg_{count}_{i}",
+                project_id=project.project_id,
+                file_path=f"/p/f_{i}.cr2",
+                file_name=f"f_{i}.cr2",
+                file_size=100,
+                file_type=".cr2"
+            )
+            self.db.add_media_asset(asset)
+        return project.project_id
+
+    def test_search_assets_limit_caps_results(self):
+        """TR: search_assets limit 参数应限制返回数量"""
+        self._seed_assets(10)
+        # limit 小于总数
+        results = self.db.search_assets(limit=5)
+        self.assertEqual(len(results), 5)
+
+    def test_search_assets_limit_exceeds_total(self):
+        """TR: limit 大于结果数时返回全部"""
+        self._seed_assets(3)
+        results = self.db.search_assets(limit=100)
+        self.assertEqual(len(results), 3)
+
+    def test_search_assets_limit_none_no_cap(self):
+        """TR: limit=None 时不限制返回"""
+        self._seed_assets(8)
+        results = self.db.search_assets(limit=None)
+        self.assertEqual(len(results), 8)
+
+    def test_search_assets_limit_zero_treated_as_none(self):
+        """TR: limit=0 视为不限制（实现约定：limit > 0 才生效）"""
+        self._seed_assets(4)
+        results = self.db.search_assets(limit=0)
+        self.assertEqual(len(results), 4)
+
+    def test_search_assets_limit_with_other_filters(self):
+        """TR: limit 与其他过滤条件组合使用"""
+        project = self.db.create_project(name="limit+过滤测试")
+        for i in range(10):
+            scene = "S001" if i < 6 else "S002"
+            asset = MediaAsset(
+                asset_id=f"lf_{i}",
+                project_id=project.project_id,
+                file_path=f"/p/lf_{i}.cr2",
+                file_name=f"lf_{i}.cr2",
+                file_size=100,
+                file_type=".cr2",
+                scene=scene
+            )
+            self.db.add_media_asset(asset)
+
+        # S001 有 6 条，limit=3 应只返回 3 条
+        results = self.db.search_assets(scene="S001", limit=3)
+        self.assertEqual(len(results), 3)
+        for r in results:
+            self.assertEqual(r.scene, "S001")
+
+
+class TestWorkspaceManagement(unittest.TestCase):
+    """工作区管理测试 - 验证 Workspace→Project 两级层级"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        db_path = Path(self.temp_dir) / "test.db"
+        self.db = DatabaseService(db_path=db_path)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_create_workspace(self):
+        """TR: 创建工作区"""
+        ws = self.db.create_workspace(name="2026春拍", path="/Volumes/Work/2026Spring", description="春季广告片")
+        self.assertIsNotNone(ws.workspace_id)
+        self.assertEqual(ws.name, "2026春拍")
+        self.assertEqual(ws.path, "/Volumes/Work/2026Spring")
+        self.assertEqual(ws.description, "春季广告片")
+
+        # 可读回
+        loaded = self.db.get_workspace(ws.workspace_id)
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.name, "2026春拍")
+
+    def test_get_workspaces_returns_all(self):
+        """TR: get_workspaces 返回所有工作区"""
+        self.db.create_workspace(name="WS1")
+        self.db.create_workspace(name="WS2")
+        workspaces = self.db.get_workspaces()
+        self.assertEqual(len(workspaces), 2)
+
+    def test_update_workspace(self):
+        """TR: 更新工作区名称与路径"""
+        ws = self.db.create_workspace(name="旧名", path="/old")
+        ok = self.db.update_workspace(ws.workspace_id, name="新名", path="/new")
+        self.assertTrue(ok)
+        loaded = self.db.get_workspace(ws.workspace_id)
+        self.assertEqual(loaded.name, "新名")
+        self.assertEqual(loaded.path, "/new")
+
+    def test_delete_workspace_reassigns_projects_to_default(self):
+        """TR: 删除工作区时，其下项目自动归入默认工作区"""
+        ws = self.db.create_workspace(name="待删除", path="/tmp")
+        proj = self.db.create_project(name="P1", workspace_id=ws.workspace_id)
+
+        ok = self.db.delete_workspace(ws.workspace_id)
+        self.assertTrue(ok)
+
+        # 工作区已删除
+        self.assertIsNone(self.db.get_workspace(ws.workspace_id))
+
+        # 项目仍在，workspace_id 变为 default
+        loaded = self.db.get_project(proj.project_id)
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.workspace_id, "default")
+
+    def test_delete_default_workspace_rejected(self):
+        """TR: 默认工作区不可删除（防止误操作）"""
+        # 先创建一个项目触发 default 工作区创建（迁移逻辑仅在有孤儿项目时建 default）
+        self.db.create_project(name="P1")
+        self.assertIsNotNone(self.db.get_workspace("default"))
+
+        ok = self.db.delete_workspace("default")
+        self.assertFalse(ok)
+        # 默认工作区仍存在
+        self.assertIsNotNone(self.db.get_workspace("default"))
+
+    def test_create_project_with_workspace(self):
+        """TR: 在指定工作区内创建项目"""
+        ws = self.db.create_workspace(name="WS", path="/tmp")
+        proj = self.db.create_project(name="P", workspace_id=ws.workspace_id)
+        self.assertEqual(proj.workspace_id, ws.workspace_id)
+
+        # 读回验证
+        loaded = self.db.get_project(proj.project_id)
+        self.assertEqual(loaded.workspace_id, ws.workspace_id)
+
+    def test_create_project_without_workspace_falls_to_default(self):
+        """TR: 不指定 workspace_id 时项目归入默认工作区"""
+        proj = self.db.create_project(name="孤立项目")
+        self.assertEqual(proj.workspace_id, "default")
+
+    def test_get_projects_filtered_by_workspace(self):
+        """TR: get_projects 按 workspace_id 过滤"""
+        ws1 = self.db.create_workspace(name="WS1")
+        ws2 = self.db.create_workspace(name="WS2")
+        p1 = self.db.create_project(name="P1", workspace_id=ws1.workspace_id)
+        p2 = self.db.create_project(name="P2", workspace_id=ws1.workspace_id)
+        p3 = self.db.create_project(name="P3", workspace_id=ws2.workspace_id)
+
+        # ws1 下有 2 个项目
+        ws1_projects = self.db.get_projects(workspace_id=ws1.workspace_id)
+        self.assertEqual(len(ws1_projects), 2)
+        ws1_ids = {p.project_id for p in ws1_projects}
+        self.assertEqual(ws1_ids, {p1.project_id, p2.project_id})
+
+        # ws2 下有 1 个项目
+        ws2_projects = self.db.get_projects(workspace_id=ws2.workspace_id)
+        self.assertEqual(len(ws2_projects), 1)
+        self.assertEqual(ws2_projects[0].project_id, p3.project_id)
+
+        # 不传 workspace_id 返回全部
+        all_projects = self.db.get_projects()
+        self.assertEqual(len(all_projects), 3)
+
+    def test_update_project_workspace_id(self):
+        """TR: 可通过 update_project 变更项目所属工作区"""
+        ws1 = self.db.create_workspace(name="WS1")
+        ws2 = self.db.create_workspace(name="WS2")
+        proj = self.db.create_project(name="P", workspace_id=ws1.workspace_id)
+
+        ok = self.db.update_project(proj.project_id, workspace_id=ws2.workspace_id)
+        self.assertTrue(ok)
+        loaded = self.db.get_project(proj.project_id)
+        self.assertEqual(loaded.workspace_id, ws2.workspace_id)
+
+    def test_legacy_projects_migrated_to_default(self):
+        """TR: 旧项目（workspace_id NULL）在迁移时自动归入默认工作区
+
+        模拟旧数据库：手动插入 workspace_id 为 NULL 的项目，重建 DatabaseService
+        触发迁移，验证其被归入 default 工作区。
+        """
+        # 用原生 sqlite3 直接插入一条无 workspace_id 的项目（模拟旧数据）
+        conn = sqlite3.connect(str(self.db.db_path))
+        try:
+            conn.execute(
+                "INSERT INTO projects (project_id, name, description, base_path, created_at, updated_at) "
+                "VALUES ('legacy1', '旧项目', '', '', '2026-01-01T00:00:00', '2026-01-01T00:00:00')"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # 重新打开数据库触发迁移
+        db2 = DatabaseService(db_path=self.db.db_path)
+
+        # 旧项目应被归入 default 工作区
+        loaded = db2.get_project("legacy1")
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.workspace_id, "default")
+
+        # default 工作区应存在
+        default_ws = db2.get_workspace("default")
+        self.assertIsNotNone(default_ws)
+        self.assertEqual(default_ws.name, "默认工作区")
+
+    def test_migration_is_idempotent(self):
+        """TR: 多次启动迁移不会重复创建默认工作区或重复归集"""
+        # 首次启动已有项目（已被归入 default）
+        self.db.create_project(name="P1")
+
+        # 再次实例化 DatabaseService（模拟重启）
+        db2 = DatabaseService(db_path=self.db.db_path)
+        default_ws_list = [w for w in db2.get_workspaces() if w.workspace_id == "default"]
+        self.assertEqual(len(default_ws_list), 1)  # 不会重复创建
+
+        # 第三次启动
+        db3 = DatabaseService(db_path=self.db.db_path)
+        default_ws_list = [w for w in db3.get_workspaces() if w.workspace_id == "default"]
+        self.assertEqual(len(default_ws_list), 1)
 
 
 if __name__ == "__main__":

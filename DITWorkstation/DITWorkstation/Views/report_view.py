@@ -2,12 +2,12 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QGroupBox, QComboBox, QFileDialog, QMessageBox,
-    QTextEdit, QFormLayout
+    QTextEdit, QLineEdit, QFormLayout
 )
 from PySide6.QtCore import Qt, Slot
 
-from DITWorkstation.Services.database_service import DatabaseService
 from DITWorkstation.Services.report_service import ReportService
+from DITWorkstation.Utils import get_db_service, safe_slot
 from DITWorkstation.Utils.workers import SimpleWorkerThread
 
 
@@ -16,7 +16,7 @@ class ReportView(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.db_service = DatabaseService()
+        self.db_service = get_db_service()
         self.report_service = ReportService()
         self.worker = None
         self._setup_ui()
@@ -51,10 +51,9 @@ class ReportView(QWidget):
         ])
         config_layout.addRow("报告类型:", self.report_type_combo)
 
-        # 输出路径
+        # 输出路径（用 QLineEdit 避免多行输入混入换行符）
         out_row = QHBoxLayout()
-        self.output_edit = QTextEdit()
-        self.output_edit.setMaximumHeight(36)
+        self.output_edit = QLineEdit()
         self.output_edit.setPlaceholderText("默认输出到 ~/Documents/DIT_Reports/")
         out_btn = QPushButton("选择路径...")
         out_btn.clicked.connect(self._select_output)
@@ -99,21 +98,33 @@ class ReportView(QWidget):
         layout.addWidget(log_group, 1)
 
     def _load_projects(self):
+        # 保留当前选中的项目
+        prev_id = self.project_combo.currentData()
         self.project_combo.clear()
         projects = self.db_service.get_projects()
+        restore_index = 0
         if not projects:
             self.project_combo.addItem("（暂无项目，请先在拍摄日志中创建）", None)
         else:
-            for p in projects:
+            for i, p in enumerate(projects):
                 self.project_combo.addItem(p.name, p.project_id)
+                if prev_id and p.project_id == prev_id:
+                    restore_index = i
+            self.project_combo.setCurrentIndex(restore_index)
+
+    def showEvent(self, event):
+        # report_view 原本无 showEvent，切换回来时项目列表不刷新
+        self._load_projects()
+        super().showEvent(event)
 
     def _select_output(self):
         path, _ = QFileDialog.getSaveFileName(
             self, "选择报告输出路径", "", "PDF文件 (*.pdf)"
         )
         if path:
-            self.output_edit.setPlainText(path)
+            self.output_edit.setText(path)
 
+    @safe_slot("生成报告失败")
     def _generate_report(self):
         project_id = self.project_combo.currentData()
         if not project_id:
@@ -121,8 +132,16 @@ class ReportView(QWidget):
             return
 
         project = self.db_service.get_project(project_id)
-        output_path = self.output_edit.toPlainText().strip() or None
+        output_path = self.output_edit.text().strip() or None
         report_type = self.report_type_combo.currentIndex()
+
+        # 备份报告功能尚未对接历史记录，提前告知用户
+        if report_type == 0:
+            QMessageBox.information(
+                self, "提示",
+                "数据备份报告当前不会包含具体备份记录（备份历史功能尚未对接），\n"
+                "生成的报告仅含项目基本信息。如需完整素材统计，请选择「素材统计报告」。"
+            )
 
         self.generate_btn.setEnabled(False)
         self.status_label.setText("正在生成报告...")

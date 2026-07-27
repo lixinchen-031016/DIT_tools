@@ -15,14 +15,20 @@ from DITWorkstation.Models import (
     CopyTask, ChecksumAlgorithm
 )
 from DITWorkstation.Services.checksum_service import ChecksumService
-from DITWorkstation.Utils import logger
+from DITWorkstation.Utils import logger, get_checksum_service
 
 
 class BackupService:
     """安全拷贝与多重备份服务"""
 
-    def __init__(self):
-        self.checksum_service = ChecksumService()
+    def __init__(self, db_service=None, checksum_service: Optional[ChecksumService] = None):
+        """注入 db_service 后，备份完成会持久化 job + 回写 asset.backup_locations。
+
+        checksum_service 可注入；不传时取全局单例，与 MediaImportService 复用同一缓存，
+        避免同一文件在「导入」和「备份」阶段被重复哈希。
+        """
+        self.checksum_service = checksum_service or get_checksum_service()
+        self.db_service = db_service  # 可选，None 时退化为旧行为（仅文件系统操作）
         self._cancelled = False
         self._cancelled_lock = threading.Lock()
         self._executor: Optional[ThreadPoolExecutor] = None
@@ -94,7 +100,8 @@ class BackupService:
         self,
         job: BackupJob,
         progress_callback: Optional[Callable[[str, float, str], None]] = None,
-        file_completed_callback: Optional[Callable[[str, CopyTask], None]] = None
+        file_completed_callback: Optional[Callable[[str, CopyTask], None]] = None,
+        project_id: Optional[str] = None
     ) -> BackupJob:
         """
         执行备份作业（并行多目标）
@@ -103,6 +110,9 @@ class BackupService:
             job: 备份作业
             progress_callback: 进度回调 (target_path, progress, status_msg)
             file_completed_callback: 单文件完成回调
+            project_id: 关联项目 ID。提供且 db_service 已注入时，
+                        备份完成后会持久化 job + 把每个 target_path 回写到
+                        匹配 asset 的 backup_locations 字段。
 
         Returns:
             更新后的备份作业
@@ -160,6 +170,21 @@ class BackupService:
             job.status = BackupStatus.FAILED
 
         job.completed_at = datetime.now()
+
+        # 数据闭环：持久化 job + 回写 asset.backup_locations
+        if self.db_service is not None:
+            try:
+                self.db_service.save_backup_job(job, project_id=project_id)
+                # 仅对成功/部分成功的目标回写 backup_locations
+                file_paths = [f["path"] for f in files]
+                for t in job.targets:
+                    if t.status == CopyStatus.COMPLETED:
+                        self.db_service.add_backup_location_to_assets(
+                            file_paths, t.path, project_id=project_id
+                        )
+            except Exception as e:
+                logger.error(f"备份结果回写 DB 失败（不影响文件备份）: {e}", exc_info=True)
+
         return job
 
     def _copy_to_target(
