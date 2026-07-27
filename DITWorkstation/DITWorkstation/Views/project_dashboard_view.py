@@ -1,11 +1,12 @@
 """项目概览看板视图 - 聚合展示当前项目进度，提供 SOP 下一步引导"""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QComboBox, QGridLayout, QFrame
+    QComboBox, QGridLayout, QFrame, QDialog, QFormLayout,
+    QLineEdit, QFileDialog, QMessageBox, QDialogButtonBox
 )
 from PySide6.QtCore import Slot
 
-from DITWorkstation.Utils import get_db_service, format_size
+from DITWorkstation.Utils import get_db_service, format_size, safe_slot
 
 
 # 主窗口导航栏索引（与 main_window.py 的 nav_items 顺序保持一致）
@@ -97,6 +98,33 @@ class ProjectDashboardView(QWidget):
         self.workspace_combo.addItem("（全部工作区）", None)
         self.workspace_combo.currentIndexChanged.connect(self._on_workspace_changed)
         header.addWidget(self.workspace_combo)
+
+        # 新建/编辑工作区按钮
+        new_ws_btn = QPushButton("+ 新建工作区")
+        new_ws_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #34c759; color: white;
+                padding: 6px 12px; border-radius: 6px;
+                font-size: 12px; font-weight: 600;
+            }
+            QPushButton:hover { background-color: #2db84e; }
+        """)
+        new_ws_btn.clicked.connect(self._create_workspace)
+        header.addWidget(new_ws_btn)
+
+        edit_ws_btn = QPushButton("编辑")
+        edit_ws_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f0f0f0; color: #1d1d1f;
+                padding: 6px 12px; border-radius: 6px;
+                font-size: 12px; border: 1px solid #d1d1d6;
+            }
+            QPushButton:hover { background-color: #e5e5ea; }
+            QPushButton:disabled { color: #c7c7cc; background-color: #f5f5f7; }
+        """)
+        edit_ws_btn.clicked.connect(self._edit_workspace)
+        self._edit_ws_btn = edit_ws_btn  # 保存引用，便于根据是否选中工作区启用/禁用
+        header.addWidget(edit_ws_btn)
 
         header.addWidget(QLabel("项目:"))
         self.project_combo = QComboBox()
@@ -208,6 +236,111 @@ class ProjectDashboardView(QWidget):
                 target_index = i
         self.workspace_combo.setCurrentIndex(target_index)
         self.workspace_combo.blockSignals(False)
+        # 编辑按钮仅在选中具体工作区时启用
+        self._edit_ws_btn.setEnabled(target_index > 0)
+
+    def _open_workspace_dialog(self, workspace=None) -> bool:
+        """新建/编辑工作区对话框。
+
+        Args:
+            workspace: 为 None 时新建；为 Workspace 实例时编辑现有
+
+        Returns:
+            是否成功保存
+        """
+        is_edit = workspace is not None
+        dlg = QDialog(self)
+        dlg.setWindowTitle("编辑工作区" if is_edit else "新建工作区")
+        dlg.setMinimumWidth(420)
+        form = QFormLayout(dlg)
+
+        name_edit = QLineEdit(workspace.name if is_edit else "")
+        name_edit.setPlaceholderText("如「2026 春季广告片」")
+
+        path_edit = QLineEdit(workspace.path if is_edit else "")
+        path_edit.setPlaceholderText("工作区物理目录（可选，建议填写以便导入时复制素材）")
+        path_row = QHBoxLayout()
+        path_row.addWidget(path_edit, 1)
+        browse_btn = QPushButton("浏览…")
+        def _browse():
+            d = QFileDialog.getExistingDirectory(dlg, "选择工作区目录", path_edit.text())
+            if d:
+                path_edit.setText(d)
+        browse_btn.clicked.connect(_browse)
+        path_row.addWidget(browse_btn)
+        path_container = QWidget()
+        path_container.setLayout(path_row)
+        path_container.layout().setContentsMargins(0, 0, 0, 0)
+
+        desc_edit = QLineEdit(workspace.description if is_edit else "")
+        desc_edit.setPlaceholderText("描述（可选）")
+
+        form.addRow("名称 *:", name_edit)
+        form.addRow("目录:", path_container)
+        form.addRow("描述:", desc_edit)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.button(QDialogButtonBox.Ok).setText("保存")
+        btns.button(QDialogButtonBox.Cancel).setText("取消")
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        form.addRow(btns)
+
+        if dlg.exec() != QDialog.Accepted:
+            return False
+
+        name = name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(self, "提示", "工作区名称不能为空")
+            return False
+
+        try:
+            if is_edit:
+                ok = self.db_service.update_workspace(
+                    workspace.workspace_id,
+                    name=name,
+                    path=path_edit.text().strip(),
+                    description=desc_edit.text().strip()
+                )
+                if not ok:
+                    QMessageBox.warning(self, "提示", "更新失败")
+                    return False
+            else:
+                ws = self.db_service.create_workspace(
+                    name=name,
+                    path=path_edit.text().strip(),
+                    description=desc_edit.text().strip()
+                )
+                # 新建后自动设为当前工作区
+                from DITWorkstation.Views.main_window import set_current_workspace
+                set_current_workspace(ws.workspace_id)
+
+            # 广播工作区变更，触发各视图刷新
+            from DITWorkstation.Views.main_window import get_data_bus
+            get_data_bus().emit_data_changed("workspaces_changed")
+            self._load_workspaces()
+            self._load_projects()
+            self._refresh()
+            return True
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存失败：{e}")
+            return False
+
+    @safe_slot("新建工作区失败")
+    def _create_workspace(self):
+        self._open_workspace_dialog(workspace=None)
+
+    @safe_slot("编辑工作区失败")
+    def _edit_workspace(self):
+        ws_id = self.workspace_combo.currentData()
+        if not ws_id:
+            QMessageBox.information(self, "提示", "请先选择一个工作区")
+            return
+        ws = self.db_service.get_workspace(ws_id)
+        if not ws:
+            QMessageBox.warning(self, "提示", "工作区不存在")
+            return
+        self._open_workspace_dialog(workspace=ws)
 
     def _load_projects(self):
         """加载项目下拉，按当前选中工作区过滤；优先选中全局 current_project_id"""

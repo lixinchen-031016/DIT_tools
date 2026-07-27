@@ -51,8 +51,26 @@ class MediaImportView(QWidget):
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
 
-        proj_label = QLabel("选择项目")
+        # 工作区选择区
+        ws_label = QLabel("工作区")
+        ws_label.setStyleSheet("font-weight: bold;")
+        left_layout.addWidget(ws_label)
+
+        self.workspace_combo = QComboBox()
+        self.workspace_combo.addItem("（全部工作区）", None)
+        self.workspace_combo.currentIndexChanged.connect(self._on_workspace_changed)
+        left_layout.addWidget(self.workspace_combo)
+
+        ws_btn_layout = QHBoxLayout()
+        new_ws_btn = QPushButton("+ 新建工作区")
+        new_ws_btn.clicked.connect(self._create_workspace)
+        ws_btn_layout.addWidget(new_ws_btn)
+        left_layout.addLayout(ws_btn_layout)
+
+        # 项目选择区
+        proj_label = QLabel("项目")
         proj_label.setStyleSheet("font-weight: bold;")
         left_layout.addWidget(proj_label)
 
@@ -61,9 +79,11 @@ class MediaImportView(QWidget):
         left_layout.addWidget(self.project_list, 1)
 
         proj_btn_layout = QHBoxLayout()
-        new_proj_btn = QPushButton("+ 新建")
-        new_proj_btn.clicked.connect(self._create_project)
-        proj_btn_layout.addWidget(new_proj_btn)
+        self.new_proj_btn = QPushButton("+ 新建项目")
+        self.new_proj_btn.clicked.connect(self._create_project)
+        # 未选中具体工作区时禁用新建项目（项目必须属于某个工作区）
+        self.new_proj_btn.setEnabled(False)
+        proj_btn_layout.addWidget(self.new_proj_btn)
         left_layout.addLayout(proj_btn_layout)
 
         main_splitter.addWidget(left_panel)
@@ -141,20 +161,14 @@ class MediaImportView(QWidget):
 
         self.copy_mode_check = QCheckBox("复制到工作区")
         self.copy_mode_check.setChecked(False)
-        self.copy_mode_check.setToolTip("勾选后将文件复制到工作区/项目名/ 文件夹下再导入，原文件保持不动")
+        self.copy_mode_check.setToolTip("勾选后将文件复制到 当前工作区目录/项目名/ 下再导入，原文件保持不动")
         opt_row1.addWidget(self.copy_mode_check)
 
-        self.workspace_edit = QLineEdit()
-        self.workspace_edit.setPlaceholderText("工作区目录（复制模式必填，将自动创建项目名子文件夹）")
-        self.workspace_edit.setReadOnly(True)
-        self.workspace_edit.setEnabled(False)
-        ws_browse_btn = QPushButton("选择...")
-        ws_browse_btn.setEnabled(False)
-        ws_browse_btn.clicked.connect(self._select_workspace)
-        self.copy_mode_check.toggled.connect(self.workspace_edit.setEnabled)
-        self.copy_mode_check.toggled.connect(ws_browse_btn.setEnabled)
-        opt_row1.addWidget(self.workspace_edit, 1)
-        opt_row1.addWidget(ws_browse_btn)
+        # 复制目标路径提示（只读，自动基于当前工作区.path/<项目名> 生成）
+        self.copy_dest_label = QLabel("")
+        self.copy_dest_label.setStyleSheet("color: #86868b; font-size: 12px;")
+        self.copy_mode_check.toggled.connect(self._on_copy_check_toggled)
+        opt_row1.addWidget(self.copy_dest_label, 1)
 
         options_layout.addLayout(opt_row1)
 
@@ -220,6 +234,32 @@ class MediaImportView(QWidget):
 
         layout.addWidget(main_splitter, 1)
 
+    def _load_workspaces(self):
+        """加载工作区下拉，优先选中全局 current_workspace_id"""
+        from DITWorkstation.Views.main_window import get_current_workspace_id
+        prev_id = get_current_workspace_id()
+        self.workspace_combo.blockSignals(True)
+        self.workspace_combo.clear()
+        self.workspace_combo.addItem("（全部工作区）", None)
+        try:
+            workspaces = self.db_service.get_workspaces()
+        except Exception:
+            workspaces = []
+        target_index = 0
+        for i, ws in enumerate(workspaces, start=1):
+            label = ws.name
+            if ws.path:
+                label += f"  [{ws.path}]"
+            self.workspace_combo.addItem(label, ws.workspace_id)
+            if prev_id and ws.workspace_id == prev_id:
+                target_index = i
+        self.workspace_combo.setCurrentIndex(target_index)
+        self.workspace_combo.blockSignals(False)
+        # 同步"新建项目"按钮启用状态
+        self.new_proj_btn.setEnabled(target_index > 0)
+        # 同步"复制到工作区"复选框启用状态（path 为空时禁用）
+        self._sync_copy_check_state()
+
     def _load_projects(self):
         # 保留当前选中的项目，避免切换视图后丢失
         prev_id = None
@@ -227,8 +267,12 @@ class MediaImportView(QWidget):
             prev_id = self.project_list.currentItem().data(Qt.UserRole)
 
         self.project_list.clear()
-        from DITWorkstation.Views.main_window import get_current_workspace_id
-        ws_id = get_current_workspace_id()
+        # 按本视图工作区下拉的选择过滤（与全局状态保持同步）
+        ws_id = self.workspace_combo.currentData() if hasattr(self, 'workspace_combo') else None
+        if ws_id is None:
+            # 兜底：本视图下拉未初始化时退回全局
+            from DITWorkstation.Views.main_window import get_current_workspace_id
+            ws_id = get_current_workspace_id()
         projects = self.db_service.get_projects(workspace_id=ws_id)
         restore_row = -1
         for i, p in enumerate(projects):
@@ -251,6 +295,7 @@ class MediaImportView(QWidget):
                         break
 
     def showEvent(self, event):
+        self._load_workspaces()
         self._load_projects()
         super().showEvent(event)
 
@@ -274,6 +319,7 @@ class MediaImportView(QWidget):
             self.log_combo.addItem("不关联", None)
             self.log_combo.setEnabled(False)
             self.import_btn.setEnabled(False)
+            self._update_copy_dest_label()
             return
         item = self.project_list.item(row)
         project_id = item.data(Qt.UserRole)
@@ -283,11 +329,9 @@ class MediaImportView(QWidget):
         self.current_project = self.db_service.get_project(project_id)
         if self.current_project:
             self._log(f"已选择项目: {self.current_project.name}")
-            if self.current_project.base_path:
-                ws_path = Path(self.current_project.base_path) / "DIT_Workspace"
-                self.workspace_edit.setText(str(ws_path))
             self._load_logs(project_id)
             self.import_btn.setEnabled(len(self.pending_files) > 0)
+            self._update_copy_dest_label()
 
     def _on_global_project_changed(self, project_id):
         """全局项目切换，同步本视图列表选择（避免回调循环）"""
@@ -304,8 +348,117 @@ class MediaImportView(QWidget):
         self._on_project_selected(self.project_list.currentRow())
 
     def _on_global_workspace_changed(self, _workspace_id):
-        """全局工作区切换 -> 重新加载项目列表（按新工作区过滤）"""
+        """全局工作区切换 -> 同步本视图工作区下拉，连带重载项目列表"""
+        # 重新加载工作区下拉会触发 _on_workspace_changed -> _load_projects
+        self._load_workspaces()
+
+    def _on_workspace_changed(self, _index: int):
+        """本视图工作区下拉切换 -> 广播到全局，并重载项目列表"""
+        ws_id = self.workspace_combo.currentData()
+        from DITWorkstation.Views.main_window import set_current_workspace
+        set_current_workspace(ws_id)
+        # set_current_workspace 会触发 _on_global_workspace_changed，但若全局未变（同 ID）则不会，
+        # 此处手动重载保证一致性
         self._load_projects()
+        # 同步"新建项目"按钮与"复制到工作区"复选框启用状态
+        self.new_proj_btn.setEnabled(ws_id is not None)
+        self._sync_copy_check_state()
+
+    @safe_slot("新建工作区失败")
+    def _create_workspace(self):
+        """新建工作区对话框（与项目概览看板共用同一交互模式）"""
+        from PySide6.QtWidgets import QDialog, QFormLayout, QLineEdit, QDialogButtonBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle("新建工作区")
+        dlg.setMinimumWidth(420)
+        form = QFormLayout(dlg)
+
+        name_edit = QLineEdit()
+        name_edit.setPlaceholderText("如「2026 春季广告片」")
+        path_edit = QLineEdit()
+        path_edit.setPlaceholderText("工作区物理目录（建议填写，导入时复制素材到此目录下）")
+
+        path_row = QHBoxLayout()
+        path_row.addWidget(path_edit, 1)
+        browse_btn = QPushButton("浏览…")
+        def _browse():
+            d = QFileDialog.getExistingDirectory(dlg, "选择工作区目录", path_edit.text())
+            if d:
+                path_edit.setText(d)
+        browse_btn.clicked.connect(_browse)
+        path_row.addWidget(browse_btn)
+        path_container = QWidget()
+        path_container.setLayout(path_row)
+        path_container.layout().setContentsMargins(0, 0, 0, 0)
+
+        desc_edit = QLineEdit()
+        desc_edit.setPlaceholderText("描述（可选）")
+
+        form.addRow("名称 *:", name_edit)
+        form.addRow("目录:", path_container)
+        form.addRow("描述:", desc_edit)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.button(QDialogButtonBox.Ok).setText("保存")
+        btns.button(QDialogButtonBox.Cancel).setText("取消")
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        form.addRow(btns)
+
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        name = name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(self, "提示", "工作区名称不能为空")
+            return
+
+        try:
+            ws = self.db_service.create_workspace(
+                name=name,
+                path=path_edit.text().strip(),
+                description=desc_edit.text().strip()
+            )
+            # 新建后自动设为当前工作区
+            from DITWorkstation.Views.main_window import set_current_workspace, get_data_bus
+            set_current_workspace(ws.workspace_id)
+            get_data_bus().emit_data_changed("workspaces_changed")
+            self._log(f"已创建工作区: {name} ({ws.workspace_id})")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"创建工作区失败：{e}")
+
+    def _get_current_workspace(self):
+        """返回当前选中的工作区对象（无选中返回 None）"""
+        ws_id = self.workspace_combo.currentData() if hasattr(self, 'workspace_combo') else None
+        if not ws_id:
+            return None
+        return self.db_service.get_workspace(ws_id)
+
+    def _sync_copy_check_state(self):
+        """根据当前工作区是否有 path，启用/禁用「复制到工作区」复选框。
+
+        - 未选具体工作区：禁用（无目标目录）
+        - 工作区 path 为空：禁用并提示用户去编辑工作区补充目录
+        - 工作区 path 非空：启用
+        """
+        if not hasattr(self, 'copy_mode_check'):
+            return
+        ws = self._get_current_workspace()
+        if ws is None:
+            self.copy_mode_check.setEnabled(False)
+            self.copy_mode_check.setChecked(False)
+            self.copy_mode_check.setToolTip("请先选择具体工作区")
+        elif not ws.path:
+            self.copy_mode_check.setEnabled(False)
+            self.copy_mode_check.setChecked(False)
+            self.copy_mode_check.setToolTip(
+                "当前工作区未设置目录，请到「项目概览」看板编辑工作区补充目录"
+            )
+        else:
+            self.copy_mode_check.setEnabled(True)
+            self.copy_mode_check.setToolTip(
+                f"勾选后将素材复制到：{ws.path}/<项目名>/ 下"
+            )
 
     def _load_logs(self, project_id: str):
         self.log_combo.clear()
@@ -326,10 +479,28 @@ class MediaImportView(QWidget):
         if path:
             self.source_edit.setText(path)
 
-    def _select_workspace(self):
-        path = QFileDialog.getExistingDirectory(self, "选择工作区目录")
-        if path:
-            self.workspace_edit.setText(path)
+    def _on_copy_check_toggled(self, checked: bool):
+        """复制到工作区复选框切换时，更新目标路径提示"""
+        self._update_copy_dest_label()
+
+    def _update_copy_dest_label(self):
+        """根据当前工作区与项目，更新复制目标路径提示标签"""
+        if not hasattr(self, 'copy_dest_label'):
+            return
+        if not self.copy_mode_check.isChecked():
+            self.copy_dest_label.setText("")
+            return
+        ws = self._get_current_workspace()
+        if ws is None or not ws.path:
+            self.copy_dest_label.setText("（未选择有效工作区或工作区无目录）")
+            self.copy_dest_label.setStyleSheet("color: #ff3b30; font-size: 12px;")
+            return
+        if self.current_project:
+            dest = str(Path(ws.path) / self.current_project.name)
+        else:
+            dest = str(Path(ws.path) / "<项目名>")
+        self.copy_dest_label.setText(f"→ {dest}")
+        self.copy_dest_label.setStyleSheet("color: #86868b; font-size: 12px;")
 
     def _scan_folder(self):
         folder = self.source_edit.text()
@@ -383,11 +554,17 @@ class MediaImportView(QWidget):
             return
 
         copy_to_workspace = self.copy_mode_check.isChecked()
-        workspace_dir = self.workspace_edit.text() if copy_to_workspace else None
-
-        if copy_to_workspace and not workspace_dir:
-            QMessageBox.warning(self, "提示", "复制模式请选择工作区目录")
-            return
+        workspace_dir = None
+        if copy_to_workspace:
+            # 复制目录自动基于当前工作区.path / 项目名
+            ws = self._get_current_workspace()
+            if ws is None or not ws.path:
+                QMessageBox.warning(
+                    self, "提示",
+                    "当前工作区未设置目录，请到「项目概览」看板编辑工作区补充目录后再勾选复制模式"
+                )
+                return
+            workspace_dir = str(Path(ws.path) / self.current_project.name)
 
         log_id = self.log_combo.currentData()
         scene = ""
