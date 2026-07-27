@@ -79,7 +79,7 @@ class BackupView(QWidget):
         target_layout = QVBoxLayout(target_group)
 
         self.target_list = QListWidget()
-        self.target_list.setMaximumHeight(120)
+        self.target_list.setMinimumHeight(80)
         target_layout.addWidget(self.target_list)
 
         target_btn_layout = QHBoxLayout()
@@ -153,7 +153,8 @@ class BackupView(QWidget):
         log_layout = QVBoxLayout(log_group)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(150)
+        self.log_text.setMinimumHeight(80)
+        self.log_text.setMaximumHeight(220)
         self.log_text.setStyleSheet("font-family: 'SF Mono', Menlo, monospace; font-size: 11px;")
         log_layout.addWidget(self.log_text)
         layout.addWidget(log_group)

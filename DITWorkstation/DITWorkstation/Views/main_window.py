@@ -1,7 +1,7 @@
 """主窗口与导航框架"""
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QListWidget, QListWidgetItem, QStackedWidget
+    QListWidget, QListWidgetItem, QStackedWidget, QScrollArea
 )
 from PySide6.QtCore import Qt, QSize
 
@@ -99,15 +99,17 @@ class MainWindow(QMainWindow):
         self.asset_info_view = AssetInfoView()
         self.report_view = ReportView()
 
-        self.stack.addWidget(self.dashboard_view)
-        self.stack.addWidget(self.import_view)
-        self.stack.addWidget(self.backup_view)
-        self.stack.addWidget(self.raw_view)
-        self.stack.addWidget(self.rename_view)
-        self.stack.addWidget(self.log_view)
-        self.stack.addWidget(self.search_view)
+        # 统一用 QScrollArea 包裹视图，保证内容超出窗口时出现滚动条。
+        # asset_info_view 内部已实现滚动（右侧详情面板），整体包裹会双重滚动，故跳过。
+        self.stack.addWidget(self._wrap_scrollable(self.dashboard_view))
+        self.stack.addWidget(self._wrap_scrollable(self.import_view))
+        self.stack.addWidget(self._wrap_scrollable(self.backup_view))
+        self.stack.addWidget(self._wrap_scrollable(self.raw_view))
+        self.stack.addWidget(self._wrap_scrollable(self.rename_view))
+        self.stack.addWidget(self._wrap_scrollable(self.log_view))
+        self.stack.addWidget(self._wrap_scrollable(self.search_view))
         self.stack.addWidget(self.asset_info_view)
-        self.stack.addWidget(self.report_view)
+        self.stack.addWidget(self._wrap_scrollable(self.report_view))
 
         # 连接跨视图刷新信号总线
         bus = get_data_bus()
@@ -115,6 +117,20 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.nav_list)
         layout.addWidget(self.stack, 1)
+
+    def _wrap_scrollable(self, view: QWidget) -> QScrollArea:
+        """把视图包裹在 QScrollArea 中，内容超出时自动出现滚动条。
+
+        - setWidgetResizable(True)：视图随 ScrollArea 缩放，避免内容被裁剪
+        - NoFrame：去除 ScrollArea 边框，与 QStackedWidget 背景融合
+        - 透明背景：让视图自身的背景样式生效
+        """
+        scroll = QScrollArea()
+        scroll.setWidget(view)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        return scroll
 
     def _on_nav_changed(self, index: int):
         """导航切换"""
@@ -131,25 +147,31 @@ class MainWindow(QMainWindow):
 
         本方法由 data_bus 信号触发（非用户主动操作），异常仅记日志不弹框，
         避免单个子视图的刷新异常中断整个广播链路。
+
+        注意：视图已被 QScrollArea 包裹，stack.currentWidget() 返回的是
+        QScrollArea 而非视图本身，故用 currentIndex + NAV_ITEMS key 判断。
         """
-        current = self.stack.currentWidget()
+        idx = self.stack.currentIndex()
+        if idx < 0 or idx >= len(NAV_ITEMS):
+            return
+        key = NAV_ITEMS[idx][0]
         try:
             if event in ("assets_changed", "all"):
                 # 素材变更：刷新日志关联面板、检索结果、素材信息
-                if current is self.log_view:
+                if key == "log":
                     self.log_view._load_project_assets()
                     if self.log_view.current_log_id:
                         self.log_view._load_assets_for_log(self.log_view.current_log_id)
-                elif current is self.search_view:
+                elif key == "search":
                     # 不自动重搜（会丢失用户筛选条件），仅提示结果可能过期
                     pass
-                elif current is self.asset_info_view:
+                elif key == "asset_info":
                     self.asset_info_view._load_assets()
             if event in ("logs_changed", "all"):
                 # 日志变更：刷新导入视图的日志下拉
-                if current is self.import_view and self.import_view.current_project:
+                if key == "import" and self.import_view.current_project:
                     self.import_view._load_logs(self.import_view.current_project.project_id)
-                elif current is self.log_view:
+                elif key == "log":
                     self.log_view._load_logs()
         except Exception as e:
             logger.error(f"_on_data_changed 处理 event={event} 失败: {e}", exc_info=True)

@@ -150,7 +150,7 @@ class RawExtractionView(QWidget):
         self.result_table.setColumnCount(3)
         self.result_table.setHorizontalHeaderLabels(["JPG文件", "匹配RAW", "状态"])
         self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.result_table.setMaximumHeight(200)
+        self.result_table.setMinimumHeight(120)
         result_layout.addWidget(self.result_table)
 
         self.match_label = QLabel("")

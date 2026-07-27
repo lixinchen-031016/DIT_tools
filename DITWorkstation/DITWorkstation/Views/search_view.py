@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QDate
 
 from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger
+from DITWorkstation.Models import RATING_LABELS, AssetRating
 
 
 class SearchView(QWidget):
@@ -84,7 +85,6 @@ class SearchView(QWidget):
         self.rating_combo = QComboBox()
         self.rating_combo.addItem("全部评级", None)
         # 评级档位标签来自 Models.RATING_LABELS 单一事实源
-        from DITWorkstation.Models import RATING_LABELS, AssetRating
         self.rating_combo.addItem(f"{RATING_LABELS[AssetRating.USABLE.value]} 及以上", AssetRating.USABLE.value)
         self.rating_combo.addItem(f"{RATING_LABELS[AssetRating.BACKUP.value]} 及以上", AssetRating.BACKUP.value)
         self.rating_combo.addItem(RATING_LABELS[AssetRating.PREFERRED.value], AssetRating.PREFERRED.value)
@@ -311,9 +311,13 @@ class SearchView(QWidget):
                     log_label = "（日志已删除）"
             self.result_table.setItem(i, 5, QTableWidgetItem(log_label))
 
+            # 评级：用 RATING_LABELS 转为易读文本（如 "★★ 备选"），避免显示裸数字
+            rating_label = RATING_LABELS.get(asset.rating, RATING_LABELS[AssetRating.NONE.value])
+            self.result_table.setItem(i, 6, QTableWidgetItem(rating_label))
+
             checksum_short = asset.checksum_value[:12] + "..." if asset.checksum_value else ""
-            self.result_table.setItem(i, 6, QTableWidgetItem(checksum_short))
-            self.result_table.setItem(i, 7, QTableWidgetItem(
+            self.result_table.setItem(i, 7, QTableWidgetItem(checksum_short))
+            self.result_table.setItem(i, 8, QTableWidgetItem(
                 asset.date_imported.strftime("%Y-%m-%d %H:%M")
             ))
 
