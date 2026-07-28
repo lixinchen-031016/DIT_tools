@@ -1,17 +1,19 @@
 """报告生成页面"""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QGroupBox, QComboBox, QFileDialog, QMessageBox,
+    QGroupBox, QComboBox, QMessageBox,
     QTextEdit, QLineEdit, QFormLayout
 )
 from PySide6.QtCore import Slot
 
 from DITWorkstation.Services.report_service import ReportService
-from DITWorkstation.Utils import get_db_service, safe_slot
+from DITWorkstation.Utils import get_db_service, safe_slot, pick_save_file
 from DITWorkstation.Utils.workers import SimpleWorkerThread
+from DITWorkstation.Views.Widgets import RefreshOnShowView
+from DITWorkstation.Views.Styles.theme import MONO_FONT_QSS
 
 
-class ReportView(QWidget):
+class ReportView(RefreshOnShowView):
     """报告生成视图"""
 
     def __init__(self):
@@ -21,12 +23,6 @@ class ReportView(QWidget):
         self.worker = None
         self._setup_ui()
         # 项目切换由共享控件广播，本视图无需额外处理（生成时实时读取选中项目）
-        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
-        from PySide6.QtCore import QTimer
-        self._show_timer = QTimer(self)
-        self._show_timer.setSingleShot(True)
-        self._show_timer.setInterval(200)
-        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -67,7 +63,7 @@ class ReportView(QWidget):
         out_row = QHBoxLayout()
         self.output_edit = QLineEdit()
         self.output_edit.setPlaceholderText("默认输出到 ~/Documents/DIT_Reports/")
-        out_btn = QPushButton("选择路径...")
+        out_btn = QPushButton("浏览…")
         out_btn.clicked.connect(self._select_output)
         out_row.addWidget(self.output_edit, 1)
         out_row.addWidget(out_btn)
@@ -81,15 +77,15 @@ class ReportView(QWidget):
         self.generate_btn.setToolTip("生成 PDF 报告")
         self.generate_btn.setStyleSheet("""
             QPushButton {
-                background-color: #5856d6;
+                background-color: #0a84ff;
                 color: white;
                 padding: 12px 28px;
                 border-radius: 8px;
                 font-size: 14px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #4a48c4; }
-            QPushButton:disabled { background-color: #cccccc; }
+            QPushButton:hover { background-color: #0070e0; }
+            QPushButton:disabled { background-color: #c7c7cc; }
         """)
         self.generate_btn.clicked.connect(self._generate_report)
         btn_layout.addWidget(self.generate_btn)
@@ -106,23 +102,17 @@ class ReportView(QWidget):
         log_layout = QVBoxLayout(log_group)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setStyleSheet("font-family: 'SF Mono', Menlo, monospace; font-size: 12px;")
+        self.log_text.setStyleSheet(MONO_FONT_QSS)
         log_layout.addWidget(self.log_text)
         layout.addWidget(log_group, 1)
-
-    def showEvent(self, event):
-        # 切换回本视图时刷新工作区/项目列表
-        super().showEvent(event)
-        # 节流：200ms 内多次 showEvent 只触发一次刷新
-        self._show_timer.start()
 
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
         self.selector.refresh()
 
     def _select_output(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "选择报告输出路径", "", "PDF文件 (*.pdf)"
+        path = pick_save_file(
+            self, "选择报告输出路径", "", "PDF文件 (*.pdf)", default_suffix="pdf"
         )
         if path:
             self.output_edit.setText(path)

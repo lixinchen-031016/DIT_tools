@@ -11,9 +11,11 @@ from DITWorkstation.Services.raw_extraction_service import RawExtractionService
 from DITWorkstation.Services.media_import_service import MediaImportService
 from DITWorkstation.Utils.workers import SimpleWorkerThread
 from DITWorkstation.Utils import get_db_service, logger, pick_directory
+from DITWorkstation.Views.Widgets import RefreshOnShowView
+from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 
 
-class RawExtractionView(QWidget):
+class RawExtractionView(RefreshOnShowView):
     """RAW提取视图"""
 
     # 跨线程进度信号（current, total, message），在工作线程发射、主线程消费
@@ -29,12 +31,6 @@ class RawExtractionView(QWidget):
         self._setup_ui()
         self._progress_sig.connect(self._on_progress)
         # 项目切换由共享控件处理（broadcast_none=False 保留"不关联"语义）
-        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
-        from PySide6.QtCore import QTimer
-        self._show_timer = QTimer(self)
-        self._show_timer.setSingleShot(True)
-        self._show_timer.setInterval(200)
-        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -79,7 +75,7 @@ class RawExtractionView(QWidget):
         self.jpg_edit = QLineEdit()
         self.jpg_edit.setPlaceholderText("选择筛选后的JPG文件夹...")
         self.jpg_edit.setReadOnly(True)
-        jpg_btn = QPushButton("浏览...")
+        jpg_btn = QPushButton("浏览…")
         jpg_btn.clicked.connect(lambda: self._select_folder(self.jpg_edit, "选择JPG文件夹"))
         jpg_row.addWidget(self.jpg_edit, 1)
         jpg_row.addWidget(jpg_btn)
@@ -90,7 +86,11 @@ class RawExtractionView(QWidget):
         self.raw_edit = QLineEdit()
         self.raw_edit.setPlaceholderText("选择RAW源文件夹...")
         self.raw_edit.setReadOnly(True)
-        raw_btn = QPushButton("浏览...")
+        self.raw_edit.setToolTip(
+            "RAW 文件是相机传感器直接输出的未压缩数据，保留最大动态范围和后期空间。"
+            "常见格式：CR2/CR3（佳能）、NEF（尼康）、ARW（索尼）。"
+        )
+        raw_btn = QPushButton("浏览…")
         raw_btn.clicked.connect(lambda: self._select_folder(self.raw_edit, "选择RAW源文件夹"))
         raw_row.addWidget(self.raw_edit, 1)
         raw_row.addWidget(raw_btn)
@@ -101,7 +101,7 @@ class RawExtractionView(QWidget):
         self.output_edit = QLineEdit()
         self.output_edit.setPlaceholderText("选择RAW输出文件夹...")
         self.output_edit.setReadOnly(True)
-        out_btn = QPushButton("浏览...")
+        out_btn = QPushButton("浏览…")
         out_btn.clicked.connect(lambda: self._select_folder(self.output_edit, "选择输出文件夹"))
         out_row.addWidget(self.output_edit, 1)
         out_row.addWidget(out_btn)
@@ -127,15 +127,15 @@ class RawExtractionView(QWidget):
         self.extract_btn.setToolTip("从选中的 JPG 提取对应的 RAW 文件")
         self.extract_btn.setStyleSheet("""
             QPushButton {
-                background-color: #34c759;
+                background-color: #0a84ff;
                 color: white;
                 padding: 10px 24px;
                 border-radius: 8px;
                 font-size: 14px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #2db84e; }
-            QPushButton:disabled { background-color: #cccccc; }
+            QPushButton:hover { background-color: #0070e0; }
+            QPushButton:disabled { background-color: #c7c7cc; }
         """)
         self.extract_btn.clicked.connect(self._start_extraction)
         self.extract_btn.setEnabled(False)
@@ -160,7 +160,11 @@ class RawExtractionView(QWidget):
         self.result_table.setHorizontalHeaderLabels(["JPG文件", "匹配RAW", "状态"])
         self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.result_table.setMinimumHeight(120)
+        self.result_table.setAlternatingRowColors(True)
+        self.result_table.verticalHeader().setDefaultSectionSize(32)
+        self.result_table.setSelectionBehavior(QTableWidget.SelectRows)
         result_layout.addWidget(self.result_table)
+        attach_empty_state(self.result_table, "🔍", "暂无匹配结果", "选择 JPG 和 RAW 目录后点击「扫描匹配」")
 
         self.match_label = QLabel("")
         self.match_label.setStyleSheet("color: #86868b; font-size: 12px;")
@@ -184,12 +188,6 @@ class RawExtractionView(QWidget):
         if path:
             edit.setText(path)
 
-    def showEvent(self, event):
-        """每次显示时刷新工作区/项目列表"""
-        super().showEvent(event)
-        # 节流：200ms 内多次 showEvent 只触发一次刷新
-        self._show_timer.start()
-
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
         self.selector.refresh()
@@ -206,9 +204,12 @@ class RawExtractionView(QWidget):
             jpg_files = self.service.scan_jpg_folder(jpg_folder)
             raw_index = self.service.scan_raw_folder(raw_folder)
             matches = self.service.match_raw_files(jpg_files, raw_index)
+            # 缓存最新扫描结果，供 _start_extraction 做覆盖冲突检测
+            self._last_matches = matches
 
             # 更新表格
             self.result_table.setRowCount(len(matches))
+            sync_empty_state(self.result_table)
             matched_count = 0
             for i, (jpg, raw) in enumerate(matches):
                 self.result_table.setItem(i, 0, QTableWidgetItem(jpg.name))
@@ -234,6 +235,27 @@ class RawExtractionView(QWidget):
         if not output:
             QMessageBox.warning(self, "提示", "请选择输出文件夹")
             return
+
+        # 覆盖确认：检查 output 目录中是否已存在同名 RAW 文件
+        try:
+            from DITWorkstation.Utils import find_overwrite_conflicts
+            matches = getattr(self, "_last_matches", []) or []
+            raw_names = [raw.name for _, raw in matches if raw]
+            if raw_names:
+                conflicts = find_overwrite_conflicts(raw_names, [output])
+                if conflicts:
+                    names = next(iter(conflicts.values()))
+                    preview = "、".join(names[:5]) + ("…" if len(names) > 5 else "")
+                    reply = QMessageBox.question(
+                        self, "存在同名 RAW 文件",
+                        f"输出目录中已存在 {len(names)} 个同名 RAW 文件，继续提取将覆盖：\n\n  · {preview}\n\n是否继续？",
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                    )
+                    if reply != QMessageBox.Yes:
+                        self.status_label.setText("已取消：输出目录存在同名 RAW 文件")
+                        return
+        except Exception as e:
+            self.status_label.setText(f"（警告）覆盖冲突检测失败: {e}")
 
         self.extract_btn.setEnabled(False)
         self.scan_btn.setEnabled(False)

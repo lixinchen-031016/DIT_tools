@@ -11,7 +11,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal
 
 from DITWorkstation.Services.metadata_service import MetadataService
-from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger
+from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger, open_in_file_manager
+from DITWorkstation.Views.Widgets import RefreshOnShowView
+from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 
 # 缺失值占位符
 _PLACEHOLDER = "—"
@@ -36,33 +38,6 @@ _GROUP_STYLE = """
         subcontrol-origin: margin;
         left: 16px;
         padding: 0 6px;
-    }
-"""
-
-# 表格样式
-_TABLE_STYLE = """
-    QTableWidget {
-        border: 1px solid #e5e5ea;
-        border-radius: 8px;
-        background-color: #ffffff;
-        gridline-color: #f0f0f0;
-        font-size: 13px;
-    }
-    QTableWidget::item {
-        padding: 6px 8px;
-    }
-    QTableWidget::item:selected {
-        background-color: #0a84ff;
-        color: #ffffff;
-    }
-    QHeaderView::section {
-        background-color: #f5f5f7;
-        padding: 6px 8px;
-        border: none;
-        border-bottom: 1px solid #e5e5ea;
-        font-weight: 600;
-        font-size: 12px;
-        color: #86868b;
     }
 """
 
@@ -162,7 +137,7 @@ class _BatchExifWorker(QThread):
             self.error.emit(str(e))
 
 
-class AssetInfoView(QWidget):
+class AssetInfoView(RefreshOnShowView):
     """素材资产信息视图 — 查看导入素材的 EXIF 与元数据详情"""
 
     def __init__(self):
@@ -175,12 +150,6 @@ class AssetInfoView(QWidget):
         self._setup_ui()
         # 项目切换由共享控件广播到全局，本视图仅需监听后刷新素材列表
         self.selector.project_changed.connect(self._on_project_changed)
-        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
-        from PySide6.QtCore import QTimer
-        self._show_timer = QTimer(self)
-        self._show_timer.setSingleShot(True)
-        self._show_timer.setInterval(200)
-        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -254,11 +223,16 @@ class AssetInfoView(QWidget):
         self.asset_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.asset_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.asset_table.setAlternatingRowColors(True)
-        self.asset_table.setStyleSheet(_TABLE_STYLE)
+        self.asset_table.verticalHeader().setDefaultSectionSize(32)
+        self.asset_table.setSortingEnabled(True)
+        # 表格全局样式由 main.py 注入的 GLOBAL_QSS 统一控制，不再单独 setStyleSheet
         self.asset_table.itemSelectionChanged.connect(self._on_asset_selected)
+        # 双击打开所在目录
+        self.asset_table.doubleClicked.connect(self._on_asset_double_clicked)
         self.asset_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.asset_table.customContextMenuRequested.connect(self._on_asset_context_menu)
         left_layout.addWidget(self.asset_table, 1)
+        attach_empty_state(self.asset_table, "📦", "暂无素材", "请先在「媒体导入」中导入素材")
 
         refresh_btn = QPushButton("🔄 刷新列表")
         refresh_btn.clicked.connect(self._load_assets)
@@ -471,12 +445,6 @@ class AssetInfoView(QWidget):
             lbl.setStyleSheet(_STYLE_MISSING)
 
     # ===== 数据加载 =====
-    def showEvent(self, event):
-        # 切换回本视图时刷新工作区/项目列表（selector 自身监听全局信号，这里补刷列表）
-        super().showEvent(event)
-        # 节流：200ms 内多次 showEvent 只触发一次刷新
-        self._show_timer.start()
-
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
         self.selector.refresh()
@@ -489,6 +457,7 @@ class AssetInfoView(QWidget):
     def _load_assets(self):
         project_id = self.selector.get_current_project_id()
         self.asset_table.setRowCount(0)
+        sync_empty_state(self.asset_table)
         self.current_file_label.setText("请选择左侧素材查看详情")
         self.refresh_exif_btn.setEnabled(False)
         self._clear_properties()
@@ -500,6 +469,7 @@ class AssetInfoView(QWidget):
         assets = self.db_service.get_media_assets(project_id)
         self._assets = assets
         self.asset_table.setRowCount(len(assets))
+        sync_empty_state(self.asset_table)
         self.asset_count_label.setText(f"共 {len(assets)} 个素材")
         self.batch_exif_btn.setEnabled(len(assets) > 0)
 
@@ -535,6 +505,20 @@ class AssetInfoView(QWidget):
             self.current_file_label.setText(self.current_asset.file_name)
             self._display_properties(self.current_asset)
 
+    def _on_asset_double_clicked(self, index):
+        """双击素材 → 打开所在目录（通过 item 的 UserRole 取 asset_id，排序安全）"""
+        if not index.isValid():
+            return
+        name_item = self.asset_table.item(index.row(), 0)
+        if name_item is None:
+            return
+        asset_id = name_item.data(Qt.UserRole)
+        if not asset_id:
+            return
+        asset = self.db_service.get_media_asset(asset_id)
+        if asset is not None:
+            self._open_asset_directory(asset)
+
     def _on_asset_context_menu(self, pos):
         """素材表右键菜单：打开所在目录 / 复制路径"""
         from PySide6.QtWidgets import QMenu
@@ -542,7 +526,9 @@ class AssetInfoView(QWidget):
         if not item:
             return
         row = item.row()
-        asset = self._assets[row] if row < len(self._assets) else None
+        name_item = self.asset_table.item(row, 0)
+        asset_id = name_item.data(Qt.UserRole) if name_item else None
+        asset = self.db_service.get_media_asset(asset_id) if asset_id else None
         if not asset:
             return
 
@@ -558,23 +544,13 @@ class AssetInfoView(QWidget):
 
     def _open_asset_directory(self, asset):
         """在文件管理器中打开素材所在目录"""
-        import subprocess
-        import sys
         import os
         path = asset.file_path
         if not path or not os.path.exists(path):
             QMessageBox.warning(self, "路径不存在", f"文件不存在：\n{path}")
             return
-        dir_path = os.path.dirname(path)
-        try:
-            if sys.platform == "darwin":
-                subprocess.Popen(["open", dir_path])
-            elif sys.platform == "win32":
-                subprocess.Popen(["explorer", dir_path])
-            else:
-                subprocess.Popen(["xdg-open", dir_path])
-        except Exception as e:
-            QMessageBox.warning(self, "打开失败", str(e))
+        if not open_in_file_manager(path):
+            QMessageBox.warning(self, "打开失败", "无法打开文件管理器，请检查路径权限。")
 
     def _copy_asset_path(self, asset):
         """复制文件路径到剪贴板"""

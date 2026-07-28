@@ -13,11 +13,13 @@ from PySide6.QtCore import Qt, Slot
 
 from DITWorkstation.Models import Project
 from DITWorkstation.Services.media_import_service import MediaImportService
-from DITWorkstation.Utils import format_size, generate_log_message, WorkerThread, get_db_service, pick_directory
-from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
+from DITWorkstation.Utils import format_size, generate_log_message, WorkerThread, get_db_service, pick_directory, find_overwrite_conflicts
+from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
+from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Styles.theme import MONO_FONT_QSS
 
 
-class MediaImportView(QWidget):
+class MediaImportView(RefreshOnShowView):
     """媒体导入视图"""
 
     def __init__(self):
@@ -33,12 +35,6 @@ class MediaImportView(QWidget):
         # 监听选择控件的 项目切换 信号，做本视图业务联动
         # （工作区/项目下拉与全局信号同步已由 WorkspaceProjectSelector 内部处理）
         self.selector.project_changed.connect(self._on_project_changed)
-        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
-        from PySide6.QtCore import QTimer
-        self._show_timer = QTimer(self)
-        self._show_timer.setSingleShot(True)
-        self._show_timer.setInterval(200)
-        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -83,7 +79,7 @@ class MediaImportView(QWidget):
         self.source_edit = QLineEdit()
         self.source_edit.setPlaceholderText("选择要导入的文件夹...")
         self.source_edit.setReadOnly(True)
-        browse_btn = QPushButton("浏览文件夹...")
+        browse_btn = QPushButton("浏览…")
         browse_btn.clicked.connect(self._select_folder)
         source_row.addWidget(self.source_edit, 1)
         source_row.addWidget(browse_btn)
@@ -92,6 +88,7 @@ class MediaImportView(QWidget):
         scan_row = QHBoxLayout()
         self.recursive_check = QCheckBox("递归扫描子文件夹")
         self.recursive_check.setChecked(True)
+        self.recursive_check.setToolTip("勾选后会扫描子文件夹中的所有媒体文件。存储卡通常不需要递归。")
         scan_row.addWidget(self.recursive_check)
 
         self.include_images = QCheckBox("图片")
@@ -126,7 +123,16 @@ class MediaImportView(QWidget):
         self.files_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.files_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.files_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.files_table.setAlternatingRowColors(True)
+        self.files_table.verticalHeader().setDefaultSectionSize(32)
+        self.files_table.setSortingEnabled(True)
+        # 双击打开所在目录
+        self.files_table.doubleClicked.connect(self._on_file_double_clicked)
+        # 右键菜单：打开目录 / 复制路径
+        self.files_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.files_table.customContextMenuRequested.connect(self._on_files_context_menu)
         files_layout.addWidget(self.files_table, 1)
+        attach_empty_state(self.files_table, "📁", "暂无待导入文件", "点击上方「浏览…」选择存储卡目录")
 
         self.files_label = QLabel("")
         self.files_label.setStyleSheet("color: #86868b; font-size: 12px;")
@@ -141,6 +147,7 @@ class MediaImportView(QWidget):
 
         self.checksum_check = QCheckBox("计算校验和")
         self.checksum_check.setChecked(True)
+        self.checksum_check.setToolTip("计算文件校验和（XXHash64），用于后续验证文件完整性和去重。建议勾选。")
         opt_row1.addWidget(self.checksum_check)
 
         self.copy_mode_check = QCheckBox("复制到工作区")
@@ -173,15 +180,15 @@ class MediaImportView(QWidget):
         self.import_btn.setToolTip("开始导入选中的文件到当前项目")
         self.import_btn.setStyleSheet("""
             QPushButton {
-                background-color: #34c759;
+                background-color: #0a84ff;
                 color: white;
                 padding: 10px 32px;
                 border-radius: 8px;
                 font-size: 14px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #2db84e; }
-            QPushButton:disabled { background-color: #cccccc; }
+            QPushButton:hover { background-color: #0070e0; }
+            QPushButton:disabled { background-color: #c7c7cc; }
         """)
         self.import_btn.clicked.connect(self._start_import)
         self.import_btn.setEnabled(False)
@@ -196,35 +203,30 @@ class MediaImportView(QWidget):
         action_row.addStretch()
         right_layout.addLayout(action_row)
 
+        # 执行状态（合并进度条 + 状态标签 + 日志输出）
+        status_group = QGroupBox("执行状态")
+        status_layout = QVBoxLayout(status_group)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        right_layout.addWidget(self.progress_bar)
+        status_layout.addWidget(self.progress_bar)
 
         self.status_label = QLabel("就绪")
         self.status_label.setStyleSheet("color: #86868b; font-size: 12px;")
-        right_layout.addWidget(self.status_label)
+        status_layout.addWidget(self.status_label)
 
-        log_group = QGroupBox("导入日志")
-        log_layout = QVBoxLayout(log_group)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setMinimumHeight(60)
-        self.log_text.setStyleSheet("font-family: 'SF Mono', Menlo, monospace; font-size: 11px;")
-        log_layout.addWidget(self.log_text)
-        right_layout.addWidget(log_group)
+        self.log_text.setStyleSheet(MONO_FONT_QSS)
+        status_layout.addWidget(self.log_text)
+        right_layout.addWidget(status_group)
 
         main_splitter.addWidget(right_panel)
         main_splitter.setStretchFactor(0, 1)
         main_splitter.setStretchFactor(1, 4)
 
         layout.addWidget(main_splitter, 1)
-
-    def showEvent(self, event):
-        """显示时刷新选择控件（工作区/项目列表）"""
-        super().showEvent(event)
-        # 节流：200ms 内多次 showEvent 只触发一次刷新
-        self._show_timer.start()
 
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
@@ -349,6 +351,7 @@ class MediaImportView(QWidget):
 
     def _display_files(self, files):
         self.files_table.setRowCount(len(files))
+        sync_empty_state(self.files_table)
         for i, f in enumerate(files):
             stat = f.stat()
             self.files_table.setItem(i, 0, QTableWidgetItem(f.name))
@@ -365,6 +368,43 @@ class MediaImportView(QWidget):
             self.files_table.setItem(i, 3, QTableWidgetItem(str(f.parent)))
 
         self.files_label.setText(f"共 {len(files)} 个文件")
+
+    def _on_file_double_clicked(self, index):
+        """双击待导入文件 → 打开所在目录（通过表格单元格文本定位，避免排序后行号错位）"""
+        if not index.isValid():
+            return
+        row = index.row()
+        name_item = self.files_table.item(row, 0)
+        parent_item = self.files_table.item(row, 3)
+        if name_item is None or parent_item is None:
+            return
+        from pathlib import Path as _Path
+        path = str(_Path(parent_item.text()) / name_item.text())
+        from DITWorkstation.Utils import open_in_file_manager
+        open_in_file_manager(path)
+
+    def _on_files_context_menu(self, pos):
+        """右键菜单：打开所在目录 / 复制路径"""
+        from PySide6.QtWidgets import QMenu, QApplication
+        from pathlib import Path as _Path
+        index = self.files_table.indexAt(pos)
+        if not index.isValid():
+            return
+        row = index.row()
+        name_item = self.files_table.item(row, 0)
+        parent_item = self.files_table.item(row, 3)
+        if name_item is None or parent_item is None:
+            return
+        path = str(_Path(parent_item.text()) / name_item.text())
+        menu = QMenu(self)
+        action_open = menu.addAction("打开所在目录")
+        action_copy = menu.addAction("复制文件路径")
+        chosen = menu.exec(self.files_table.viewport().mapToGlobal(pos))
+        if chosen is action_open:
+            from DITWorkstation.Utils import open_in_file_manager
+            open_in_file_manager(path)
+        elif chosen is action_copy:
+            QApplication.clipboard().setText(path)
 
     def _start_import(self):
         if not self.current_project:
@@ -387,6 +427,24 @@ class MediaImportView(QWidget):
                 )
                 return
             workspace_dir = str(Path(ws.path) / self.current_project.name)
+
+            # 覆盖确认：检查工作区目标目录中是否已存在同名文件
+            try:
+                source_names = [p.name for p in self.pending_files]
+                conflicts = find_overwrite_conflicts(source_names, [workspace_dir])
+                if conflicts:
+                    names = next(iter(conflicts.values()))
+                    preview = "、".join(names[:5]) + ("…" if len(names) > 5 else "")
+                    reply = QMessageBox.question(
+                        self, "存在同名文件",
+                        f"工作区目标目录中已存在 {len(names)} 个同名文件，继续复制将覆盖：\n\n  · {preview}\n\n是否继续？",
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                    )
+                    if reply != QMessageBox.Yes:
+                        self._log("用户取消导入：工作区目录存在同名文件")
+                        return
+            except Exception as e:
+                self._log(f"（警告）覆盖冲突检测失败: {e}")
 
         log_id = self.log_combo.currentData()
         scene = ""
@@ -477,10 +535,23 @@ class MediaImportView(QWidget):
             from DITWorkstation.App.session_context import get_data_bus
             get_data_bus().emit_data_changed("assets_changed")
 
-        QMessageBox.information(
-            self, "导入完成",
-            f"导入完成！\n\n成功: {imported} 个\n跳过: {skipped} 个\n失败: {failed} 个"
-        )
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Information)
+        msg_box.setWindowTitle("导入完成")
+        msg_box.setText(f"导入完成！\n\n成功: {imported} 个\n跳过: {skipped} 个\n失败: {failed} 个")
+        goto_backup_btn = msg_box.addButton("去数据备份", QMessageBox.AcceptRole)
+        ok_btn = msg_box.addButton("确定", QMessageBox.RejectRole)
+        msg_box.setDefaultButton(ok_btn)
+        msg_box.exec()
+        if msg_box.clickedButton() is goto_backup_btn:
+            try:
+                main_window = self.window()
+                if hasattr(main_window, 'nav_list'):
+                    from DITWorkstation.Views.main_window import get_nav_index
+                    main_window.nav_list.setCurrentRow(get_nav_index("backup"))
+            except Exception as e:
+                from DITWorkstation.Utils import logger
+                logger.warning(f"跳转备份视图失败: {e}")
 
     @Slot(str)
     def _on_import_error(self, error: str):

@@ -2,7 +2,7 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QProgressBar, QComboBox,
-    QGroupBox, QFormLayout, QTextEdit,
+    QGroupBox, QTextEdit,
     QMessageBox, QCheckBox, QScrollArea, QFrame
 )
 from PySide6.QtCore import Slot, Qt
@@ -13,10 +13,12 @@ from typing import Optional
 from DITWorkstation.Models import ChecksumAlgorithm, BackupJob
 from DITWorkstation.Services.backup_service import BackupService
 from DITWorkstation.Services.media_import_service import MediaImportService
-from DITWorkstation.Utils import WorkerThread, format_size, generate_log_message, safe_slot, get_db_service, pick_directory
+from DITWorkstation.Utils import WorkerThread, format_size, generate_log_message, safe_slot, get_db_service, pick_directory, find_overwrite_conflicts
+from DITWorkstation.Views.Widgets import RefreshOnShowView
+from DITWorkstation.Views.Styles.theme import MONO_FONT_QSS
 
 
-class BackupView(QWidget):
+class BackupView(RefreshOnShowView):
     """数据备份视图"""
 
     def __init__(self):
@@ -34,12 +36,6 @@ class BackupView(QWidget):
         self._target_paths: list[str] = []
         self._setup_ui()
         # 项目切换由共享控件处理（broadcast_none=False 保留"不关联"语义）
-        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
-        from PySide6.QtCore import QTimer
-        self._show_timer = QTimer(self)
-        self._show_timer.setSingleShot(True)
-        self._show_timer.setInterval(200)
-        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -76,7 +72,7 @@ class BackupView(QWidget):
         self.source_edit = QLineEdit()
         self.source_edit.setPlaceholderText("选择存储卡路径...")
         self.source_edit.setReadOnly(True)
-        source_btn = QPushButton("浏览...")
+        source_btn = QPushButton("浏览…")
         source_btn.clicked.connect(self._select_source)
         source_layout.addWidget(self.source_edit, 1)
         source_layout.addWidget(source_btn)
@@ -127,23 +123,29 @@ class BackupView(QWidget):
         target_layout.addLayout(target_btn_layout)
         layout.addWidget(target_group)
 
-        # 配置选项
-        config_group = QGroupBox("备份配置")
-        config_layout = QFormLayout(config_group)
-
+        # 配置选项（内联，不再单独 GroupBox）
+        config_row = QHBoxLayout()
+        config_row.addWidget(QLabel("校验和:"))
         self.algorithm_combo = QComboBox()
-        self.algorithm_combo.addItems(["XXHash64（推荐，高性能）", "MD5（兼容性好）"])
-        config_layout.addRow("校验和算法:", self.algorithm_combo)
-
+        self.algorithm_combo.addItems(["XXHash64（推荐）", "MD5（兼容）"])
+        self.algorithm_combo.setToolTip(
+            "校验和用于验证文件完整性，检测拷贝是否产生位错误。\n"
+            "• XXHash64（推荐）：速度极快，适合大文件批量校验，现代算法\n"
+            "• MD5（兼容）：通用性最广，部分老系统/工作流要求使用"
+        )
+        config_row.addWidget(self.algorithm_combo)
         self.verify_check = QCheckBox("拷贝后验证完整性")
         self.verify_check.setChecked(True)
-        config_layout.addRow("", self.verify_check)
-
-        layout.addWidget(config_group)
+        self.verify_check.setToolTip(
+            "拷贝完成后重新计算目标文件校验和，与源文件比对，确保拷贝无误差。建议始终勾选。"
+        )
+        config_row.addWidget(self.verify_check)
+        config_row.addStretch()
+        layout.addLayout(config_row)
 
         # 操作按钮
         btn_layout = QHBoxLayout()
-        self.start_btn = QPushButton("开始备份")
+        self.start_btn = QPushButton("📦 开始备份")
         self.start_btn.setToolTip("开始备份（将文件复制到所有目标目录）")
         self.start_btn.setStyleSheet("""
             QPushButton {
@@ -155,7 +157,7 @@ class BackupView(QWidget):
                 font-weight: bold;
             }
             QPushButton:hover { background-color: #0070e0; }
-            QPushButton:disabled { background-color: #cccccc; }
+            QPushButton:disabled { background-color: #c7c7cc; }
         """)
         self.start_btn.clicked.connect(self._start_backup)
 
@@ -169,38 +171,27 @@ class BackupView(QWidget):
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
-        # 进度区域
-        progress_group = QGroupBox("备份进度")
-        progress_layout = QVBoxLayout(progress_group)
+        # 执行状态与日志（合并进度条 + 状态标签 + 日志输出）
+        status_group = QGroupBox("执行状态")
+        status_layout = QVBoxLayout(status_group)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 1000)
         self.progress_bar.setValue(0)
-        progress_layout.addWidget(self.progress_bar)
+        status_layout.addWidget(self.progress_bar)
 
         self.status_label = QLabel("就绪")
         self.status_label.setStyleSheet("color: #86868b; font-size: 12px;")
-        progress_layout.addWidget(self.status_label)
+        status_layout.addWidget(self.status_label)
 
-        layout.addWidget(progress_group)
-
-        # 日志输出
-        log_group = QGroupBox("操作日志")
-        log_layout = QVBoxLayout(log_group)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setMinimumHeight(80)
-        self.log_text.setStyleSheet("font-family: 'SF Mono', Menlo, monospace; font-size: 11px;")
-        log_layout.addWidget(self.log_text)
-        layout.addWidget(log_group)
+        self.log_text.setStyleSheet(MONO_FONT_QSS)
+        status_layout.addWidget(self.log_text)
+        layout.addWidget(status_group)
 
         layout.addStretch()
-
-    def showEvent(self, event):
-        """每次显示时刷新工作区/项目列表"""
-        super().showEvent(event)
-        # 节流：200ms 内多次 showEvent 只触发一次刷新
-        self._show_timer.start()
 
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
@@ -328,6 +319,33 @@ class BackupView(QWidget):
             QMessageBox.warning(self, "提示", "请至少添加一个备份目标")
             return
 
+        # 覆盖确认：扫描源目录与各目标目录的同名文件冲突
+        try:
+            from pathlib import Path as _Path
+            src_path = _Path(source)
+            if src_path.is_dir():
+                source_file_names = [p.name for p in src_path.iterdir() if p.is_file()]
+                conflicts = find_overwrite_conflicts(source_file_names, targets)
+                if conflicts:
+                    detail_lines = []
+                    total = 0
+                    for t_dir, names in conflicts.items():
+                        total += len(names)
+                        preview = "、".join(names[:5]) + ("…" if len(names) > 5 else "")
+                        detail_lines.append(f"  · {t_dir}（{len(names)} 个）: {preview}")
+                    detail = "\n".join(detail_lines)
+                    reply = QMessageBox.question(
+                        self, "存在同名文件",
+                        f"以下目标目录中已存在 {total} 个同名文件，继续备份将覆盖：\n\n{detail}\n\n是否继续？",
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                    )
+                    if reply != QMessageBox.Yes:
+                        self._log("用户取消备份：存在同名文件冲突")
+                        return
+        except Exception as e:
+            # 冲突检测失败不阻塞备份流程，仅记日志
+            self._log(f"（警告）覆盖冲突检测失败: {e}")
+
         # 确定算法
         algorithm = ChecksumAlgorithm.XXHASH64 if self.algorithm_combo.currentIndex() == 0 else ChecksumAlgorithm.MD5
 
@@ -452,6 +470,27 @@ class BackupView(QWidget):
                 self._log("已通知其他视图刷新素材备份位置信息")
             except Exception as e:
                 self._log(f"通知其他视图失败（不影响备份结果）: {e}")
+
+        # 备份完成提示，提供跳转拍摄日志的快捷入口
+        if job.status.value in ("completed", "partial"):
+            status_text = "所有目标验证通过" if job.status.value == "completed" else "部分目标未完成，请检查失败目标"
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Information)
+            msg_box.setWindowTitle("备份完成")
+            msg_box.setText(f"备份完成！\n\n{status_text}")
+            goto_log_btn = msg_box.addButton("去拍摄日志", QMessageBox.AcceptRole)
+            ok_btn = msg_box.addButton("确定", QMessageBox.RejectRole)
+            msg_box.setDefaultButton(ok_btn)
+            msg_box.exec()
+            if msg_box.clickedButton() is goto_log_btn:
+                try:
+                    main_window = self.window()
+                    if hasattr(main_window, 'nav_list'):
+                        from DITWorkstation.Views.main_window import get_nav_index
+                        main_window.nav_list.setCurrentRow(get_nav_index("log"))
+                except Exception as e:
+                    from DITWorkstation.Utils import logger
+                    logger.warning(f"跳转日志视图失败: {e}")
 
     @Slot(str)
     def _on_error(self, error: str):

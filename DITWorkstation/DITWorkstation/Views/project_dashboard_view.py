@@ -1,12 +1,14 @@
 """项目概览看板视图 - 聚合展示当前项目进度，提供 SOP 下一步引导"""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QGridLayout, QFrame
+    QGridLayout, QFrame, QGraphicsDropShadowEffect
 )
 from PySide6.QtCore import Slot
+from PySide6.QtGui import QColor
 
 from DITWorkstation.Utils import get_db_service, format_size, logger
-from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
+from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
+from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS
 
 
 def _nav_index(key: str) -> int:
@@ -16,41 +18,54 @@ def _nav_index(key: str) -> int:
 
 
 class _StatCard(QFrame):
-    """单个统计卡片"""
+    """单个统计卡片 — 带柔和阴影的卡片式展示"""
 
     def __init__(self, title: str, parent=None):
         super().__init__(parent)
         self.setObjectName("statCard")
-        self.setStyleSheet("""
-            #statCard {
-                background-color: #f5f5f7;
-                border-radius: 12px;
-                border: 1px solid #e5e5e7;
-            }
+        self.setStyleSheet(f"""
+            #statCard {{
+                background-color: {COLOR.BG_CARD};
+                border-radius: {RADIUS.CARD}px;
+                border: 1px solid {COLOR.BORDER_LIGHT};
+            }}
         """)
+        # 柔和投影：让卡片有悬浮感，但不过于夸张
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(12)
+        shadow.setOffset(0, 2)
+        shadow.setColor(QColor(0, 0, 0, 25))
+        self.setGraphicsEffect(shadow)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(6)
 
         self.title_label = QLabel(title)
-        self.title_label.setStyleSheet("color: #86868b; font-size: 12px; font-weight: 500;")
+        self.title_label.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px; font-weight: 500;"
+        )
         layout.addWidget(self.title_label)
 
         self.value_label = QLabel("—")
-        self.value_label.setStyleSheet("color: #1d1d1f; font-size: 28px; font-weight: 700;")
+        self.value_label.setStyleSheet(
+            f"color: {COLOR.TEXT_PRIMARY}; font-size: {FONT_SIZE.XXL}px; font-weight: 700;"
+        )
         layout.addWidget(self.value_label)
 
         self.hint_label = QLabel("")
-        self.hint_label.setStyleSheet("color: #86868b; font-size: 11px;")
+        self.hint_label.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.XS}px;"
+        )
         layout.addWidget(self.hint_label)
 
-    def set_value(self, value: str, hint: str = "", hint_color: str = "#86868b"):
+    def set_value(self, value: str, hint: str = "", hint_color: str = COLOR.TEXT_SECONDARY):
         self.value_label.setText(value)
         self.hint_label.setText(hint)
-        self.hint_label.setStyleSheet(f"color: {hint_color}; font-size: 11px;")
+        self.hint_label.setStyleSheet(f"color: {hint_color}; font-size: {FONT_SIZE.XS}px;")
 
 
-class ProjectDashboardView(QWidget):
+class ProjectDashboardView(RefreshOnShowView):
     """项目概览看板视图
 
     展示当前项目的导入/备份/日志/报告进度，提供 SOP「下一步」按钮引导用户。
@@ -69,12 +84,6 @@ class ProjectDashboardView(QWidget):
             get_data_bus().data_changed.connect(self._on_data_changed)
         except Exception as e:
             logger.warning(f"项目概览连接 data_bus 失败: {e}")
-        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
-        from PySide6.QtCore import QTimer
-        self._show_timer = QTimer(self)
-        self._show_timer.setSingleShot(True)
-        self._show_timer.setInterval(200)
-        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -157,7 +166,7 @@ class ProjectDashboardView(QWidget):
                     font-weight: 600;
                 }
                 QPushButton:hover { background-color: #0070e0; }
-                QPushButton:disabled { background-color: #cccccc; }
+                QPushButton:disabled { background-color: #c7c7cc; }
             """)
             guide_layout.addWidget(btn)
         guide_layout.addStretch()
@@ -173,11 +182,6 @@ class ProjectDashboardView(QWidget):
         layout.addWidget(self.sop_hint)
 
         layout.addStretch()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        # 节流：200ms 内多次 showEvent 只触发一次刷新
-        self._show_timer.start()
 
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
@@ -232,30 +236,30 @@ class ProjectDashboardView(QWidget):
 
         # 卡片
         if asset_count == 0:
-            self.card_assets.set_value("0", "尚未导入", "#ff9500")
+            self.card_assets.set_value("0", "尚未导入", COLOR.WARNING)
         else:
             unlinked = asset_count - self._count_assets_with_log(project_id)
             hint = f"其中 {unlinked} 个未关联日志" if unlinked > 0 else "全部已关联日志"
-            color = "#ff3b30" if unlinked > 0 else "#34c759"
+            color = COLOR.DANGER if unlinked > 0 else COLOR.SUCCESS
             self.card_assets.set_value(str(asset_count), hint, color)
 
         if asset_count == 0:
-            self.card_backups.set_value("—", "无素材", "#86868b")
+            self.card_backups.set_value("—", "无素材", COLOR.TEXT_SECONDARY)
         elif backed_up == 0:
-            self.card_backups.set_value("0", "尚未备份", "#ff3b30")
+            self.card_backups.set_value("0", "尚未备份", COLOR.DANGER)
         elif backed_up < asset_count:
             self.card_backups.set_value(
-                f"{backed_up}/{asset_count}", "部分已备份", "#ff9500"
+                f"{backed_up}/{asset_count}", "部分已备份", COLOR.WARNING
             )
         else:
             self.card_backups.set_value(
-                f"{backed_up}/{asset_count}", "全部已备份", "#34c759"
+                f"{backed_up}/{asset_count}", "全部已备份", COLOR.SUCCESS
             )
 
         self.card_logs.set_value(
             str(log_count),
             f"共 {backup_job_count} 次备份作业" if backup_job_count else "无备份记录",
-            "#86868b"
+            COLOR.TEXT_SECONDARY
         )
         self.card_size.set_value(format_size(total_size), "全部素材累计大小")
 

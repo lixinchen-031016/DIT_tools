@@ -35,15 +35,15 @@ from DITWorkstation.Utils import logger
 # 通过 get_nav_index(key) 自动获取最新索引，避免索引错位 bug。
 # (key, label, tooltip)
 NAV_ITEMS = [
-    ("dashboard",  "🏠 项目概览",   "当前项目进度看板与 SOP 引导"),
-    ("import",     "📁 媒体导入",   "导入图片视频到项目"),
-    ("backup",     "📦 数据备份",   "安全拷贝与多重备份"),
-    ("raw",        "🎞 RAW提取",    "JPG筛选后提取RAW"),
-    ("rename",     "✏️ 文件重命名", "批量重命名与元数据"),
-    ("log",        "📋 拍摄日志",   "场景/镜头/镜次管理"),
-    ("search",     "🔍 素材检索",   "按条件快速检索"),
-    ("asset_info", "ℹ️ 素材信息",   "查看素材EXIF与元数据详情"),
-    ("report",     "📊 报告生成",   "数据管理与QC报告"),
+    ("dashboard",  "🏠 项目概览",    "当前项目进度看板与 SOP 引导"),
+    ("import",     "① 📁 媒体导入",  "导入图片视频到项目"),
+    ("backup",     "② 📦 数据备份",  "安全拷贝与多重备份"),
+    ("log",        "③ 📋 拍摄日志",  "场景/镜头/镜次管理"),
+    ("raw",        "④ 🎞 RAW提取",   "JPG筛选后提取RAW"),
+    ("rename",     "⑤ ✏️ 文件重命名", "批量重命名与元数据"),
+    ("search",     "⑥ 🔍 素材检索",  "按条件快速检索"),
+    ("asset_info", "⑦ ℹ️ 素材信息",  "查看素材EXIF与元数据详情"),
+    ("report",     "⑧ 📊 报告生成",  "数据管理与QC报告"),
 ]
 
 
@@ -69,6 +69,8 @@ class MainWindow(QMainWindow):
 
     def _setup_ui(self):
         """设置界面"""
+        self._setup_menu()
+
         central = QWidget()
         self.setCentralWidget(central)
         layout = QHBoxLayout(central)
@@ -103,12 +105,13 @@ class MainWindow(QMainWindow):
         self.report_view = ReportView()
 
         # 统一用 QScrollArea 包裹视图，保证内容超出窗口时出现滚动条。
+        # addWidget 顺序必须与 NAV_ITEMS 顺序保持一致。
         self.stack.addWidget(self._wrap_scrollable(self.dashboard_view))
         self.stack.addWidget(self._wrap_scrollable(self.import_view))
         self.stack.addWidget(self._wrap_scrollable(self.backup_view))
+        self.stack.addWidget(self._wrap_scrollable(self.log_view))
         self.stack.addWidget(self._wrap_scrollable(self.raw_view))
         self.stack.addWidget(self._wrap_scrollable(self.rename_view))
-        self.stack.addWidget(self._wrap_scrollable(self.log_view))
         self.stack.addWidget(self._wrap_scrollable(self.search_view))
         self.stack.addWidget(self._wrap_scrollable(self.asset_info_view))
         self.stack.addWidget(self._wrap_scrollable(self.report_view))
@@ -125,6 +128,57 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+I"), self, activated=self._focus_import)
         QShortcut(QKeySequence("Ctrl+B"), self, activated=self._focus_backup)
         QShortcut(QKeySequence("Ctrl+L"), self, activated=self._focus_log)
+
+    def _setup_menu(self):
+        """创建菜单栏 — 提供帮助入口与新手向导重启"""
+        menubar = self.menuBar()
+
+        # 帮助菜单
+        help_menu = menubar.addMenu("帮助(&H)")
+
+        restart_action = help_menu.addAction("重新启动新手向导...")
+        restart_action.setShortcut("Ctrl+Shift+H")
+        restart_action.setToolTip("重新打开首次启动向导，回顾工作区/项目创建流程与 SOP 说明")
+        restart_action.triggered.connect(self._restart_wizard)
+
+        sop_action = help_menu.addAction("SOP 操作链说明...")
+        sop_action.setToolTip("查看完整的标准操作流程说明")
+        sop_action.triggered.connect(self._show_sop_guide)
+
+        help_menu.addSeparator()
+
+        about_action = help_menu.addAction("关于 DIT 工作站")
+        about_action.triggered.connect(self._show_about)
+
+    def _restart_wizard(self):
+        """重新启动新手向导，允许用户回顾 SOP 并创建新的工作区/项目"""
+        from DITWorkstation.Views.first_run_wizard import FirstRunWizard
+        wizard = FirstRunWizard(self)
+        wizard.exec()
+        # 如果向导创建了工作区/项目，设为全局当前并跳转到媒体导入
+        if wizard._created_workspace_id:
+            set_current_workspace(wizard._created_workspace_id)
+        if wizard._created_project_id:
+            set_current_project(wizard._created_project_id)
+            try:
+                self.nav_list.setCurrentRow(get_nav_index("import"))
+            except KeyError:
+                pass
+
+    def _show_sop_guide(self):
+        """弹出 SOP 操作链说明对话框"""
+        from DITWorkstation.Views.first_run_wizard import _SOP_GUIDE_TEXT
+        QMessageBox.information(self, "SOP 操作链说明", _SOP_GUIDE_TEXT)
+
+    def _show_about(self):
+        """关于对话框"""
+        QMessageBox.about(
+            self, "关于 DIT 工作站",
+            "<h3>DIT 工作站</h3>"
+            "<p>专业摄影数据管理应用</p>"
+            "<p>支持安全备份、校验和验证、JPG 筛选 RAW 提取、批量重命名、"
+            "拍摄日志管理、素材检索与报告生成。</p>"
+        )
 
     def _wrap_scrollable(self, view: QWidget) -> QScrollArea:
         """把视图包裹在 QScrollArea 中，内容超出时自动出现滚动条。
@@ -213,20 +267,27 @@ class MainWindow(QMainWindow):
             names.append(view_name_map.get(id(view), "后台任务"))
         task_text = "、".join(names)
 
-        reply = QMessageBox.question(
-            self, "确认退出",
+        # 自定义按钮文案，避免 Qt 默认 Yes/No/Cancel 英文按钮
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("确认退出")
+        box.setText(
             f"以下任务正在后台执行：{task_text}\n\n"
             "强制退出可能导致数据写不完整或文件拷贝残留。\n"
-            "是否等待任务完成？点击「Yes」将等待最多 5 秒后退出；点击「No」立即强制退出。",
-            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-            QMessageBox.Yes,
+            "· 点击「等待完成」将等待最多 5 秒后退出\n"
+            "· 点击「立即退出」可能产生残留文件\n"
+            "· 点击「取消」返回程序继续操作"
         )
+        wait_btn = box.addButton("等待完成", QMessageBox.AcceptRole)
+        force_btn = box.addButton("立即退出", QMessageBox.DestructiveRole)
+        cancel_btn = box.addButton("取消", QMessageBox.RejectRole)
+        box.exec()
 
-        if reply == QMessageBox.Cancel:
+        if box.clickedButton() is cancel_btn:
             event.ignore()
             return
 
-        if reply == QMessageBox.Yes:
+        if box.clickedButton() is wait_btn:
             # 尝试等待各 worker 结束（最多 5 秒），避免半截写入
             for _view, _attr, w in running:
                 try:
@@ -278,31 +339,32 @@ class MainWindow(QMainWindow):
             logger.error(f"_on_data_changed 处理 event={event} 失败: {e}", exc_info=True)
 
     def _apply_style(self):
-        """应用样式"""
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #f5f5f7;
-            }
-            QListWidget {
-                background-color: #2c2c2e;
+        """应用样式（主窗口 + 侧栏）。全局 QSS 由 main.py 通过 theme.apply_global_style 注入。"""
+        from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS
+        self.setStyleSheet(f"""
+            QMainWindow {{
+                background-color: {COLOR.BG_APP};
+            }}
+            QListWidget {{
+                background-color: {COLOR.SIDEBAR_BG};
                 border: none;
                 padding-top: 20px;
-                font-size: 14px;
-            }
-            QListWidget::item {
-                color: #ffffff;
+                font-size: {FONT_SIZE.MD}px;
+            }}
+            QListWidget::item {{
+                color: {COLOR.SIDEBAR_TEXT};
                 padding: 10px 16px;
-                border-radius: 8px;
+                border-radius: {RADIUS.BUTTON}px;
                 margin: 2px 8px;
-            }
-            QListWidget::item:selected {
-                background-color: #0a84ff;
-                color: #ffffff;
-            }
-            QListWidget::item:hover:!selected {
-                background-color: #3a3a3c;
-            }
-            QStackedWidget {
-                background-color: #ffffff;
-            }
+            }}
+            QListWidget::item:selected {{
+                background-color: {COLOR.PRIMARY};
+                color: {COLOR.SIDEBAR_TEXT};
+            }}
+            QListWidget::item:hover:!selected {{
+                background-color: {COLOR.SIDEBAR_HOVER};
+            }}
+            QStackedWidget {{
+                background-color: {COLOR.BG_CARD};
+            }}
         """)

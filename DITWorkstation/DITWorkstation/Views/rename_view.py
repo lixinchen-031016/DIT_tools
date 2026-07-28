@@ -11,6 +11,7 @@ from pathlib import Path
 from DITWorkstation.Models import RenameRule
 from DITWorkstation.Services.rename_service import RenameService
 from DITWorkstation.Utils import WorkerThread, safe_slot, get_db_service, logger, pick_directory
+from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 
 
 class RenameView(QWidget):
@@ -45,7 +46,7 @@ class RenameView(QWidget):
         self.folder_edit = QLineEdit()
         self.folder_edit.setPlaceholderText("选择包含素材的文件夹...")
         self.folder_edit.setReadOnly(True)
-        folder_btn = QPushButton("浏览...")
+        folder_btn = QPushButton("浏览…")
         folder_btn.clicked.connect(self._select_folder)
         file_layout.addWidget(self.folder_edit, 1)
         file_layout.addWidget(folder_btn)
@@ -63,6 +64,16 @@ class RenameView(QWidget):
             "{date}_{scene}_{shot}_{number}",
         ])
         self.pattern_combo.setEditable(True)
+        self.pattern_combo.setToolTip(
+            "命名模板支持以下变量：\n"
+            "• {scene} - 场景编号（如 S001）\n"
+            "• {shot} - 镜头编号（如 001A）\n"
+            "• {take} - 镜次（如 01）\n"
+            "• {number} - 序号（从起始值递增）\n"
+            "• {date} - 拍摄日期\n"
+            "• {camera} - 相机型号\n"
+            "示例：{scene}_{shot}_{take}_{number} → S001_001A_01_0001"
+        )
         rule_layout.addRow("命名模板:", self.pattern_combo)
 
         name_row = QHBoxLayout()
@@ -108,15 +119,15 @@ class RenameView(QWidget):
         self.rename_btn.setToolTip("执行批量重命名")
         self.rename_btn.setStyleSheet("""
             QPushButton {
-                background-color: #ff9500;
+                background-color: #0a84ff;
                 color: white;
                 padding: 10px 24px;
                 border-radius: 8px;
                 font-size: 14px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #e68600; }
-            QPushButton:disabled { background-color: #cccccc; }
+            QPushButton:hover { background-color: #0070e0; }
+            QPushButton:disabled { background-color: #c7c7cc; }
         """)
         self.rename_btn.clicked.connect(self._execute_rename)
         self.rename_btn.setEnabled(False)
@@ -132,7 +143,11 @@ class RenameView(QWidget):
         self.preview_table.setColumnCount(2)
         self.preview_table.setHorizontalHeaderLabels(["原文件名", "新文件名"])
         self.preview_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.preview_table.setAlternatingRowColors(True)
+        self.preview_table.verticalHeader().setDefaultSectionSize(32)
+        self.preview_table.setSelectionBehavior(QTableWidget.SelectRows)
         preview_layout.addWidget(self.preview_table)
+        attach_empty_state(self.preview_table, "📝", "暂无预览", "选择文件夹并设置规则后点击「预览」")
         layout.addWidget(preview_group, 1)
 
         # 进度条（重命名执行时显示）
@@ -178,6 +193,7 @@ class RenameView(QWidget):
         pairs = self.rename_service.preview_rename(self.selected_files, rule)
 
         self.preview_table.setRowCount(len(pairs))
+        sync_empty_state(self.preview_table)
         for i, (old, new) in enumerate(pairs):
             self.preview_table.setItem(i, 0, QTableWidgetItem(Path(old).name))
             self.preview_table.setItem(i, 1, QTableWidgetItem(Path(new).name))

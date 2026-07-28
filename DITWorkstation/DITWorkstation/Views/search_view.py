@@ -7,11 +7,13 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QDate, Qt
 
-from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger
+from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger, open_in_file_manager
 from DITWorkstation.Models import RATING_LABELS, AssetRating
+from DITWorkstation.Views.Widgets import RefreshOnShowView
+from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 
 
-class SearchView(QWidget):
+class SearchView(RefreshOnShowView):
     """素材检索视图"""
 
     def __init__(self):
@@ -30,12 +32,6 @@ class SearchView(QWidget):
         # 监听全局项目切换，同步下拉选中项（其他视图切项目后回到检索页不再过期）
         # 这是用户多次反馈的「上下文不同步」类问题的最后一片拼图
         bus.project_focus_changed.connect(self._on_global_project_changed)
-        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
-        from PySide6.QtCore import QTimer
-        self._show_timer = QTimer(self)
-        self._show_timer.setSingleShot(True)
-        self._show_timer.setInterval(200)
-        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -159,9 +155,15 @@ class SearchView(QWidget):
         )
         self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.result_table.setAlternatingRowColors(True)
+        self.result_table.verticalHeader().setDefaultSectionSize(32)
+        self.result_table.setSortingEnabled(True)
+        self.result_table.setSelectionBehavior(QTableWidget.SelectRows)
+        # 双击打开所在目录
+        self.result_table.doubleClicked.connect(self._on_result_double_clicked)
         self.result_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.result_table.customContextMenuRequested.connect(self._on_result_context_menu)
         layout.addWidget(self.result_table, 1)
+        attach_empty_state(self.result_table, "🔍", "暂无搜索结果", "设置搜索条件后点击「搜索」按钮")
 
         # 数据过期提示条（其他视图改了数据后，提示用户当前结果可能过期）
         self.stale_banner = QLabel("")
@@ -210,11 +212,6 @@ class SearchView(QWidget):
 
         self._refresh_log_combo()
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        # 节流：200ms 内多次 showEvent 只触发一次刷新
-        self._show_timer.start()
-
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
         self._load_projects()
@@ -226,6 +223,7 @@ class SearchView(QWidget):
         """全局工作区切换 -> 重新加载项目列表（按新工作区过滤），并清空旧结果"""
         self._load_projects()
         self.result_table.setRowCount(0)
+        sync_empty_state(self.result_table)
         self.result_label.setText("")
 
     def _on_global_project_changed(self, project_id):
@@ -336,6 +334,7 @@ class SearchView(QWidget):
     def _display_results(self, results, truncated: bool = False):
         self._results = results
         self.result_table.setRowCount(len(results))
+        sync_empty_state(self.result_table)
         if truncated:
             self.result_label.setText(
                 f"找到 {len(results)}+ 条结果（已截断，请缩小搜索条件以查看全部）"
@@ -348,7 +347,10 @@ class SearchView(QWidget):
         self.stale_banner.setVisible(False)
 
         for i, asset in enumerate(results):
-            self.result_table.setItem(i, 0, QTableWidgetItem(asset.file_name))
+            name_item = QTableWidgetItem(asset.file_name)
+            # 存 asset_id 到 UserRole，双击/右键可排序安全地定位 asset
+            name_item.setData(Qt.UserRole, asset.asset_id)
+            self.result_table.setItem(i, 0, name_item)
             self.result_table.setItem(i, 1, QTableWidgetItem(asset.file_type))
             self.result_table.setItem(i, 2, QTableWidgetItem(
                 format_size(asset.file_size)
@@ -387,7 +389,22 @@ class SearchView(QWidget):
         self.date_check.setChecked(False)
         self.project_combo.setCurrentIndex(0)
         self.result_table.setRowCount(0)
+        sync_empty_state(self.result_table)
         self.result_label.setText("")
+
+    def _on_result_double_clicked(self, index):
+        """双击检索结果 → 打开所在目录（通过 UserRole 取 asset_id，排序安全）"""
+        if not index.isValid():
+            return
+        name_item = self.result_table.item(index.row(), 0)
+        if name_item is None:
+            return
+        asset_id = name_item.data(Qt.UserRole)
+        if not asset_id:
+            return
+        asset = self.db_service.get_media_asset(asset_id)
+        if asset is not None:
+            self._open_result_directory(asset)
 
     def _on_result_context_menu(self, pos):
         """检索结果表右键菜单：打开所在目录 / 复制路径"""
@@ -396,7 +413,9 @@ class SearchView(QWidget):
         if not item:
             return
         row = item.row()
-        asset = self._results[row] if row < len(self._results) else None
+        name_item = self.result_table.item(row, 0)
+        asset_id = name_item.data(Qt.UserRole) if name_item else None
+        asset = self.db_service.get_media_asset(asset_id) if asset_id else None
         if not asset:
             return
 
@@ -412,24 +431,14 @@ class SearchView(QWidget):
 
     def _open_result_directory(self, asset):
         """在文件管理器中打开素材所在目录"""
-        import subprocess
-        import sys
         import os
         from PySide6.QtWidgets import QMessageBox
         path = asset.file_path
         if not path or not os.path.exists(path):
             QMessageBox.warning(self, "路径不存在", f"文件不存在：\n{path}")
             return
-        dir_path = os.path.dirname(path)
-        try:
-            if sys.platform == "darwin":
-                subprocess.Popen(["open", dir_path])
-            elif sys.platform == "win32":
-                subprocess.Popen(["explorer", dir_path])
-            else:
-                subprocess.Popen(["xdg-open", dir_path])
-        except Exception as e:
-            QMessageBox.warning(self, "打开失败", str(e))
+        if not open_in_file_manager(path):
+            QMessageBox.warning(self, "打开失败", "无法打开文件管理器，请检查路径权限。")
 
     def _copy_result_path(self, asset):
         """复制文件路径到剪贴板"""

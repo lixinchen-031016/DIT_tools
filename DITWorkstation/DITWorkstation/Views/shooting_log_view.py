@@ -14,10 +14,11 @@ from PySide6.QtCore import Qt, Slot, QTimer
 from DITWorkstation.Models import Project, ShootingLog
 from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Utils import format_size, get_db_service, safe_slot
-from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
+from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
+from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 
 
-class ShootingLogView(QWidget):
+class ShootingLogView(RefreshOnShowView):
     """拍摄日志视图"""
 
     def __init__(self):
@@ -32,11 +33,6 @@ class ShootingLogView(QWidget):
         # 监听选择控件的项目切换，做本视图业务联动
         # （工作区/项目下拉与全局信号同步已由 WorkspaceProjectSelector 内部处理）
         self.selector.project_changed.connect(self._on_project_changed)
-        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
-        self._show_timer = QTimer(self)
-        self._show_timer.setSingleShot(True)
-        self._show_timer.setInterval(200)
-        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
@@ -72,10 +68,13 @@ class ShootingLogView(QWidget):
         info_row1 = QHBoxLayout()
         self.scene_edit = QLineEdit()
         self.scene_edit.setPlaceholderText("场景号 如: S001")
+        self.scene_edit.setToolTip("场景编号，如 S001、S002。同一场景下包含多个镜头。")
         self.shot_edit = QLineEdit()
         self.shot_edit.setPlaceholderText("镜头号 如: 001A")
+        self.shot_edit.setToolTip("镜头编号，如 001A（A 表示该镜头的第一种机位/取景）。同一镜头可能有多次拍摄。")
         self.take_edit = QLineEdit()
         self.take_edit.setPlaceholderText("镜次 如: 01")
+        self.take_edit.setToolTip("镜次（拍摄次数），如 01、02。同一镜头重拍多次时用镜次区分。")
         info_row1.addWidget(QLabel("场景:"))
         info_row1.addWidget(self.scene_edit)
         info_row1.addWidget(QLabel("镜头:"))
@@ -98,10 +97,13 @@ class ShootingLogView(QWidget):
         info_row3 = QHBoxLayout()
         self.iso_edit = QLineEdit()
         self.iso_edit.setPlaceholderText("ISO")
+        self.iso_edit.setToolTip("感光度。数值越高感光越强但噪点越多，如 100/400/800/1600。")
         self.aperture_edit = QLineEdit()
         self.aperture_edit.setPlaceholderText("光圈 如: f/2.8")
+        self.aperture_edit.setToolTip("光圈值，如 f/2.8、f/4、f/5.6。数值越小光圈越大，进光量越多。")
         self.shutter_edit = QLineEdit()
         self.shutter_edit.setPlaceholderText("快门 如: 1/48s")
+        self.shutter_edit.setToolTip("快门速度，如 1/50、1/100。表示感光元件曝光时间。")
         info_row3.addWidget(QLabel("ISO:"))
         info_row3.addWidget(self.iso_edit)
         info_row3.addWidget(QLabel("光圈:"))
@@ -184,10 +186,13 @@ class ShootingLogView(QWidget):
         self.log_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.log_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.log_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.log_table.setAlternatingRowColors(True)
+        self.log_table.verticalHeader().setDefaultSectionSize(32)
         self.log_table.itemSelectionChanged.connect(self._on_log_selected)
         self.log_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.log_table.customContextMenuRequested.connect(self._on_log_context_menu)
         log_layout.addWidget(self.log_table)
+        attach_empty_state(self.log_table, "📋", "暂无拍摄日志", "在上方填写场景/镜头/镜次后点击「添加日志」")
 
         del_log_btn = QPushButton("删除选中日志")
         del_log_btn.setToolTip("删除选中的拍摄日志")
@@ -235,8 +240,13 @@ class ShootingLogView(QWidget):
         self.asset_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.asset_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.asset_table.setAlternatingRowColors(True)
+        self.asset_table.verticalHeader().setDefaultSectionSize(32)
+        self.asset_table.setSortingEnabled(True)
         self.asset_table.itemSelectionChanged.connect(self._on_asset_selection_changed)
+        # 双击打开所在目录
+        self.asset_table.doubleClicked.connect(self._on_linked_asset_double_clicked)
         linked_layout.addWidget(self.asset_table, 1)
+        attach_empty_state(self.asset_table, "🔗", "暂无关联素材", "选择日志后点击「+ 关联素材」")
 
         self.bottom_tabs.addTab(linked_tab, "关联素材")
 
@@ -266,8 +276,13 @@ class ShootingLogView(QWidget):
         self.proj_asset_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.proj_asset_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.proj_asset_table.setAlternatingRowColors(True)
+        self.proj_asset_table.verticalHeader().setDefaultSectionSize(32)
+        self.proj_asset_table.setSortingEnabled(True)
+        # 双击打开所在目录
+        self.proj_asset_table.doubleClicked.connect(self._on_proj_asset_double_clicked)
         self.proj_asset_table.itemSelectionChanged.connect(self._on_proj_asset_selection_changed)
         proj_layout.addWidget(self.proj_asset_table, 1)
+        attach_empty_state(self.proj_asset_table, "📂", "暂无项目素材", "请先在「媒体导入」中导入素材")
 
         self.bottom_tabs.addTab(proj_tab, "项目素材")
 
@@ -278,12 +293,6 @@ class ShootingLogView(QWidget):
         right_splitter.setStretchFactor(1, 2)
 
         layout.addWidget(right_splitter, 3)
-
-    def showEvent(self, event):
-        # 刷新选择控件（工作区/项目列表），全局信号同步由 selector 内部处理
-        super().showEvent(event)
-        # 节流：200ms 内多次 showEvent 只触发一次刷新
-        self._show_timer.start()
 
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
@@ -299,8 +308,11 @@ class ShootingLogView(QWidget):
             self.current_project = None
             self.current_log_id = None
             self.log_table.setRowCount(0)
+            sync_empty_state(self.log_table)
             self.asset_table.setRowCount(0)
+            sync_empty_state(self.asset_table)
             self.proj_asset_table.setRowCount(0)
+            sync_empty_state(self.proj_asset_table)
             self.asset_count_label.setText("")
             self.proj_asset_count_label.setText("")
             self.link_asset_btn.setEnabled(False)
@@ -318,6 +330,7 @@ class ShootingLogView(QWidget):
         logs = self.db_service.get_shooting_logs(self.current_project.project_id)
         self._logs = logs
         self.log_table.setRowCount(len(logs))
+        sync_empty_state(self.log_table)
         for i, log in enumerate(logs):
             self.log_table.setItem(i, 0, QTableWidgetItem(log.scene))
             self.log_table.setItem(i, 1, QTableWidgetItem(log.shot))
@@ -408,7 +421,16 @@ class ShootingLogView(QWidget):
         if row < 0:
             return
         log_id = self.log_table.item(row, 0).data(Qt.UserRole)
-        reply = QMessageBox.question(self, "确认", "确定删除该拍摄日志？关联素材不会被删除。")
+        # 构造带场景标识的确认文案，防止误删
+        log = next((l for l in self._logs if l.log_id == log_id), None)
+        if log:
+            scene_tag = f"场景 {log.scene} / 镜头 {log.shot} / 镜次 {log.take}"
+            if log.description:
+                scene_tag += f"（{log.description}）"
+            msg = f"确定删除拍摄日志？\n\n  {scene_tag}\n\n关联素材不会被删除，仅解除关联。"
+        else:
+            msg = "确定删除该拍摄日志？关联素材不会被删除。"
+        reply = QMessageBox.question(self, "确认删除", msg)
         if reply != QMessageBox.Yes:
             return
         self.db_service.delete_shooting_log(log_id)
@@ -416,6 +438,7 @@ class ShootingLogView(QWidget):
         self.link_asset_btn.setEnabled(False)
         self.unlink_asset_btn.setEnabled(False)
         self.asset_table.setRowCount(0)
+        sync_empty_state(self.asset_table)
         self.asset_count_label.setText("")
         self._load_logs()
         self._load_project_assets()
@@ -457,6 +480,7 @@ class ShootingLogView(QWidget):
             self.current_log_id = None
             self.link_asset_btn.setEnabled(False)
             self.asset_table.setRowCount(0)
+            sync_empty_state(self.asset_table)
             self.asset_count_label.setText("")
             return
         log_id = self.log_table.item(row, 0).data(Qt.UserRole)
@@ -467,6 +491,7 @@ class ShootingLogView(QWidget):
     def _load_assets_for_log(self, log_id: str):
         assets = self.db_service.get_assets_by_log_id(log_id)
         self.asset_table.setRowCount(len(assets))
+        sync_empty_state(self.asset_table)
         self.asset_count_label.setText(f"共 {len(assets)} 个关联素材")
         for i, asset in enumerate(assets):
             self.asset_table.setItem(i, 0, QTableWidgetItem(asset.file_name))
@@ -479,6 +504,21 @@ class ShootingLogView(QWidget):
     def _on_asset_selection_changed(self):
         has_selection = len(self.asset_table.selectedItems()) > 0
         self.unlink_asset_btn.setEnabled(has_selection)
+
+    def _on_linked_asset_double_clicked(self, index):
+        """双击关联素材 → 打开所在目录"""
+        if not index.isValid():
+            return
+        name_item = self.asset_table.item(index.row(), 0)
+        if name_item is None:
+            return
+        asset_id = name_item.data(Qt.UserRole)
+        if not asset_id:
+            return
+        asset = self.db_service.get_media_asset(asset_id)
+        if asset is not None:
+            from DITWorkstation.Utils import open_in_file_manager
+            open_in_file_manager(asset.file_path)
 
     @safe_slot("关联素材失败")
     def _link_assets_dialog(self):
@@ -658,12 +698,14 @@ class ShootingLogView(QWidget):
     def _load_project_assets(self):
         if not self.current_project:
             self.proj_asset_table.setRowCount(0)
+            sync_empty_state(self.proj_asset_table)
             self.proj_asset_count_label.setText("")
             return
 
         assets = self.db_service.get_media_assets(self.current_project.project_id)
         linked_count = sum(1 for a in assets if a.log_id)
         self.proj_asset_table.setRowCount(len(assets))
+        sync_empty_state(self.proj_asset_table)
         self.proj_asset_count_label.setText(
             f"共 {len(assets)} 个素材（{linked_count} 已关联）"
         )
@@ -684,6 +726,21 @@ class ShootingLogView(QWidget):
     def _on_proj_asset_selection_changed(self):
         has = len(self.proj_asset_table.selectedItems()) > 0
         self.log_selected_btn.setEnabled(has and self.current_project is not None)
+
+    def _on_proj_asset_double_clicked(self, index):
+        """双击项目素材 → 打开所在目录"""
+        if not index.isValid():
+            return
+        name_item = self.proj_asset_table.item(index.row(), 0)
+        if name_item is None:
+            return
+        asset_id = name_item.data(Qt.UserRole)
+        if not asset_id:
+            return
+        asset = self.db_service.get_media_asset(asset_id)
+        if asset is not None:
+            from DITWorkstation.Utils import open_in_file_manager
+            open_in_file_manager(asset.file_path)
 
     def _batch_create_log_for_selected(self):
         if not self.current_project:

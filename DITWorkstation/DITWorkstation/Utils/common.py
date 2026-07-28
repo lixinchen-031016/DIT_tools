@@ -3,6 +3,7 @@ import re
 import logging
 import functools
 import threading
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -133,6 +134,109 @@ def pick_directory(parent=None, title: str = "选择目录", start_path: str = "
     return path or ""
 
 
+def pick_save_file(
+    parent=None,
+    title: str = "保存文件",
+    start_path: str = "",
+    filter_str: str = "",
+    default_suffix: str = "",
+) -> str:
+    """统一的保存文件对话框（打包后兼容，对应 pick_directory）。
+
+    Windows 打包后原生 QFileDialog.getSaveFileName 同样可能返回空字符串
+    （与 pick_directory 同因 COM/manifest）。frozen 环境下直接使用非原生对话框。
+
+    Args:
+        default_suffix: 若用户未输入扩展名，自动附加（如 "pdf"）
+
+    Returns: 选中的文件完整路径，未选择或取消返回空字符串。
+    """
+    import sys
+    from PySide6.QtWidgets import QFileDialog
+    options = QFileDialog.Option.DontUseNativeDialog if getattr(sys, 'frozen', False) else QFileDialog.Option(0)
+    path, _ = QFileDialog.getSaveFileName(
+        parent, title, start_path, filter_str, "", options
+    )
+    if not path:
+        return ""
+    if default_suffix and not Path(path).suffix:
+        path = str(Path(path).with_suffix(f".{default_suffix.lstrip('.')}"))
+    return path
+
+
+def open_in_file_manager(path: str) -> bool:
+    """跨平台在系统文件管理器中打开路径（目录或文件所在目录）。
+
+    - 目录：直接打开
+    - 文件：打开所在目录（Windows 上额外选中该文件）
+    - 失败返回 False，调用方自行弹错
+    """
+    import sys
+    import subprocess
+    from pathlib import Path as _Path
+    try:
+        target = _Path(path)
+        if target.is_file():
+            dir_path = str(target.parent)
+        else:
+            dir_path = str(target)
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", dir_path])
+        elif sys.platform == "win32":
+            # explorer /select,<file> 可同时打开目录并选中文件
+            if target.is_file():
+                subprocess.Popen(["explorer", "/select,", str(target)])
+            else:
+                subprocess.Popen(["explorer", dir_path])
+        else:
+            subprocess.Popen(["xdg-open", dir_path])
+        return True
+    except Exception as e:
+        logger.error(f"打开文件管理器失败: {e}", exc_info=True)
+        return False
+
+
+def find_overwrite_conflicts(
+    source_files: list,
+    target_dirs: list,
+    name_getter=None,
+) -> dict:
+    """扫描目标目录中与源文件同名的文件，返回冲突清单。
+
+    用于备份/导入/提取等写操作启动前判断是否会覆盖已有文件。
+
+    Args:
+        source_files: 源文件对象列表（字符串路径或对象）
+        target_dirs: 目标目录字符串列表
+        name_getter: 可选函数，从源文件对象中提取文件名；默认按 str 取 basename
+
+    Returns:
+        {目标目录路径: [冲突文件名列表]} 仅包含有冲突的目标目录
+    """
+    from pathlib import Path as _Path
+    conflicts: dict = {}
+    for target_dir in target_dirs:
+        if not target_dir:
+            continue
+        target_path = _Path(target_dir)
+        if not target_path.is_dir():
+            continue
+        existing = {p.name for p in target_path.iterdir() if p.is_file()}
+        if not existing:
+            continue
+        clashes = []
+        for src in source_files:
+            if name_getter is not None:
+                name = name_getter(src)
+            else:
+                name = _Path(str(src)).name
+            if name in existing:
+                clashes.append(name)
+        if clashes:
+            conflicts[target_dir] = clashes
+    return conflicts
+
+
 class Logger:
     """简易日志记录器"""
 
@@ -236,9 +340,45 @@ def reset_singletons():
 
 
 # ===== Qt 槽函数异常安全装饰器 =====
+
+# 异常类型 → 友好文案映射。命中后向用户展示口语化提示，而非裸 Python 异常。
+# 未命中的异常走通用文案，但仍保留"复制错误信息"按钮以便排查。
+_FRIENDLY_ERROR_MAP = {
+    PermissionError: (
+        "没有权限访问目标路径或文件。请检查：\n"
+        "  · 路径是否被其他程序占用\n"
+        "  · 是否需要管理员权限\n"
+        "  · macOS 下是否在「系统设置 → 隐私与安全性 → 文件与文件夹」中授权"
+    ),
+    FileNotFoundError: "找不到文件或目录，可能已被移动或删除。请返回上一步重新选择。",
+    FileExistsError: "目标已存在同名文件，请重命名或更换目标路径后重试。",
+    IsADirectoryError: "期望文件路径但收到目录路径，请检查输入。",
+    NotADirectoryError: "期望目录路径但收到文件路径，请检查输入。",
+    TimeoutError: "操作超时，可能因磁盘响应过慢或网络驱动器中断。请稍后重试。",
+    OSError: "系统 IO 错误，可能是磁盘空间不足或路径过长。请检查磁盘状态后重试。",
+    ValueError: "输入值不合法，请检查表单内容（如命名规则、场景/镜头/镜次格式）。",
+    KeyError: "缺少必要的数据字段，可能因数据库记录不完整。建议重建项目或联系开发者。",
+    IndexError: "列表索引越界，可能因数据被并发修改。请刷新视图后重试。",
+}
+
+
+def _friendly_message(e: Exception, error_title: str) -> str:
+    """根据异常类型返回友好文案，未命中则返回通用文案。"""
+    for exc_type, msg in _FRIENDLY_ERROR_MAP.items():
+        if isinstance(e, exc_type):
+            return f"{msg}\n\n（技术细节：{type(e).__name__}: {e}）"
+    # 通用兜底
+    return f"{error_title}。\n\n详细信息：\n{type(e).__name__}: {e}"
+
+
 def safe_slot(error_title: str = "操作失败"):
     """
-    装饰 Qt 槽函数：捕获异常并弹出 QMessageBox 提示，避免槽函数崩溃。
+    装饰 Qt 槽函数：捕获异常并弹出友好的 QMessageBox 提示，避免槽函数崩溃。
+
+    改进点：
+    - 异常类型 → 口语化文案映射（PermissionError/FileNotFoundError 等）
+    - 未命中映射时仍保留技术细节，便于排查
+    - 提供"复制错误信息"按钮，方便用户反馈
 
     用法：
         @safe_slot("删除项目失败")
@@ -253,8 +393,22 @@ def safe_slot(error_title: str = "操作失败"):
             except Exception as e:
                 logger.error(f"{error_title}: {e}", exc_info=True)
                 try:
-                    from PySide6.QtWidgets import QMessageBox
-                    QMessageBox.critical(self, error_title, f"{error_title}：\n{e}")
+                    from PySide6.QtWidgets import QMessageBox, QApplication
+                    msg = _friendly_message(e, error_title)
+                    box = QMessageBox(self)
+                    box.setIcon(QMessageBox.Critical)
+                    box.setWindowTitle(error_title)
+                    box.setText(msg)
+                    copy_btn = box.addButton("复制错误信息", QMessageBox.ActionRole)
+                    box.addButton(QMessageBox.Ok)
+                    box.exec()
+                    if box.clickedButton() is copy_btn:
+                        clipboard = QApplication.clipboard()
+                        if clipboard is not None:
+                            clipboard.setText(
+                                f"{error_title}\n{type(e).__name__}: {e}\n\n"
+                                f"Traceback:\n{traceback.format_exc()}"
+                            )
                 except Exception:
                     pass
         return wrapper
