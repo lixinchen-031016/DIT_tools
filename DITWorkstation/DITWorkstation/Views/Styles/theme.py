@@ -14,7 +14,9 @@
 """
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 
 
 # ============ 颜色 ============
@@ -325,8 +327,9 @@ QCheckBox::indicator:hover {{
 QCheckBox::indicator:checked {{
     background-color: {COLOR.PRIMARY};
     border-color: {COLOR.PRIMARY};
-    /* 内嵌 SVG 对勾：白色描边，跨平台一致，无需外部资源 */
-    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'><path d='M3 8 L6.5 11.5 L13 4.5' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>");
+    /* 白色对勾 SVG（路径在 apply_global_style 时动态注入为临时文件路径，
+       因 Qt QSS 不支持 data URI） */
+    image: url("__CHECKMARK_SVG_PATH__");
 }}
 QCheckBox::indicator:disabled {{
     background-color: {COLOR.BG_APP};
@@ -345,6 +348,40 @@ QToolTip {{
 """
 
 
+def _ensure_checkmark_svg() -> str:
+    """生成复选框对勾 SVG 临时文件并返回其路径。
+
+    Qt QSS 的 image: url() 不支持 data URI，必须引用实际文件路径。
+    将白色对勾 SVG 写到临时目录，QSS 中引用该路径实现跨平台对勾样式。
+    幂等：若文件已存在则直接复用。
+    """
+    tmp_dir = tempfile.gettempdir()
+    svg_path = os.path.join(tmp_dir, "dit_checkmark.svg")
+    if not os.path.exists(svg_path):
+        svg_content = (
+            "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' "
+            "viewBox='0 0 16 16'>"
+            "<path d='M3 8 L6.5 11.5 L13 4.5' stroke='white' stroke-width='2.5' "
+            "stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>"
+        )
+        try:
+            with open(svg_path, "w", encoding="utf-8") as f:
+                f.write(svg_content)
+        except OSError:
+            # 写入失败时返回空字符串，回退到纯色块
+            return ""
+    # 转为 URL 友好路径（Windows 反斜杠需转为正斜杠）
+    return svg_path.replace("\\", "/")
+
+
 def apply_global_style(app):
     """在 QApplication 上应用全局 QSS。"""
-    app.setStyleSheet(GLOBAL_QSS)
+    # 先确保对勾 SVG 文件存在，注入到 QSS 中
+    checkmark_path = _ensure_checkmark_svg()
+    qss = GLOBAL_QSS
+    if checkmark_path:
+        qss = qss.replace(
+            "__CHECKMARK_SVG_PATH__",
+            checkmark_path,
+        )
+    app.setStyleSheet(qss)
