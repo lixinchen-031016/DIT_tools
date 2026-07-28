@@ -2,14 +2,17 @@
 
 消除 9 个视图中重复的工作区下拉/项目列表/新建对话框/全局信号同步逻辑。
 各视图改为组合该控件，监听 `project_changed` / `workspace_changed` 信号做自身业务。
+
+项目选择统一使用 QComboBox（下拉框），替代旧版 QListWidget（黑底大框），
+在 macOS/Windows 上均更紧凑易用。
 """
 from typing import Optional
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QComboBox, QListWidget, QListWidgetItem, QInputDialog, QMessageBox
+    QComboBox, QInputDialog, QMessageBox
 )
-from PySide6.QtCore import Signal, Slot, Qt
+from PySide6.QtCore import Signal, Slot
 
 from DITWorkstation.Models import Workspace, Project
 from DITWorkstation.Utils import get_db_service, safe_slot
@@ -21,8 +24,9 @@ class WorkspaceProjectSelector(QWidget):
 
     封装职责：
     - 工作区下拉（含"全部工作区"项）+ 新建按钮 + 可选编辑按钮
-    - 项目列表（QListWidget）或下拉（QComboBox），按工作区过滤
+    - 项目下拉（QComboBox），按工作区过滤
     - 新建项目按钮（需选中具体工作区才启用）
+    - 可选删除项目按钮
     - 监听全局 workspace_focus_changed / project_focus_changed 并同步
     - 工作区切换 → 广播 set_current_workspace + 重载项目
     - 项目切换 → 广播 set_current_project
@@ -32,8 +36,9 @@ class WorkspaceProjectSelector(QWidget):
     - project_changed(project_id)：项目切换（含 None）
 
     布局模式：
-    - project_widget="list"：垂直布局，项目用 QListWidget（适合左面板）
-    - project_widget="combo"：水平布局，项目用 QComboBox（适合 header）
+    - project_widget="list"：垂直布局（适合左面板）
+    - project_widget="combo"：水平布局（适合 header）
+    两种模式均使用 QComboBox 作为项目选择控件。
     """
 
     workspace_changed = Signal(object)  # workspace_id
@@ -49,10 +54,10 @@ class WorkspaceProjectSelector(QWidget):
                  db_service=None):
         """
         Args:
-            project_widget: "list" 用 QListWidget，"combo" 用 QComboBox
+            project_widget: "list" 垂直布局，"combo" 水平布局（均用 QComboBox）
             show_edit_workspace: 是否显示"编辑工作区"按钮
             show_new_project: 是否显示"新建项目"按钮
-            show_delete_project: 是否显示"删除项目"按钮（仅 list 模式生效）
+            show_delete_project: 是否显示"删除项目"按钮
             none_label: None 项的显示文本（如"不关联项目""全部项目"）
             broadcast_none: 选中 None 项时是否广播 set_current_project(None)。
                 False 适用于"不关联/全部"语义（备份/RAW提取/检索），避免清空全局项目。
@@ -63,7 +68,7 @@ class WorkspaceProjectSelector(QWidget):
         self._project_widget_type = project_widget
         self._show_edit_workspace = show_edit_workspace
         self._show_new_project = show_new_project
-        self._show_delete_project = show_delete_project and project_widget == "list"
+        self._show_delete_project = show_delete_project
         self._none_label = none_label
         self._broadcast_none = broadcast_none
         # 内部标志：避免全局信号回环触发再次广播
@@ -79,7 +84,7 @@ class WorkspaceProjectSelector(QWidget):
             self._setup_vertical_layout()
 
     def _setup_vertical_layout(self):
-        """垂直布局：工作区下拉 + 按钮 + 项目 QListWidget + 新建项目按钮"""
+        """垂直布局：工作区下拉 + 按钮 + 项目下拉 + 新建/删除项目按钮"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -110,9 +115,10 @@ class WorkspaceProjectSelector(QWidget):
         proj_label.setStyleSheet("font-weight: bold;")
         layout.addWidget(proj_label)
 
-        self.project_list = QListWidget()
-        self.project_list.currentRowChanged.connect(self._on_project_row_changed)
-        layout.addWidget(self.project_list, 1)
+        self.project_combo = QComboBox()
+        self.project_combo.addItem(self._none_label, None)
+        self.project_combo.currentIndexChanged.connect(self._on_project_combo_changed)
+        layout.addWidget(self.project_combo)
 
         if self._show_new_project or self._show_delete_project:
             proj_btn_layout = QHBoxLayout()
@@ -128,8 +134,10 @@ class WorkspaceProjectSelector(QWidget):
                 proj_btn_layout.addWidget(self.del_proj_btn)
             layout.addLayout(proj_btn_layout)
 
+        layout.addStretch()
+
     def _setup_horizontal_layout(self):
-        """水平布局：工作区下拉 + 按钮 + 项目 QComboBox（适合 header）"""
+        """水平布局：工作区下拉 + 按钮 + 项目下拉 + 按钮（适合 header）"""
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -163,6 +171,12 @@ class WorkspaceProjectSelector(QWidget):
             self.new_proj_btn.clicked.connect(self._create_project)
             self.new_proj_btn.setEnabled(False)
             layout.addWidget(self.new_proj_btn)
+
+        if self._show_delete_project:
+            self.del_proj_btn = QPushButton("删除")
+            self.del_proj_btn.clicked.connect(self._delete_project)
+            self.del_proj_btn.setEnabled(False)
+            layout.addWidget(self.del_proj_btn)
 
     # ===== 全局信号连接 =====
     def _connect_global_signals(self):
@@ -209,7 +223,7 @@ class WorkspaceProjectSelector(QWidget):
             self.new_proj_btn.setEnabled(target_index > 0)
 
     def _load_projects(self):
-        """加载项目列表/下拉，按当前选中工作区过滤"""
+        """加载项目下拉，按当前选中工作区过滤"""
         from DITWorkstation.Views.main_window import (
             get_current_project_id, get_current_workspace_id
         )
@@ -224,37 +238,18 @@ class WorkspaceProjectSelector(QWidget):
             projects = []
 
         self._suppress_broadcast = True
-        if self._project_widget_type == "combo":
-            self.project_combo.blockSignals(True)
-            self.project_combo.clear()
-            self.project_combo.addItem(self._none_label, None)
-            target_index = 0
-            for i, p in enumerate(projects, start=1):
-                self.project_combo.addItem(f"{p.name} ({p.project_id})", p.project_id)
-                if prev_pid and p.project_id == prev_pid:
-                    target_index = i
-            self.project_combo.setCurrentIndex(target_index)
-            self.project_combo.blockSignals(False)
-        else:
-            # QListWidget：保留当前选中，避免切换视图后丢失
-            current_pid = None
-            if self.project_list.currentItem() is not None:
-                current_pid = self.project_list.currentItem().data(Qt.UserRole)
-            self.project_list.blockSignals(True)
-            self.project_list.clear()
-            restore_row = -1
-            for i, p in enumerate(projects):
-                item = QListWidgetItem(f"{p.name}\n{p.created_at.strftime('%Y-%m-%d')}")
-                item.setData(Qt.UserRole, p.project_id)
-                self.project_list.addItem(item)
-                if (current_pid and p.project_id == current_pid) or \
-                   (not current_pid and prev_pid and p.project_id == prev_pid):
-                    restore_row = i
-            if restore_row >= 0:
-                self.project_list.setCurrentRow(restore_row)
-            self.project_list.blockSignals(False)
+        self.project_combo.blockSignals(True)
+        self.project_combo.clear()
+        self.project_combo.addItem(self._none_label, None)
+        target_index = 0
+        for i, p in enumerate(projects, start=1):
+            self.project_combo.addItem(f"{p.name} ({p.project_id})", p.project_id)
+            if prev_pid and p.project_id == prev_pid:
+                target_index = i
+        self.project_combo.setCurrentIndex(target_index)
+        self.project_combo.blockSignals(False)
         self._suppress_broadcast = False
-        # 同步删除项目按钮（suppress 期间信号被拦截，需手动同步）
+        # 同步删除项目按钮
         if self._show_delete_project:
             self._sync_delete_project_btn(self.get_current_project_id())
 
@@ -279,15 +274,11 @@ class WorkspaceProjectSelector(QWidget):
         self.workspace_changed.emit(ws_id)
 
     @Slot(int)
-    def _on_project_row_changed(self, row: int):
-        """QListWidget 项目选择切换 → 广播到全局"""
+    def _on_project_combo_changed(self, _index: int):
+        """项目下拉切换 → 广播到全局"""
         if self._suppress_broadcast:
             return
-        project_id = None
-        if row >= 0:
-            item = self.project_list.item(row)
-            if item:
-                project_id = item.data(Qt.UserRole)
+        project_id = self.project_combo.currentData()
         self._sync_delete_project_btn(project_id)
         self._broadcast_project_changed(project_id)
 
@@ -297,14 +288,6 @@ class WorkspaceProjectSelector(QWidget):
             return
         ws_id = self.workspace_combo.currentData()
         self.del_proj_btn.setEnabled(bool(ws_id and project_id))
-
-    @Slot(int)
-    def _on_project_combo_changed(self, _index: int):
-        """QComboBox 项目选择切换 → 广播到全局"""
-        if self._suppress_broadcast:
-            return
-        project_id = self.project_combo.currentData()
-        self._broadcast_project_changed(project_id)
 
     def _broadcast_project_changed(self, project_id):
         """广播项目切换到全局并通知宿主。
@@ -358,26 +341,15 @@ class WorkspaceProjectSelector(QWidget):
         if project_id is None and not self._broadcast_none:
             return
         self._suppress_broadcast = True
-        if self._project_widget_type == "combo":
-            self.project_combo.blockSignals(True)
-            if project_id is None:
-                self.project_combo.setCurrentIndex(0)
-            else:
-                for i in range(self.project_combo.count()):
-                    if self.project_combo.itemData(i) == project_id:
-                        self.project_combo.setCurrentIndex(i)
-                        break
-            self.project_combo.blockSignals(False)
+        self.project_combo.blockSignals(True)
+        if project_id is None:
+            self.project_combo.setCurrentIndex(0)
         else:
-            self.project_list.blockSignals(True)
-            target_row = -1
-            if project_id is not None:
-                for i in range(self.project_list.count()):
-                    if self.project_list.item(i).data(Qt.UserRole) == project_id:
-                        target_row = i
-                        break
-            self.project_list.setCurrentRow(target_row)
-            self.project_list.blockSignals(False)
+            for i in range(self.project_combo.count()):
+                if self.project_combo.itemData(i) == project_id:
+                    self.project_combo.setCurrentIndex(i)
+                    break
+        self.project_combo.blockSignals(False)
         self._suppress_broadcast = False
         # 通知宿主视图（不广播到全局，避免回环）
         self.project_changed.emit(project_id)
@@ -439,11 +411,10 @@ class WorkspaceProjectSelector(QWidget):
     @safe_slot("删除项目失败")
     def _delete_project(self):
         """删除当前选中的项目（含确认对话框）"""
-        item = self.project_list.currentItem()
-        if item is None:
+        project_id = self.project_combo.currentData()
+        if not project_id:
             return
-        project_id = item.data(Qt.UserRole)
-        project_name = item.text().split("\n")[0]
+        project_name = self.project_combo.currentText().split(" (")[0]
         reply = QMessageBox.question(
             self, "确认",
             f"确定删除项目「{project_name}」及所有关联数据？\n此操作不可撤销。",
@@ -475,12 +446,7 @@ class WorkspaceProjectSelector(QWidget):
 
     def get_current_project_id(self) -> Optional[str]:
         """返回当前选中项目 ID（无选中返回 None）"""
-        if self._project_widget_type == "combo":
-            return self.project_combo.currentData()
-        item = self.project_list.currentItem()
-        if item is None:
-            return None
-        return item.data(Qt.UserRole)
+        return self.project_combo.currentData()
 
     def get_current_project(self) -> Optional[Project]:
         """返回当前选中项目对象（无选中返回 None）"""

@@ -2,10 +2,10 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QProgressBar, QComboBox,
-    QGroupBox, QFormLayout, QTextEdit, QListWidget,
-    QMessageBox, QCheckBox
+    QGroupBox, QFormLayout, QTextEdit,
+    QMessageBox, QCheckBox, QScrollArea, QFrame
 )
-from PySide6.QtCore import Slot
+from PySide6.QtCore import Slot, Qt
 
 from pathlib import Path
 from typing import Optional
@@ -30,6 +30,8 @@ class BackupView(QWidget):
         self.worker: WorkerThread = None
         # 本次备份关联的项目（在 _start_backup 时锁定，_on_finished 时用于自动导入）
         self._backup_project_id: Optional[str] = None
+        # 备份目标路径列表（内联删除按钮式，替代 QListWidget）
+        self._target_paths: list[str] = []
         self._setup_ui()
         # 项目切换由共享控件处理（broadcast_none=False 保留"不关联"语义）
 
@@ -74,21 +76,46 @@ class BackupView(QWidget):
         source_layout.addWidget(source_btn)
         layout.addWidget(source_group)
 
-        # 目标路径列表
+        # 目标路径列表（内联删除按钮式，每行一个路径 + 独立删除按钮）
         target_group = QGroupBox("备份目标（支持多目标）")
         target_layout = QVBoxLayout(target_group)
 
-        self.target_list = QListWidget()
-        self.target_list.setMinimumHeight(80)
-        target_layout.addWidget(self.target_list)
+        # 可滚动容器，路径多时自动出现滚动条
+        self.target_scroll = QScrollArea()
+        self.target_scroll.setWidgetResizable(True)
+        self.target_scroll.setMinimumHeight(80)
+        self.target_scroll.setMaximumHeight(200)
+        self.target_scroll.setFrameShape(QFrame.NoFrame)
+        self.target_scroll.setStyleSheet("""
+            QScrollArea {
+                background-color: #ffffff;
+                border: 1px solid #d2d2d7;
+                border-radius: 6px;
+            }
+        """)
+
+        # 内部容器，动态添加路径行
+        self.target_container = QWidget()
+        self.target_container.setStyleSheet("background-color: #ffffff;")
+        self.target_container_layout = QVBoxLayout(self.target_container)
+        self.target_container_layout.setContentsMargins(0, 0, 0, 0)
+        self.target_container_layout.setSpacing(2)
+        self.target_container_layout.addStretch()
+        self.target_scroll.setWidget(self.target_container)
+        target_layout.addWidget(self.target_scroll)
+
+        # 空状态提示
+        self.target_empty_label = QLabel("（暂无备份目标，点击下方「添加目标」按钮）")
+        self.target_empty_label.setStyleSheet("color: #86868b; font-size: 12px; padding: 8px;")
+        target_layout.addWidget(self.target_empty_label)
 
         target_btn_layout = QHBoxLayout()
         add_target_btn = QPushButton("+ 添加目标")
         add_target_btn.clicked.connect(self._add_target)
-        remove_target_btn = QPushButton("- 移除选中")
-        remove_target_btn.clicked.connect(self._remove_target)
+        clear_target_btn = QPushButton("清空全部")
+        clear_target_btn.clicked.connect(self._clear_targets)
         target_btn_layout.addWidget(add_target_btn)
-        target_btn_layout.addWidget(remove_target_btn)
+        target_btn_layout.addWidget(clear_target_btn)
         target_btn_layout.addStretch()
         target_layout.addLayout(target_btn_layout)
         layout.addWidget(target_group)
@@ -189,15 +216,91 @@ class BackupView(QWidget):
     def _add_target(self):
         path = self._pick_directory("选择备份目标路径")
         if path:
-            self.target_list.addItem(path)
+            self._target_paths.append(path)
+            self._rebuild_target_rows()
             self._log(f"添加备份目标: {path}")
         else:
             self._log("未选择目录")
 
-    def _remove_target(self):
-        row = self.target_list.currentRow()
-        if row >= 0:
-            self.target_list.takeItem(row)
+    def _remove_target_at(self, index: int):
+        """移除指定索引的备份目标"""
+        if 0 <= index < len(self._target_paths):
+            removed = self._target_paths.pop(index)
+            self._rebuild_target_rows()
+            self._log(f"已移除备份目标: {removed}")
+
+    def _rebuild_target_rows(self):
+        """根据 _target_paths 重建内联行控件。
+
+        每行：序号 + 路径（可选中复制）+ 独立删除按钮。
+        空列表时隐藏容器，显示空状态提示。
+        """
+        # 清空旧行（保留末尾 stretch）
+        while self.target_container_layout.count() > 1:
+            item = self.target_container_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        has_targets = len(self._target_paths) > 0
+        self.target_scroll.setVisible(has_targets)
+        self.target_empty_label.setVisible(not has_targets)
+
+        for i, path in enumerate(self._target_paths):
+            row = QWidget()
+            row.setStyleSheet("""
+                QWidget {
+                    background-color: #f5f5f7;
+                    border-radius: 4px;
+                }
+            """)
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(8, 4, 4, 4)
+            row_layout.setSpacing(8)
+
+            idx_label = QLabel(f"{i + 1}.")
+            idx_label.setFixedWidth(24)
+            idx_label.setStyleSheet("color: #86868b; font-weight: bold; background: transparent;")
+            row_layout.addWidget(idx_label)
+
+            path_label = QLabel(path)
+            path_label.setToolTip(path)
+            path_label.setStyleSheet("color: #1d1d1f; background: transparent;")
+            path_label.setWordWrap(False)
+            path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            row_layout.addWidget(path_label, 1)
+
+            del_btn = QPushButton("✕")
+            del_btn.setFixedSize(24, 24)
+            del_btn.setToolTip("移除此目标")
+            del_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #e8e8ed;
+                    border: none;
+                    border-radius: 4px;
+                    color: #86868b;
+                    font-size: 12px;
+                }
+                QPushButton:hover { background-color: #ff453a; color: white; }
+            """)
+            # 用默认参数捕获当前索引，避免闭包延迟绑定
+            del_btn.clicked.connect(lambda _, idx=i: self._remove_target_at(idx))
+            row_layout.addWidget(del_btn)
+
+            self.target_container_layout.insertWidget(self.target_container_layout.count() - 1, row)
+
+    def _clear_targets(self):
+        """清空所有备份目标"""
+        if not self._target_paths:
+            return
+        reply = QMessageBox.question(
+            self, "确认", f"确定清空全部 {len(self._target_paths)} 个备份目标？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self._target_paths.clear()
+            self._rebuild_target_rows()
+            self._log("已清空所有备份目标")
 
     @safe_slot("启动备份失败")
     def _start_backup(self):
@@ -206,9 +309,7 @@ class BackupView(QWidget):
             QMessageBox.warning(self, "提示", "请先选择源路径")
             return
 
-        targets = []
-        for i in range(self.target_list.count()):
-            targets.append(self.target_list.item(i).text())
+        targets = list(self._target_paths)
 
         if not targets:
             QMessageBox.warning(self, "提示", "请至少添加一个备份目标")
