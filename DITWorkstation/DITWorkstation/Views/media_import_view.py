@@ -1,15 +1,16 @@
 """媒体导入页面"""
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QProgressBar, QGroupBox,
     QTextEdit, QCheckBox, QTableWidget,
     QTableWidgetItem, QHeaderView, QMessageBox,
-    QSplitter, QComboBox
+    QSplitter, QComboBox, QDateTimeEdit, QMenu, QApplication
 )
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QDateTime
 
 from DITWorkstation.Models import Project
 from DITWorkstation.Services.media_import_service import MediaImportService
@@ -31,6 +32,9 @@ class MediaImportView(RefreshOnShowView):
         self.pending_files = []
         self.worker = None
         self._cancel_requested = False
+        # 扫描得到的全部文件（含 stat 信息），时间筛选时在此列表上过滤，
+        # 避免每次调整时间范围都重新扫描存储卡。
+        self._all_scanned_files: list[Path] = []
         self._setup_ui()
         # 监听选择控件的 项目切换 信号，做本视图业务联动
         # （工作区/项目下拉与全局信号同步已由 WorkspaceProjectSelector 内部处理）
@@ -110,18 +114,61 @@ class MediaImportView(RefreshOnShowView):
         scan_row.addWidget(scan_btn)
         source_layout.addLayout(scan_row)
 
+        # 按时间筛选：影视拍摄常跨多天，用户可能只想导入某天的素材。
+        # 用文件修改时间筛选（存储卡上修改时间通常等于拍摄时间，无需读 EXIF，速度快）。
+        time_row = QHBoxLayout()
+        self.time_filter_check = QCheckBox("按时间筛选")
+        self.time_filter_check.setToolTip(
+            "勾选后只导入指定时间范围内的文件。\n"
+            "时间依据为文件修改时间（存储卡上通常等于拍摄时间）。"
+        )
+        self.time_filter_check.toggled.connect(self._on_time_filter_toggled)
+        time_row.addWidget(self.time_filter_check)
+
+        # 默认时间范围：今天 00:00 ~ 23:59
+        now = QDateTime.currentDateTime()
+        self.start_time_edit = QDateTimeEdit(now.addDays(-1))
+        self.start_time_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.start_time_edit.setCalendarPopup(True)
+        self.start_time_edit.setEnabled(False)
+        self.start_time_edit.dateTimeChanged.connect(self._apply_time_filter)
+        time_row.addWidget(self.start_time_edit)
+
+        time_row.addWidget(QLabel("至"))
+
+        self.end_time_edit = QDateTimeEdit(now)
+        self.end_time_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.end_time_edit.setCalendarPopup(True)
+        self.end_time_edit.setEnabled(False)
+        self.end_time_edit.dateTimeChanged.connect(self._apply_time_filter)
+        time_row.addWidget(self.end_time_edit)
+
+        # 快捷按钮：今天 / 最近7天 / 清除范围
+        self.today_btn = QPushButton("今天")
+        self.today_btn.setEnabled(False)
+        self.today_btn.clicked.connect(self._set_time_range_today)
+        time_row.addWidget(self.today_btn)
+
+        self.week_btn = QPushButton("最近7天")
+        self.week_btn.setEnabled(False)
+        self.week_btn.clicked.connect(self._set_time_range_week)
+        time_row.addWidget(self.week_btn)
+
+        source_layout.addLayout(time_row)
+
         right_layout.addWidget(source_group)
 
         files_group = QGroupBox("待导入文件")
         files_layout = QVBoxLayout(files_group)
 
         self.files_table = QTableWidget()
-        self.files_table.setColumnCount(4)
-        self.files_table.setHorizontalHeaderLabels(["文件名", "类型", "大小", "路径"])
+        self.files_table.setColumnCount(5)
+        self.files_table.setHorizontalHeaderLabels(["文件名", "类型", "大小", "修改时间", "路径"])
         self.files_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.files_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.files_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.files_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.files_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.files_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.files_table.setAlternatingRowColors(True)
         self.files_table.verticalHeader().setDefaultSectionSize(32)
@@ -340,9 +387,9 @@ class MediaImportView(RefreshOnShowView):
                 include_videos=self.include_videos.isChecked(),
                 include_raw=self.include_raw.isChecked()
             )
-            self.pending_files = [str(f) for f in files]
-            self._display_files(files)
-            self.import_btn.setEnabled(len(files) > 0 and self.current_project is not None)
+            # 保存全量列表，时间筛选时在此列表上过滤，无需重新扫描
+            self._all_scanned_files = files
+            self._apply_time_filter()
             total_size = sum(f.stat().st_size for f in files if f.exists())
             self._log(f"扫描完成: 发现 {len(files)} 个媒体文件, 总大小 {format_size(total_size)}")
         except Exception as e:
@@ -355,6 +402,62 @@ class MediaImportView(RefreshOnShowView):
                 parent=self,
             )
             self._log(f"扫描失败: {e}")
+
+    def _on_time_filter_toggled(self, checked: bool):
+        """启用/禁用时间筛选控件，并立即应用筛选"""
+        self.start_time_edit.setEnabled(checked)
+        self.end_time_edit.setEnabled(checked)
+        self.today_btn.setEnabled(checked)
+        self.week_btn.setEnabled(checked)
+        self._apply_time_filter()
+
+    def _set_time_range_today(self):
+        """快捷设置时间范围为今天 00:00 ~ 23:59"""
+        from PySide6.QtCore import QDate, QTime
+        d = QDateTime.currentDateTime().date()
+        self.start_time_edit.setDateTime(QDateTime(d, QTime(0, 0)))
+        self.end_time_edit.setDateTime(QDateTime(d, QTime(23, 59)))
+
+    def _set_time_range_week(self):
+        """快捷设置时间范围为最近7天"""
+        now = QDateTime.currentDateTime()
+        self.start_time_edit.setDateTime(now.addDays(-6))
+        self.end_time_edit.setDateTime(now)
+
+    def _apply_time_filter(self):
+        """根据时间筛选条件，从全量列表中过滤文件并刷新表格。
+
+        若未启用时间筛选，显示全部文件；启用时按文件修改时间筛选。
+        """
+        if not self._all_scanned_files:
+            return
+
+        if self.time_filter_check.isChecked():
+            start = self.start_time_edit.dateTime().toPython()
+            end = self.end_time_edit.dateTime().toPython()
+            filtered = []
+            for f in self._all_scanned_files:
+                try:
+                    mtime = datetime.fromtimestamp(f.stat().st_mtime)
+                    if start <= mtime <= end:
+                        filtered.append(f)
+                except Exception:
+                    # stat 失败的文件保留，避免遗漏
+                    filtered.append(f)
+            self._display_files(filtered)
+            self.pending_files = [str(f) for f in filtered]
+            self.files_label.setText(
+                f"共 {len(filtered)} 个文件"
+                f"（已从 {len(self._all_scanned_files)} 个中筛选）"
+            )
+        else:
+            self._display_files(self._all_scanned_files)
+            self.pending_files = [str(f) for f in self._all_scanned_files]
+            self.files_label.setText(f"共 {len(self._all_scanned_files)} 个文件")
+
+        self.import_btn.setEnabled(
+            len(self.pending_files) > 0 and self.current_project is not None
+        )
 
     def _display_files(self, files):
         self.files_table.setRowCount(len(files))
@@ -372,9 +475,12 @@ class MediaImportView(RefreshOnShowView):
             }
             self.files_table.setItem(i, 1, QTableWidgetItem(type_map.get(asset_type.value, asset_type.value)))
             self.files_table.setItem(i, 2, QTableWidgetItem(format_size(stat.st_size)))
-            self.files_table.setItem(i, 3, QTableWidgetItem(str(f.parent)))
-
-        self.files_label.setText(f"共 {len(files)} 个文件")
+            # 修改时间列（存储 timestamp 供排序，显示友好格式）
+            mtime = datetime.fromtimestamp(stat.st_mtime)
+            mtime_item = QTableWidgetItem(mtime.strftime("%Y-%m-%d %H:%M"))
+            mtime_item.setData(Qt.UserRole, stat.st_mtime)
+            self.files_table.setItem(i, 3, mtime_item)
+            self.files_table.setItem(i, 4, QTableWidgetItem(str(f.parent)))
 
     def _on_file_double_clicked(self, index):
         """双击待导入文件 → 打开所在目录（通过表格单元格文本定位，避免排序后行号错位）"""
@@ -382,7 +488,7 @@ class MediaImportView(RefreshOnShowView):
             return
         row = index.row()
         name_item = self.files_table.item(row, 0)
-        parent_item = self.files_table.item(row, 3)
+        parent_item = self.files_table.item(row, 4)
         if name_item is None or parent_item is None:
             return
         from pathlib import Path as _Path
@@ -392,14 +498,13 @@ class MediaImportView(RefreshOnShowView):
 
     def _on_files_context_menu(self, pos):
         """右键菜单：打开所在目录 / 复制路径"""
-        from PySide6.QtWidgets import QMenu, QApplication
         from pathlib import Path as _Path
         index = self.files_table.indexAt(pos)
         if not index.isValid():
             return
         row = index.row()
         name_item = self.files_table.item(row, 0)
-        parent_item = self.files_table.item(row, 3)
+        parent_item = self.files_table.item(row, 4)
         if name_item is None or parent_item is None:
             return
         path = str(_Path(parent_item.text()) / name_item.text())
