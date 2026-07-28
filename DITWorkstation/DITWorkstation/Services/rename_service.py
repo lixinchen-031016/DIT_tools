@@ -5,7 +5,7 @@ MetadataService 已拆离到 metadata_service.py（两者零耦合）。
 """
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 from datetime import datetime
 
 from DITWorkstation.Models import RenameRule
@@ -33,25 +33,35 @@ class RenameService:
             results.append((file_path, new_path))
         return results
 
-    def execute_rename(self, files: List[str], rule: RenameRule) -> List[Tuple[str, str]]:
+    def execute_rename(
+        self,
+        files: List[str],
+        rule: RenameRule,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> List[Tuple[str, str]]:
         """
         执行重命名
 
         Args:
             files: 文件路径列表
             rule: 重命名规则
+            progress_callback: 进度回调 (current, total, filename)，
+                current 从1开始，每处理一个文件后调用一次
 
         Returns:
             [(原路径, 新路径)] 成功重命名的列表
         """
         rename_pairs = self.preview_rename(files, rule)
         results = []
+        total = len(rename_pairs)
 
-        for old_path, new_path in rename_pairs:
+        for i, (old_path, new_path) in enumerate(rename_pairs):
             old = Path(old_path)
             new = Path(new_path)
 
             if not old.exists():
+                if progress_callback:
+                    progress_callback(i + 1, total, new.name)
                 continue
 
             # 避免覆盖已有文件
@@ -66,6 +76,9 @@ class RenameService:
             if old != new:
                 old.rename(new)
                 results.append((old_path, str(new)))
+
+            if progress_callback:
+                progress_callback(i + 1, total, new.name)
 
         return results
 

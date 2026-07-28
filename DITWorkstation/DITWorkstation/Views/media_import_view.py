@@ -16,7 +16,7 @@ from DITWorkstation.Services.media_import_service import MediaImportService
 from DITWorkstation.Utils import format_size, generate_log_message, WorkerThread, get_db_service, pick_directory, find_overwrite_conflicts
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
-from DITWorkstation.Views.Styles.theme import MONO_FONT_QSS
+from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, MONO_FONT_QSS
 
 
 class MediaImportView(RefreshOnShowView):
@@ -42,11 +42,11 @@ class MediaImportView(RefreshOnShowView):
         layout.setSpacing(16)
 
         title = QLabel("媒体导入")
-        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1d1d1f;")
+        title.setStyleSheet(TITLE_QSS)
         layout.addWidget(title)
 
         subtitle = QLabel("将图片、视频、RAW文件导入项目，原文件位置保持不动")
-        subtitle.setStyleSheet("font-size: 13px; color: #86868b;")
+        subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
         main_splitter = QSplitter(Qt.Horizontal)
@@ -135,7 +135,7 @@ class MediaImportView(RefreshOnShowView):
         attach_empty_state(self.files_table, "📁", "暂无待导入文件", "点击上方「浏览…」选择存储卡目录")
 
         self.files_label = QLabel("")
-        self.files_label.setStyleSheet("color: #86868b; font-size: 12px;")
+        self.files_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
         files_layout.addWidget(self.files_label)
 
         right_layout.addWidget(files_group, 1)
@@ -157,7 +157,7 @@ class MediaImportView(RefreshOnShowView):
 
         # 复制目标路径提示（只读，自动基于当前工作区.path/<项目名> 生成）
         self.copy_dest_label = QLabel("")
-        self.copy_dest_label.setStyleSheet("color: #86868b; font-size: 12px;")
+        self.copy_dest_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
         self.copy_mode_check.toggled.connect(self._on_copy_check_toggled)
         opt_row1.addWidget(self.copy_dest_label, 1)
 
@@ -178,17 +178,17 @@ class MediaImportView(RefreshOnShowView):
         action_row = QHBoxLayout()
         self.import_btn = QPushButton("📥 开始导入")
         self.import_btn.setToolTip("开始导入选中的文件到当前项目")
-        self.import_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0a84ff;
+        self.import_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR.PRIMARY};
                 color: white;
                 padding: 10px 32px;
-                border-radius: 8px;
-                font-size: 14px;
+                border-radius: {RADIUS.BUTTON}px;
+                font-size: {FONT_SIZE.MD}px;
                 font-weight: bold;
-            }
-            QPushButton:hover { background-color: #0070e0; }
-            QPushButton:disabled { background-color: #c7c7cc; }
+            }}
+            QPushButton:hover {{ background-color: {COLOR.PRIMARY_HOVER}; }}
+            QPushButton:disabled {{ background-color: {COLOR.DISABLED}; }}
         """)
         self.import_btn.clicked.connect(self._start_import)
         self.import_btn.setEnabled(False)
@@ -212,7 +212,7 @@ class MediaImportView(RefreshOnShowView):
         status_layout.addWidget(self.progress_bar)
 
         self.status_label = QLabel("就绪")
-        self.status_label.setStyleSheet("color: #86868b; font-size: 12px;")
+        self.status_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
         status_layout.addWidget(self.status_label)
 
         self.log_text = QTextEdit()
@@ -299,7 +299,7 @@ class MediaImportView(RefreshOnShowView):
             self.log_combo.setEnabled(False)
 
     def _select_folder(self):
-        path = pick_directory(self, "选择要导入的文件夹")
+        path = pick_directory(self, "选择要导入的文件夹", category="import_source")
         if path:
             self.source_edit.setText(path)
 
@@ -317,14 +317,14 @@ class MediaImportView(RefreshOnShowView):
         ws = self._get_current_workspace()
         if ws is None or not ws.path:
             self.copy_dest_label.setText("（未选择有效工作区或工作区无目录）")
-            self.copy_dest_label.setStyleSheet("color: #ff3b30; font-size: 12px;")
+            self.copy_dest_label.setStyleSheet(f"color: {COLOR.DANGER}; font-size: {FONT_SIZE.SM}px;")
             return
         if self.current_project:
             dest = str(Path(ws.path) / self.current_project.name)
         else:
             dest = str(Path(ws.path) / "<项目名>")
         self.copy_dest_label.setText(f"→ {dest}")
-        self.copy_dest_label.setStyleSheet("color: #86868b; font-size: 12px;")
+        self.copy_dest_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
 
     def _scan_folder(self):
         folder = self.source_edit.text()
@@ -346,7 +346,14 @@ class MediaImportView(RefreshOnShowView):
             total_size = sum(f.stat().st_size for f in files if f.exists())
             self._log(f"扫描完成: 发现 {len(files)} 个媒体文件, 总大小 {format_size(total_size)}")
         except Exception as e:
-            QMessageBox.critical(self, "扫描错误", str(e))
+            import traceback
+            from DITWorkstation.Views.Widgets.error_dialog import show_error
+            show_error(
+                title="扫描错误",
+                description=str(e),
+                details=traceback.format_exc(),
+                parent=self,
+            )
             self._log(f"扫描失败: {e}")
 
     def _display_files(self, files):
@@ -560,7 +567,13 @@ class MediaImportView(RefreshOnShowView):
         self.status_label.setText(f"❌ 错误: {error}")
         self._log(f"导入错误: {error}")
         self.worker = None
-        QMessageBox.critical(self, "导入错误", error)
+        from DITWorkstation.Views.Widgets.error_dialog import show_error
+        show_error(
+            title="导入错误",
+            description=error,
+            details=error,
+            parent=self,
+        )
 
     def _log(self, message: str):
         self.log_text.append(generate_log_message(message))

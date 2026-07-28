@@ -170,7 +170,7 @@ class _CreateWorkspacePage(QWizardPage):
         layout.addWidget(self._status_label)
 
     def _browse_dir(self):
-        d = pick_directory(self, "选择工作区目录")
+        d = pick_directory(self, "选择工作区目录", category="workspace")
         if d:
             self.path_edit.setText(d)
 

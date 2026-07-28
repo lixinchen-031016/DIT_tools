@@ -16,6 +16,7 @@ from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Utils import format_size, get_db_service, safe_slot
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS
 
 
 class ShootingLogView(RefreshOnShowView):
@@ -58,7 +59,7 @@ class ShootingLogView(RefreshOnShowView):
         right_panel.setContentsMargins(0, 0, 0, 0)
 
         title = QLabel("拍摄日志")
-        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1d1d1f;")
+        title.setStyleSheet(TITLE_QSS)
         right_panel.addWidget(title)
 
         # 新建日志表单
@@ -125,7 +126,7 @@ class ShootingLogView(RefreshOnShowView):
         self.select_assets_btn = QPushButton("选择关联素材")
         self.select_assets_btn.clicked.connect(self._pick_assets_for_new_log)
         self.selected_assets_label = QLabel("未选择")
-        self.selected_assets_label.setStyleSheet("color: #86868b;")
+        self.selected_assets_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY};")
         asset_select_row.addWidget(self.select_assets_btn)
         asset_select_row.addWidget(self.selected_assets_label, 1)
         form_layout.addRow("", asset_select_row)
@@ -134,17 +135,17 @@ class ShootingLogView(RefreshOnShowView):
         exif_row = QHBoxLayout()
         self.fill_exif_btn = QPushButton("📷 从代表素材填充 EXIF")
         self.fill_exif_btn.setToolTip("选择项目内一个素材，自动带出相机/镜头/ISO/光圈/快门")
-        self.fill_exif_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f0f0f0;
-                border: 1px solid #d1d1d6;
-                border-radius: 6px;
+        self.fill_exif_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR.BORDER_LIGHT};
+                border: 1px solid {COLOR.BORDER};
+                border-radius: {RADIUS.INPUT}px;
                 padding: 6px 12px;
-                font-size: 12px;
-                color: #1d1d1f;
-            }
-            QPushButton:hover { background-color: #e5e5ea; }
-            QPushButton:disabled { color: #c7c7cc; border-color: #e5e5ea; }
+                font-size: {FONT_SIZE.SM}px;
+                color: {COLOR.TEXT_PRIMARY};
+            }}
+            QPushButton:hover {{ background-color: {COLOR.BORDER}; }}
+            QPushButton:disabled {{ color: {COLOR.DISABLED}; border-color: {COLOR.BORDER}; }}
         """)
         self.fill_exif_btn.clicked.connect(self._fill_exif_from_asset)
         exif_row.addWidget(self.fill_exif_btn)
@@ -153,15 +154,15 @@ class ShootingLogView(RefreshOnShowView):
 
         add_log_btn = QPushButton("添加日志")
         add_log_btn.setToolTip("新建拍摄日志")
-        add_log_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0a84ff;
+        add_log_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR.PRIMARY};
                 color: white;
                 padding: 8px 20px;
-                border-radius: 6px;
+                border-radius: {RADIUS.INPUT}px;
                 font-weight: bold;
-            }
-            QPushButton:hover { background-color: #0070e0; }
+            }}
+            QPushButton:hover {{ background-color: {COLOR.PRIMARY_HOVER}; }}
         """)
         add_log_btn.clicked.connect(self._add_log)
         form_layout.addRow("", add_log_btn)
@@ -227,7 +228,7 @@ class ShootingLogView(RefreshOnShowView):
         asset_btn_row.addWidget(self.unlink_asset_btn)
 
         self.asset_count_label = QLabel("")
-        self.asset_count_label.setStyleSheet("color: #86868b;")
+        self.asset_count_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY};")
         asset_btn_row.addWidget(self.asset_count_label)
         asset_btn_row.addStretch()
         linked_layout.addLayout(asset_btn_row)
@@ -262,7 +263,7 @@ class ShootingLogView(RefreshOnShowView):
         proj_btn_row.addWidget(self.log_selected_btn)
 
         self.proj_asset_count_label = QLabel("")
-        self.proj_asset_count_label.setStyleSheet("color: #86868b;")
+        self.proj_asset_count_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY};")
         proj_btn_row.addWidget(self.proj_asset_count_label)
         proj_btn_row.addStretch()
         proj_layout.addLayout(proj_btn_row)

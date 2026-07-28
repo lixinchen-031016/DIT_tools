@@ -7,7 +7,8 @@ from .common import (
     get_relative_path, calculate_speed, Logger, logger,
     get_db_service, get_checksum_service, reset_singletons,
     safe_slot, pick_directory, pick_save_file,
-    open_in_file_manager, find_overwrite_conflicts
+    open_in_file_manager, find_overwrite_conflicts,
+    add_recent_path, get_recent_paths,
 )
 from .workers import WorkerSignals, WorkerThread, SimpleWorkerThread
 
@@ -20,5 +21,6 @@ __all__ = [
     'WorkerSignals', 'WorkerThread', 'SimpleWorkerThread',
     'get_db_service', 'get_checksum_service', 'reset_singletons',
     'safe_slot', 'pick_directory', 'pick_save_file',
-    'open_in_file_manager', 'find_overwrite_conflicts'
+    'open_in_file_manager', 'find_overwrite_conflicts',
+    'add_recent_path', 'get_recent_paths',
 ]

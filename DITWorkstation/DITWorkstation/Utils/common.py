@@ -1,5 +1,6 @@
 """通用工具模块"""
 import re
+import json
 import logging
 import functools
 import threading
@@ -110,8 +111,138 @@ def calculate_speed(elapsed_seconds: float, bytes_transferred: int) -> float:
     return (bytes_transferred / 1024 / 1024) / elapsed_seconds
 
 
-def pick_directory(parent=None, title: str = "选择目录", start_path: str = "") -> str:
-    """统一的目录选择对话框（打包后兼容）。
+# ===== 最近使用路径管理 =====
+_RECENT_PATHS_KEY = "recent_directories"
+_MAX_RECENT = 10
+
+
+def _get_settings_path() -> Path:
+    """返回 settings.json 路径（与 DB 同目录）"""
+    from DITWorkstation.App import config
+    return Path(config.effective_db_dir) / "settings.json"
+
+
+def _load_settings() -> dict:
+    """加载 settings.json"""
+    path = _get_settings_path()
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_settings(settings: dict):
+    """保存 settings.json"""
+    path = _get_settings_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"保存 settings.json 失败: {e}")
+
+
+def add_recent_path(path: str, category: str = "default"):
+    """记录最近使用的路径。
+
+    Args:
+        path: 目录路径
+        category: 路径分类（如 'import_source', 'backup_target' 等），
+                  不同分类各自维护独立的最近列表
+    """
+    if not path:
+        return
+    settings = _load_settings()
+    key = f"{_RECENT_PATHS_KEY}_{category}"
+    paths = settings.get(key, [])
+    # 去重并移到最前
+    if path in paths:
+        paths.remove(path)
+    paths.insert(0, path)
+    # 保留最多 _MAX_RECENT 条
+    paths = paths[:_MAX_RECENT]
+    settings[key] = paths
+    _save_settings(settings)
+
+
+def get_recent_paths(category: str = "default") -> list:
+    """获取最近使用的路径列表。
+
+    Args:
+        category: 路径分类
+
+    Returns:
+        最近路径字符串列表（最近使用的在最前），无记录时返回空列表
+    """
+    settings = _load_settings()
+    key = f"{_RECENT_PATHS_KEY}_{category}"
+    return settings.get(key, [])
+
+
+def _show_recent_paths_dialog(parent, title: str, recent_paths: list) -> str:
+    """弹出最近路径选择对话框。
+
+    Returns:
+        选中的路径、'__browse__'（浏览新目录）或空字符串（取消）。
+    """
+    from PySide6.QtWidgets import (
+        QDialog, QVBoxLayout, QListWidget, QListWidgetItem,
+        QPushButton, QHBoxLayout, QLabel,
+    )
+
+    dialog = QDialog(parent)
+    dialog.setWindowTitle(f"{title} - 最近使用")
+    dialog.setMinimumWidth(500)
+    layout = QVBoxLayout(dialog)
+
+    layout.addWidget(QLabel("选择最近使用的目录，或点击「浏览…」选择新目录："))
+
+    list_widget = QListWidget()
+    for p in recent_paths:
+        item = QListWidgetItem(p)
+        item.setToolTip(p)
+        list_widget.addItem(item)
+    list_widget.itemDoubleClicked.connect(lambda item: dialog.done(QDialog.Accepted))
+    layout.addWidget(list_widget)
+
+    btn_row = QHBoxLayout()
+    browse_btn = QPushButton("浏览…")
+    browse_btn.clicked.connect(lambda: dialog.done(2))  # 自定义返回码 2 = 浏览
+    btn_row.addWidget(browse_btn)
+    btn_row.addStretch()
+
+    # 如果列表非空，默认选中第一项
+    if list_widget.count() > 0:
+        list_widget.setCurrentRow(0)
+        select_btn = QPushButton("选择")
+        select_btn.clicked.connect(lambda: dialog.done(QDialog.Accepted))
+        btn_row.addWidget(select_btn)
+
+    cancel_btn = QPushButton("取消")
+    cancel_btn.clicked.connect(lambda: dialog.done(QDialog.Rejected))
+    btn_row.addWidget(cancel_btn)
+    layout.addLayout(btn_row)
+
+    result = dialog.exec()
+    if result == QDialog.Accepted:
+        item = list_widget.currentItem()
+        return item.text() if item else ""
+    elif result == 2:
+        return "__browse__"
+    else:
+        return ""
+
+
+def pick_directory(
+    parent=None,
+    title: str = "选择目录",
+    start_path: str = "",
+    category: str = "default",
+) -> str:
+    """统一的目录选择对话框（打包后兼容），支持最近使用记录。
 
     Windows 打包后原生 QFileDialog 可能因 COM 初始化 / manifest 问题返回空字符串
     （即使选中了目录）。若先弹原生再回退非原生，会弹两次对话框，用户取消第二次
@@ -120,8 +251,28 @@ def pick_directory(parent=None, title: str = "选择目录", start_path: str = "
     此处在 frozen（PyInstaller 打包）环境下直接使用 Qt 非原生对话框；
     开发环境仍用原生以获得更好体验。
 
+    Args:
+        parent: 父窗口
+        title: 对话框标题
+        start_path: 起始路径
+        category: 路径分类（如 'import_source', 'backup_target', 'raw_jpg' 等），
+                  不同分类各自维护独立的最近使用列表
+
     Returns: 选中的目录路径，未选择或取消返回空字符串。
     """
+    recent = get_recent_paths(category)
+    # 如果有最近路径，先弹出选择对话框
+    if recent:
+        choice = _show_recent_paths_dialog(parent, title, recent)
+        if choice == "__browse__":
+            pass  # 继续走 QFileDialog
+        elif not choice:
+            return ""  # 用户取消
+        else:
+            # 用户选了最近路径，更新 MRU 顺序后直接返回
+            add_recent_path(choice, category)
+            return choice
+
     import sys
     from PySide6.QtWidgets import QFileDialog
     if getattr(sys, 'frozen', False):
@@ -131,7 +282,10 @@ def pick_directory(parent=None, title: str = "选择目录", start_path: str = "
         )
     else:
         path = QFileDialog.getExistingDirectory(parent, title, start_path)
-    return path or ""
+    path = path or ""
+    if path:
+        add_recent_path(path, category)
+    return path
 
 
 def pick_save_file(

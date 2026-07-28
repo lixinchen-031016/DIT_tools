@@ -11,6 +11,7 @@ from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger,
 from DITWorkstation.Models import RATING_LABELS, AssetRating
 from DITWorkstation.Views.Widgets import RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS
 
 
 class SearchView(RefreshOnShowView):
@@ -40,11 +41,11 @@ class SearchView(RefreshOnShowView):
 
         # 标题
         title = QLabel("素材检索")
-        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1d1d1f;")
+        title.setStyleSheet(TITLE_QSS)
         layout.addWidget(title)
 
         subtitle = QLabel("按场景、镜头、日期、文件类型等维度快速检索素材")
-        subtitle.setStyleSheet("font-size: 13px; color: #86868b;")
+        subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
         # 搜索条件
@@ -125,17 +126,7 @@ class SearchView(RefreshOnShowView):
         btn_layout = QHBoxLayout()
         self.search_btn = QPushButton("🔍 搜索")
         self.search_btn.setToolTip("按条件检索素材")
-        self.search_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0a84ff;
-                color: white;
-                padding: 10px 24px;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #0070e0; }
-        """)
+        self.search_btn.setStyleSheet(PRIMARY_BUTTON_QSS)
         self.search_btn.clicked.connect(self._search)
         reset_btn = QPushButton("重置")
         reset_btn.clicked.connect(self._reset)
@@ -143,7 +134,7 @@ class SearchView(RefreshOnShowView):
         btn_layout.addWidget(reset_btn)
         btn_layout.addStretch()
         self.result_label = QLabel("")
-        self.result_label.setStyleSheet("color: #86868b;")
+        self.result_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY};")
         btn_layout.addWidget(self.result_label)
         layout.addLayout(btn_layout)
 
@@ -169,8 +160,8 @@ class SearchView(RefreshOnShowView):
         self.stale_banner = QLabel("")
         self.stale_banner.setVisible(False)
         self.stale_banner.setStyleSheet(
-            "background-color: #fff3cd; color: #856404; padding: 8px 12px; "
-            "border-radius: 6px; border: 1px solid #ffe08a;"
+            f"background-color: {COLOR.BANNER_WARNING_BG}; color: {COLOR.BANNER_WARNING_FG}; "
+            f"padding: 8px 12px; border-radius: {RADIUS.INPUT}px; border: 1px solid {COLOR.BANNER_WARNING_BORDER};"
         )
         # 点击提示条触发重搜
         self.stale_banner.mousePressEvent = lambda _e: self._search()
@@ -339,10 +330,10 @@ class SearchView(RefreshOnShowView):
             self.result_label.setText(
                 f"找到 {len(results)}+ 条结果（已截断，请缩小搜索条件以查看全部）"
             )
-            self.result_label.setStyleSheet("color: #ff9500; font-weight: 600;")
+            self.result_label.setStyleSheet(f"color: {COLOR.WARNING}; font-weight: 600;")
         else:
             self.result_label.setText(f"找到 {len(results)} 条结果")
-            self.result_label.setStyleSheet("color: #86868b;")
+            self.result_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY};")
         # 新搜索完成后隐藏过期提示
         self.stale_banner.setVisible(False)
 

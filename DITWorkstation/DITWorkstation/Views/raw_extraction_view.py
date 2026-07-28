@@ -13,6 +13,7 @@ from DITWorkstation.Utils.workers import SimpleWorkerThread
 from DITWorkstation.Utils import get_db_service, logger, pick_directory
 from DITWorkstation.Views.Widgets import RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS
 
 
 class RawExtractionView(RefreshOnShowView):
@@ -39,11 +40,11 @@ class RawExtractionView(RefreshOnShowView):
 
         # 标题
         title = QLabel("JPG筛选后提取RAW")
-        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1d1d1f;")
+        title.setStyleSheet(TITLE_QSS)
         layout.addWidget(title)
 
         subtitle = QLabel("选择客户筛选后的JPG文件夹，自动匹配并提取对应的RAW文件")
-        subtitle.setStyleSheet("font-size: 13px; color: #86868b;")
+        subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
         # 关联项目 + 自动入库
@@ -76,7 +77,7 @@ class RawExtractionView(RefreshOnShowView):
         self.jpg_edit.setPlaceholderText("选择筛选后的JPG文件夹...")
         self.jpg_edit.setReadOnly(True)
         jpg_btn = QPushButton("浏览…")
-        jpg_btn.clicked.connect(lambda: self._select_folder(self.jpg_edit, "选择JPG文件夹"))
+        jpg_btn.clicked.connect(lambda: self._select_folder(self.jpg_edit, "选择JPG文件夹", category="raw_jpg"))
         jpg_row.addWidget(self.jpg_edit, 1)
         jpg_row.addWidget(jpg_btn)
         path_layout.addRow("JPG文件夹:", jpg_row)
@@ -91,7 +92,7 @@ class RawExtractionView(RefreshOnShowView):
             "常见格式：CR2/CR3（佳能）、NEF（尼康）、ARW（索尼）。"
         )
         raw_btn = QPushButton("浏览…")
-        raw_btn.clicked.connect(lambda: self._select_folder(self.raw_edit, "选择RAW源文件夹"))
+        raw_btn.clicked.connect(lambda: self._select_folder(self.raw_edit, "选择RAW源文件夹", category="raw_raw_dir"))
         raw_row.addWidget(self.raw_edit, 1)
         raw_row.addWidget(raw_btn)
         path_layout.addRow("RAW源文件夹:", raw_row)
@@ -102,7 +103,7 @@ class RawExtractionView(RefreshOnShowView):
         self.output_edit.setPlaceholderText("选择RAW输出文件夹...")
         self.output_edit.setReadOnly(True)
         out_btn = QPushButton("浏览…")
-        out_btn.clicked.connect(lambda: self._select_folder(self.output_edit, "选择输出文件夹"))
+        out_btn.clicked.connect(lambda: self._select_folder(self.output_edit, "选择输出文件夹", category="raw_output"))
         out_row.addWidget(self.output_edit, 1)
         out_row.addWidget(out_btn)
         path_layout.addRow("输出文件夹:", out_row)
@@ -125,18 +126,7 @@ class RawExtractionView(RefreshOnShowView):
         self.scan_btn.clicked.connect(self._scan_match)
         self.extract_btn = QPushButton("开始提取")
         self.extract_btn.setToolTip("从选中的 JPG 提取对应的 RAW 文件")
-        self.extract_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0a84ff;
-                color: white;
-                padding: 10px 24px;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #0070e0; }
-            QPushButton:disabled { background-color: #c7c7cc; }
-        """)
+        self.extract_btn.setStyleSheet(PRIMARY_BUTTON_QSS)
         self.extract_btn.clicked.connect(self._start_extraction)
         self.extract_btn.setEnabled(False)
 
@@ -167,7 +157,7 @@ class RawExtractionView(RefreshOnShowView):
         attach_empty_state(self.result_table, "🔍", "暂无匹配结果", "选择 JPG 和 RAW 目录后点击「扫描匹配」")
 
         self.match_label = QLabel("")
-        self.match_label.setStyleSheet("color: #86868b; font-size: 12px;")
+        self.match_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
         result_layout.addWidget(self.match_label)
         layout.addWidget(result_group)
 
@@ -178,13 +168,13 @@ class RawExtractionView(RefreshOnShowView):
         layout.addWidget(self.progress_bar)
 
         self.status_label = QLabel("就绪")
-        self.status_label.setStyleSheet("color: #86868b; font-size: 12px;")
+        self.status_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
         layout.addWidget(self.status_label)
 
         layout.addStretch()
 
-    def _select_folder(self, edit: QLineEdit, title: str):
-        path = pick_directory(self, title)
+    def _select_folder(self, edit: QLineEdit, title: str, category: str = "default"):
+        path = pick_directory(self, title, category=category)
         if path:
             edit.setText(path)
 
@@ -228,7 +218,14 @@ class RawExtractionView(RefreshOnShowView):
             self.status_label.setText(f"扫描完成: {matched_count}/{len(matches)} 匹配成功")
 
         except Exception as e:
-            QMessageBox.critical(self, "扫描错误", str(e))
+            import traceback
+            from DITWorkstation.Views.Widgets.error_dialog import show_error
+            show_error(
+                title="扫描错误",
+                description=str(e),
+                details=traceback.format_exc(),
+                parent=self,
+            )
 
     def _start_extraction(self):
         output = self.output_edit.text()
@@ -423,4 +420,10 @@ class RawExtractionView(RefreshOnShowView):
         self.cancel_btn.setEnabled(False)
         self.status_label.setText(f"❌ 错误: {error}")
         self.worker = None
-        QMessageBox.critical(self, "提取错误", error)
+        from DITWorkstation.Views.Widgets.error_dialog import show_error
+        show_error(
+            title="提取错误",
+            description=error,
+            details=error,
+            parent=self,
+        )

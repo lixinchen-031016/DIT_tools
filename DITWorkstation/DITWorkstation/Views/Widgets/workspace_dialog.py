@@ -50,7 +50,7 @@ class WorkspaceDialog(QDialog):
         browse_btn = QPushButton("浏览…")
 
         def _browse():
-            d = pick_directory(self, "选择工作区目录", self.path_edit.text())
+            d = pick_directory(self, "选择工作区目录", self.path_edit.text(), category="workspace")
             if d:
                 self.path_edit.setText(d)
 

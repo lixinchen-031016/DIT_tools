@@ -15,7 +15,7 @@ from DITWorkstation.Services.backup_service import BackupService
 from DITWorkstation.Services.media_import_service import MediaImportService
 from DITWorkstation.Utils import WorkerThread, format_size, generate_log_message, safe_slot, get_db_service, pick_directory, find_overwrite_conflicts
 from DITWorkstation.Views.Widgets import RefreshOnShowView
-from DITWorkstation.Views.Styles.theme import MONO_FONT_QSS
+from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS, MONO_FONT_QSS
 
 
 class BackupView(RefreshOnShowView):
@@ -44,11 +44,11 @@ class BackupView(RefreshOnShowView):
 
         # 标题
         title = QLabel("数据备份")
-        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1d1d1f;")
+        title.setStyleSheet(TITLE_QSS)
         layout.addWidget(title)
 
         subtitle = QLabel("从存储卡安全拷贝素材，支持多目标并行备份与校验和验证")
-        subtitle.setStyleSheet("font-size: 13px; color: #86868b;")
+        subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
         # 关联项目（可选，但建议选择以便回写 asset.backup_locations）
@@ -87,17 +87,17 @@ class BackupView(RefreshOnShowView):
         self.target_scroll.setWidgetResizable(True)
         self.target_scroll.setMinimumHeight(80)
         self.target_scroll.setFrameShape(QFrame.NoFrame)
-        self.target_scroll.setStyleSheet("""
-            QScrollArea {
-                background-color: #ffffff;
-                border: 1px solid #d2d2d7;
-                border-radius: 6px;
-            }
+        self.target_scroll.setStyleSheet(f"""
+            QScrollArea {{
+                background-color: {COLOR.BG_CARD};
+                border: 1px solid {COLOR.BORDER};
+                border-radius: {RADIUS.INPUT}px;
+            }}
         """)
 
         # 内部容器，动态添加路径行
         self.target_container = QWidget()
-        self.target_container.setStyleSheet("background-color: #ffffff;")
+        self.target_container.setStyleSheet(f"background-color: {COLOR.BG_CARD};")
         self.target_container_layout = QVBoxLayout(self.target_container)
         self.target_container_layout.setContentsMargins(0, 0, 0, 0)
         self.target_container_layout.setSpacing(2)
@@ -107,7 +107,7 @@ class BackupView(RefreshOnShowView):
 
         # 空状态提示
         self.target_empty_label = QLabel("（暂无备份目标，点击下方「添加目标」按钮）")
-        self.target_empty_label.setStyleSheet("color: #86868b; font-size: 12px; padding: 8px;")
+        self.target_empty_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px; padding: 8px;")
         target_layout.addWidget(self.target_empty_label)
 
         target_btn_layout = QHBoxLayout()
@@ -147,18 +147,7 @@ class BackupView(RefreshOnShowView):
         btn_layout = QHBoxLayout()
         self.start_btn = QPushButton("📦 开始备份")
         self.start_btn.setToolTip("开始备份（将文件复制到所有目标目录）")
-        self.start_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0a84ff;
-                color: white;
-                padding: 10px 24px;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #0070e0; }
-            QPushButton:disabled { background-color: #c7c7cc; }
-        """)
+        self.start_btn.setStyleSheet(PRIMARY_BUTTON_QSS)
         self.start_btn.clicked.connect(self._start_backup)
 
         self.cancel_btn = QPushButton("取消")
@@ -181,7 +170,7 @@ class BackupView(RefreshOnShowView):
         status_layout.addWidget(self.progress_bar)
 
         self.status_label = QLabel("就绪")
-        self.status_label.setStyleSheet("color: #86868b; font-size: 12px;")
+        self.status_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
         status_layout.addWidget(self.status_label)
 
         self.log_text = QTextEdit()
@@ -200,12 +189,12 @@ class BackupView(RefreshOnShowView):
         except Exception as e:
             self._log(f"刷新工作区/项目列表失败: {e}")
 
-    def _pick_directory(self, title: str) -> str:
+    def _pick_directory(self, title: str, category: str = "default") -> str:
         """统一的目录选择对话框（委托给共享工具函数，处理打包兼容）。"""
-        return pick_directory(self, title)
+        return pick_directory(self, title, category=category)
 
     def _select_source(self):
-        path = self._pick_directory("选择存储卡路径")
+        path = self._pick_directory("选择存储卡路径", category="backup_source")
         if path:
             self.source_edit.setText(path)
             # 扫描文件信息
@@ -218,7 +207,7 @@ class BackupView(RefreshOnShowView):
                 self._log(f"扫描失败: {e}")
 
     def _add_target(self):
-        path = self._pick_directory("选择备份目标路径")
+        path = self._pick_directory("选择备份目标路径", category="backup_target")
         if path:
             self._target_paths.append(path)
             self._rebuild_target_rows()
@@ -252,11 +241,11 @@ class BackupView(RefreshOnShowView):
 
         for i, path in enumerate(self._target_paths):
             row = QWidget()
-            row.setStyleSheet("""
-                QWidget {
-                    background-color: #f5f5f7;
-                    border-radius: 4px;
-                }
+            row.setStyleSheet(f"""
+                QWidget {{
+                    background-color: {COLOR.BG_APP};
+                    border-radius: {RADIUS.ROW}px;
+                }}
             """)
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(8, 4, 4, 4)
@@ -264,12 +253,12 @@ class BackupView(RefreshOnShowView):
 
             idx_label = QLabel(f"{i + 1}.")
             idx_label.setFixedWidth(24)
-            idx_label.setStyleSheet("color: #86868b; font-weight: bold; background: transparent;")
+            idx_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-weight: bold; background: transparent;")
             row_layout.addWidget(idx_label)
 
             path_label = QLabel(path)
             path_label.setToolTip(path)
-            path_label.setStyleSheet("color: #1d1d1f; background: transparent;")
+            path_label.setStyleSheet(f"color: {COLOR.TEXT_PRIMARY}; background: transparent;")
             path_label.setWordWrap(False)
             path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
             row_layout.addWidget(path_label, 1)
@@ -277,15 +266,15 @@ class BackupView(RefreshOnShowView):
             del_btn = QPushButton("✕")
             del_btn.setFixedSize(24, 24)
             del_btn.setToolTip("移除此目标")
-            del_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #e8e8ed;
+            del_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {COLOR.BORDER_LIGHT};
                     border: none;
-                    border-radius: 4px;
-                    color: #86868b;
-                    font-size: 12px;
-                }
-                QPushButton:hover { background-color: #ff453a; color: white; }
+                    border-radius: {RADIUS.ROW}px;
+                    color: {COLOR.TEXT_SECONDARY};
+                    font-size: {FONT_SIZE.SM}px;
+                }}
+                QPushButton:hover {{ background-color: {COLOR.DANGER_HOVER}; color: white; }}
             """)
             # 用默认参数捕获当前索引，避免闭包延迟绑定
             del_btn.clicked.connect(lambda _, idx=i: self._remove_target_at(idx))
@@ -499,7 +488,13 @@ class BackupView(RefreshOnShowView):
         self.status_label.setText(f"❌ 错误: {error}")
         self._log(f"错误: {error}")
         self.worker = None
-        QMessageBox.critical(self, "备份错误", error)
+        from DITWorkstation.Views.Widgets.error_dialog import show_error
+        show_error(
+            title="备份错误",
+            description=error,
+            details=error,
+            parent=self,
+        )
 
     def _log(self, message: str):
         self.log_text.append(generate_log_message(message))

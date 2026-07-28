@@ -14,31 +14,32 @@ from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger, open_in_file_manager
 from DITWorkstation.Views.Widgets import RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS
 
 # 缺失值占位符
 _PLACEHOLDER = "—"
 
 # 值标签样式：有值时深色加粗，缺失时灰色
-_STYLE_HAS_VALUE = "color: #1d1d1f; font-size: 13px; font-weight: 500;"
-_STYLE_MISSING = "color: #c7c7cc; font-size: 13px; font-style: italic;"
+_STYLE_HAS_VALUE = f"color: {COLOR.TEXT_PRIMARY}; font-size: {FONT_SIZE.BASE}px; font-weight: 500;"
+_STYLE_MISSING = f"color: {COLOR.DISABLED}; font-size: {FONT_SIZE.BASE}px; font-style: italic;"
 
 # 分组标题样式
-_GROUP_STYLE = """
-    QGroupBox {
-        font-size: 14px;
+_GROUP_STYLE = f"""
+    QGroupBox {{
+        font-size: {FONT_SIZE.MD}px;
         font-weight: 600;
-        color: #1d1d1f;
-        border: 1px solid #e5e5ea;
-        border-radius: 10px;
+        color: {COLOR.TEXT_PRIMARY};
+        border: 1px solid {COLOR.BORDER};
+        border-radius: {RADIUS.GROUP}px;
         margin-top: 12px;
         padding-top: 16px;
-        background-color: #fafafa;
-    }
-    QGroupBox::title {
+        background-color: {COLOR.BG_GROUP};
+    }}
+    QGroupBox::title {{
         subcontrol-origin: margin;
         left: 16px;
         padding: 0 6px;
-    }
+    }}
 """
 
 
@@ -161,28 +162,28 @@ class AssetInfoView(RefreshOnShowView):
         title_col = QVBoxLayout()
         title_col.setSpacing(2)
         title = QLabel("素材信息")
-        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1d1d1f;")
+        title.setStyleSheet(TITLE_QSS)
         title_col.addWidget(title)
         subtitle = QLabel("查看导入素材的 EXIF 拍摄信息与文件元数据详情")
-        subtitle.setStyleSheet("font-size: 13px; color: #86868b;")
+        subtitle.setStyleSheet(SUBTITLE_QSS)
         title_col.addWidget(subtitle)
         header.addLayout(title_col)
         header.addStretch()
 
         # 一键重新读取 EXIF 按钮
         self.batch_exif_btn = QPushButton("🔄 一键重新读取全部 EXIF")
-        self.batch_exif_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0a84ff;
+        self.batch_exif_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR.PRIMARY};
                 color: white;
                 border: none;
-                border-radius: 8px;
+                border-radius: {RADIUS.BUTTON}px;
                 padding: 8px 16px;
-                font-size: 13px;
+                font-size: {FONT_SIZE.BASE}px;
                 font-weight: 600;
-            }
-            QPushButton:hover { background-color: #0071e3; }
-            QPushButton:disabled { background-color: #c7c7cc; }
+            }}
+            QPushButton:hover {{ background-color: {COLOR.PRIMARY_HOVER}; }}
+            QPushButton:disabled {{ background-color: {COLOR.DISABLED}; }}
         """)
         self.batch_exif_btn.clicked.connect(self._batch_refresh_exif)
         self.batch_exif_btn.setEnabled(False)
@@ -210,7 +211,7 @@ class AssetInfoView(RefreshOnShowView):
 
         # 素材计数标签
         self.asset_count_label = QLabel("")
-        self.asset_count_label.setStyleSheet("font-size: 12px; color: #86868b;")
+        self.asset_count_label.setStyleSheet(f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};")
         left_layout.addWidget(self.asset_count_label)
 
         self.asset_table = QTableWidget()
@@ -255,25 +256,25 @@ class AssetInfoView(RefreshOnShowView):
         # 当前选中文件名标题
         self.current_file_label = QLabel("请选择左侧素材查看详情")
         self.current_file_label.setStyleSheet(
-            "font-size: 16px; font-weight: 600; color: #1d1d1f; "
-            "padding: 8px 0 12px 0;"
+            f"font-size: 16px; font-weight: 600; color: {COLOR.TEXT_PRIMARY}; "
+            f"padding: 8px 0 12px 0;"
         )
         props_layout.addWidget(self.current_file_label)
 
         # 单个文件刷新按钮
         single_refresh_row = QHBoxLayout()
         self.refresh_exif_btn = QPushButton("重新读取当前文件 EXIF")
-        self.refresh_exif_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f0f0f0;
-                border: 1px solid #d1d1d6;
-                border-radius: 6px;
+        self.refresh_exif_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR.BORDER_LIGHT};
+                border: 1px solid {COLOR.BORDER};
+                border-radius: {RADIUS.INPUT}px;
                 padding: 6px 14px;
-                font-size: 12px;
-                color: #1d1d1f;
-            }
-            QPushButton:hover { background-color: #e5e5ea; }
-            QPushButton:disabled { color: #c7c7cc; border-color: #e5e5ea; }
+                font-size: {FONT_SIZE.SM}px;
+                color: {COLOR.TEXT_PRIMARY};
+            }}
+            QPushButton:hover {{ background-color: {COLOR.BORDER}; }}
+            QPushButton:disabled {{ color: {COLOR.DISABLED}; border-color: {COLOR.BORDER}; }}
         """)
         self.refresh_exif_btn.clicked.connect(self._refresh_single_exif)
         self.refresh_exif_btn.setEnabled(False)
@@ -284,7 +285,7 @@ class AssetInfoView(RefreshOnShowView):
         # 镜次评级快捷按钮（评级值与标签来自 Models.RATING_LABELS 单一事实源）
         rating_row = QHBoxLayout()
         rating_label = QLabel("⭐ 镜次评级")
-        rating_label.setStyleSheet("font-size: 13px; font-weight: 600; color: #1d1d1f; padding: 4px 0;")
+        rating_label.setStyleSheet(f"font-size: {FONT_SIZE.BASE}px; font-weight: 600; color: {COLOR.TEXT_PRIMARY}; padding: 4px 0;")
         rating_row.addWidget(rating_label)
         rating_row.addStretch()
 
@@ -295,22 +296,22 @@ class AssetInfoView(RefreshOnShowView):
             btn = QPushButton(text)
             btn.setCheckable(True)
             btn.setEnabled(False)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #f0f0f0;
-                    border: 1px solid #d1d1d6;
-                    border-radius: 6px;
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {COLOR.BORDER_LIGHT};
+                    border: 1px solid {COLOR.BORDER};
+                    border-radius: {RADIUS.INPUT}px;
                     padding: 4px 10px;
-                    font-size: 12px;
-                    color: #1d1d1f;
-                }
-                QPushButton:hover { background-color: #e5e5ea; }
-                QPushButton:checked {
-                    background-color: #0a84ff;
+                    font-size: {FONT_SIZE.SM}px;
+                    color: {COLOR.TEXT_PRIMARY};
+                }}
+                QPushButton:hover {{ background-color: {COLOR.BORDER}; }}
+                QPushButton:checked {{
+                    background-color: {COLOR.PRIMARY};
                     color: white;
-                    border-color: #0a84ff;
-                }
-                QPushButton:disabled { color: #c7c7cc; border-color: #e5e5ea; }
+                    border-color: {COLOR.PRIMARY};
+                }}
+                QPushButton:disabled {{ color: {COLOR.DISABLED}; border-color: {COLOR.BORDER}; }}
             """)
             btn.clicked.connect(lambda checked, v=value: self._set_rating(v))
             self._rating_buttons.append((value, btn))
@@ -390,7 +391,7 @@ class AssetInfoView(RefreshOnShowView):
         batch_layout.setSpacing(4)
 
         self.batch_status_label = QLabel("")
-        self.batch_status_label.setStyleSheet("font-size: 12px; color: #86868b;")
+        self.batch_status_label.setStyleSheet(f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};")
         batch_layout.addWidget(self.batch_status_label)
 
         self.batch_progress = QProgressBar()
@@ -418,7 +419,7 @@ class AssetInfoView(RefreshOnShowView):
             field_label.setFixedWidth(90)
             field_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             field_label.setStyleSheet(
-                "color: #86868b; font-size: 12px; font-weight: 500;"
+                f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px; font-weight: 500;"
             )
 
             value_label = QLabel(_PLACEHOLDER)
@@ -808,7 +809,13 @@ class AssetInfoView(RefreshOnShowView):
         self._batch_worker = None
         from PySide6.QtCore import QTimer
         QTimer.singleShot(3000, lambda: self.batch_progress_frame.setVisible(False))
-        QMessageBox.critical(self, "批量读取出错", error_msg)
+        from DITWorkstation.Views.Widgets.error_dialog import show_error
+        show_error(
+            title="批量读取出错",
+            description=error_msg,
+            details=error_msg,
+            parent=self,
+        )
 
     def _on_batch_finished(self, success, total):
         self.batch_status_label.setText(

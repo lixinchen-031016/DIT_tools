@@ -8,7 +8,7 @@ from PySide6.QtGui import QColor
 
 from DITWorkstation.Utils import get_db_service, format_size, logger
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
-from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS
+from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS
 
 
 def _nav_index(key: str) -> int:
@@ -93,7 +93,7 @@ class ProjectDashboardView(RefreshOnShowView):
         # 标题 + 工作区/项目选择
         header = QHBoxLayout()
         title = QLabel("项目概览")
-        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1d1d1f;")
+        title.setStyleSheet(TITLE_QSS)
         header.addWidget(title)
 
         header.addStretch()
@@ -110,7 +110,7 @@ class ProjectDashboardView(RefreshOnShowView):
         layout.addLayout(header)
 
         subtitle = QLabel("聚合展示当前项目的导入/备份/日志/报告进度，快速跳转到下一步操作")
-        subtitle.setStyleSheet("font-size: 13px; color: #86868b;")
+        subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
         # 统计卡片网格（2x2）
@@ -131,7 +131,7 @@ class ProjectDashboardView(RefreshOnShowView):
         # SOP 下一步引导
         guide_group_label = QLabel("SOP 操作链 — 下一步")
         guide_group_label.setStyleSheet(
-            "font-size: 15px; font-weight: 600; color: #1d1d1f; margin-top: 8px;"
+            f"font-size: {FONT_SIZE.LG}px; font-weight: 600; color: {COLOR.TEXT_PRIMARY}; margin-top: 8px;"
         )
         layout.addWidget(guide_group_label)
 
@@ -156,17 +156,17 @@ class ProjectDashboardView(RefreshOnShowView):
         self.btn_report.clicked.connect(lambda: self._jump_to(_nav_index("report")))
 
         for btn in (self.btn_import, self.btn_backup, self.btn_log, self.btn_report):
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #0a84ff;
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {COLOR.PRIMARY};
                     color: white;
                     padding: 10px 16px;
-                    border-radius: 8px;
-                    font-size: 13px;
+                    border-radius: {RADIUS.BUTTON}px;
+                    font-size: {FONT_SIZE.BASE}px;
                     font-weight: 600;
-                }
-                QPushButton:hover { background-color: #0070e0; }
-                QPushButton:disabled { background-color: #c7c7cc; }
+                }}
+                QPushButton:hover {{ background-color: {COLOR.PRIMARY_HOVER}; }}
+                QPushButton:disabled {{ background-color: {COLOR.DISABLED}; }}
             """)
             guide_layout.addWidget(btn)
         guide_layout.addStretch()
@@ -175,8 +175,8 @@ class ProjectDashboardView(RefreshOnShowView):
         # SOP 提示
         self.sop_hint = QLabel("")
         self.sop_hint.setStyleSheet(
-            "background-color: #e8f4ff; color: #004080; padding: 12px 16px; "
-            "border-radius: 8px; font-size: 13px;"
+            f"background-color: {COLOR.BANNER_INFO_BG}; color: {COLOR.BANNER_INFO_FG}; "
+            f"padding: 12px 16px; border-radius: {RADIUS.BUTTON}px; font-size: {FONT_SIZE.BASE}px;"
         )
         self.sop_hint.setWordWrap(True)
         layout.addWidget(self.sop_hint)

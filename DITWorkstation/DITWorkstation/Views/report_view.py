@@ -10,7 +10,7 @@ from DITWorkstation.Services.report_service import ReportService
 from DITWorkstation.Utils import get_db_service, safe_slot, pick_save_file
 from DITWorkstation.Utils.workers import SimpleWorkerThread
 from DITWorkstation.Views.Widgets import RefreshOnShowView
-from DITWorkstation.Views.Styles.theme import MONO_FONT_QSS
+from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, MONO_FONT_QSS
 
 
 class ReportView(RefreshOnShowView):
@@ -31,11 +31,11 @@ class ReportView(RefreshOnShowView):
 
         # 标题
         title = QLabel("报告生成")
-        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1d1d1f;")
+        title.setStyleSheet(TITLE_QSS)
         layout.addWidget(title)
 
         subtitle = QLabel("生成数据管理报告、素材统计报告等专业PDF报告")
-        subtitle.setStyleSheet("font-size: 13px; color: #86868b;")
+        subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
         # 报告配置
@@ -75,17 +75,17 @@ class ReportView(RefreshOnShowView):
         btn_layout = QHBoxLayout()
         self.generate_btn = QPushButton("📊 生成报告")
         self.generate_btn.setToolTip("生成 PDF 报告")
-        self.generate_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0a84ff;
+        self.generate_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR.PRIMARY};
                 color: white;
                 padding: 12px 28px;
-                border-radius: 8px;
-                font-size: 14px;
+                border-radius: {RADIUS.BUTTON}px;
+                font-size: {FONT_SIZE.MD}px;
                 font-weight: bold;
-            }
-            QPushButton:hover { background-color: #0070e0; }
-            QPushButton:disabled { background-color: #c7c7cc; }
+            }}
+            QPushButton:hover {{ background-color: {COLOR.PRIMARY_HOVER}; }}
+            QPushButton:disabled {{ background-color: {COLOR.DISABLED}; }}
         """)
         self.generate_btn.clicked.connect(self._generate_report)
         btn_layout.addWidget(self.generate_btn)
@@ -94,7 +94,7 @@ class ReportView(RefreshOnShowView):
 
         # 状态
         self.status_label = QLabel("就绪")
-        self.status_label.setStyleSheet("color: #86868b; font-size: 13px;")
+        self.status_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.BASE}px;")
         layout.addWidget(self.status_label)
 
         # 报告预览/日志
@@ -176,7 +176,13 @@ class ReportView(RefreshOnShowView):
         self.status_label.setText(f"❌ 生成失败: {error}")
         self._log(f"错误: {error}")
         self.worker = None
-        QMessageBox.critical(self, "报告生成失败", error)
+        from DITWorkstation.Views.Widgets.error_dialog import show_error
+        show_error(
+            title="报告生成失败",
+            description=error,
+            details=error,
+            parent=self,
+        )
 
     def _log(self, message: str):
         from datetime import datetime

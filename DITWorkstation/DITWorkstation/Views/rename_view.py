@@ -5,17 +5,21 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
     QSpinBox, QComboBox, QProgressBar
 )
-from PySide6.QtCore import Slot
+from PySide6.QtCore import Slot, Signal
 from pathlib import Path
 
 from DITWorkstation.Models import RenameRule
 from DITWorkstation.Services.rename_service import RenameService
 from DITWorkstation.Utils import WorkerThread, safe_slot, get_db_service, logger, pick_directory
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS
 
 
 class RenameView(QWidget):
     """文件重命名视图"""
+
+    # 跨线程进度信号（current, total, filename），在工作线程发射、主线程消费
+    _progress_sig = Signal(int, int, str)
 
     def __init__(self):
         super().__init__()
@@ -25,6 +29,7 @@ class RenameView(QWidget):
         self.selected_files = []
         self._worker = None
         self._setup_ui()
+        self._progress_sig.connect(self._on_progress)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -33,11 +38,11 @@ class RenameView(QWidget):
 
         # 标题
         title = QLabel("文件重命名")
-        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1d1d1f;")
+        title.setStyleSheet(TITLE_QSS)
         layout.addWidget(title)
 
         subtitle = QLabel("按场景/镜头/镜次规则批量重命名，保持文件关联关系")
-        subtitle.setStyleSheet("font-size: 13px; color: #86868b;")
+        subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
         # 文件选择
@@ -117,18 +122,7 @@ class RenameView(QWidget):
         self.preview_btn.clicked.connect(self._preview)
         self.rename_btn = QPushButton("执行重命名")
         self.rename_btn.setToolTip("执行批量重命名")
-        self.rename_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0a84ff;
-                color: white;
-                padding: 10px 24px;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #0070e0; }
-            QPushButton:disabled { background-color: #c7c7cc; }
-        """)
+        self.rename_btn.setStyleSheet(PRIMARY_BUTTON_QSS)
         self.rename_btn.clicked.connect(self._execute_rename)
         self.rename_btn.setEnabled(False)
         btn_layout.addWidget(self.preview_btn)
@@ -151,13 +145,18 @@ class RenameView(QWidget):
         layout.addWidget(preview_group, 1)
 
         # 进度条（重命名执行时显示）
+        self.status_label = QLabel()
+        self.status_label.setVisible(False)
+        self.status_label.setStyleSheet(f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};")
+        layout.addWidget(self.status_label)
+
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
 
     @safe_slot("选择文件夹失败")
     def _select_folder(self):
-        path = pick_directory(self, "选择素材文件夹")
+        path = pick_directory(self, "选择素材文件夹", category="rename_source")
         if path:
             self.folder_edit.setText(path)
             self._scan_folder(path)
@@ -221,11 +220,18 @@ class RenameView(QWidget):
         self.rename_btn.setEnabled(False)
         self.preview_btn.setEnabled(False)
         self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)  # 不确定进度
+        self.status_label.setVisible(True)
+        self.progress_bar.setRange(0, 100)  # 确定模式，按百分比推进
+        self.progress_bar.setValue(0)
+        self.status_label.setText("正在重命名...")
 
         # 后台线程执行，避免阻塞主线程
+        # 通过 lambda 将服务回调桥接到跨线程信号（current, total, filename）
         self._worker = WorkerThread(
-            self.rename_service.execute_rename, self.selected_files, rule
+            self.rename_service.execute_rename,
+            self.selected_files,
+            rule,
+            progress_callback=lambda c, t, f: self._progress_sig.emit(c, t, f),
         )
         self._worker.finished.connect(self._on_rename_finished)
         self._worker.error.connect(self._on_rename_error)
@@ -233,8 +239,16 @@ class RenameView(QWidget):
         self._worker.finished.connect(self._worker.deleteLater)
         self._worker.start()
 
+    @Slot(int, int, str)
+    def _on_progress(self, current: int, total: int, filename: str):
+        """更新进度条与状态文本（current 从1开始）"""
+        percent = int(current * 100 / total) if total > 0 else 0
+        self.progress_bar.setValue(percent)
+        self.status_label.setText(f"正在重命名 ({current}/{total}): {filename}")
+
     @Slot(object)
     def _on_rename_finished(self, results):
+        self.progress_bar.setValue(100)
         self._restore_ui()
         # worker 已连 deleteLater，这里清空引用避免悬挂
         self._worker = None
@@ -279,10 +293,17 @@ class RenameView(QWidget):
     def _on_rename_error(self, error: str):
         self._restore_ui()
         self._worker = None
-        QMessageBox.critical(self, "重命名出错", error)
+        from DITWorkstation.Views.Widgets.error_dialog import show_error
+        show_error(
+            title="重命名出错",
+            description=error,
+            details=error,
+            parent=self,
+        )
 
     def _restore_ui(self):
         """重命名结束后恢复按钮与进度条状态"""
         self.rename_btn.setEnabled(True)
         self.preview_btn.setEnabled(True)
         self.progress_bar.setVisible(False)
+        self.status_label.setVisible(False)

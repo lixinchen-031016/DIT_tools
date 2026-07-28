@@ -2,9 +2,9 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QStackedWidget, QScrollArea,
-    QMessageBox
+    QMessageBox, QLabel
 )
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QShortcut, QKeySequence
 
 # 会话上下文（EventBus + 全局项目/工作区状态）已抽离到 App/session_context.py
@@ -128,6 +128,45 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+I"), self, activated=self._focus_import)
         QShortcut(QKeySequence("Ctrl+B"), self, activated=self._focus_backup)
         QShortcut(QKeySequence("Ctrl+L"), self, activated=self._focus_log)
+        # Ctrl+1~9 切换到对应导航页
+        for i in range(1, 10):
+            QShortcut(QKeySequence(f"Ctrl+{i}"), self,
+                      activated=lambda idx=i - 1: self.nav_list.setCurrentRow(idx))
+        # F5 刷新当前视图
+        QShortcut(QKeySequence("F5"), self, activated=self._refresh_current_view)
+        # Esc 取消当前后台任务
+        QShortcut(QKeySequence("Esc"), self, activated=self._cancel_running_workers)
+
+        # 全局状态栏
+        from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE
+        self.status_bar = self.statusBar()  # QMainWindow 自带 statusBar()
+        self.status_bar.setSizeGripEnabled(False)
+        self.status_bar.setStyleSheet(f"""
+            QStatusBar {{
+                background-color: {COLOR.BG_GROUP};
+                border-top: 1px solid {COLOR.BORDER};
+                color: {COLOR.TEXT_SECONDARY};
+                font-size: {FONT_SIZE.SM}px;
+                padding: 2px 12px;
+            }}
+        """)
+        self.status_label_workspace = QLabel("工作区: 未选择")
+        self.status_label_project = QLabel("项目: 未选择")
+        self.status_label_task = QLabel("就绪")
+        self.status_bar.addWidget(self.status_label_workspace)
+        self.status_bar.addWidget(self.status_label_project)
+        self.status_bar.addPermanentWidget(self.status_label_task)
+
+        # 监听会话上下文：当前项目/工作区切换时更新状态栏
+        bus.project_focus_changed.connect(self._on_project_focus_changed)
+        bus.workspace_focus_changed.connect(self._on_workspace_focus_changed)
+
+        # 后台任务状态轮询（每 2 秒检查一次）
+        self._status_timer = QTimer(self)
+        self._status_timer.setInterval(2000)
+        self._status_timer.timeout.connect(self._update_task_status)
+        self._status_timer.start()
+        self._update_task_status()
 
     def _setup_menu(self):
         """创建菜单栏 — 提供帮助入口与新手向导重启"""
@@ -144,6 +183,10 @@ class MainWindow(QMainWindow):
         sop_action = help_menu.addAction("SOP 操作链说明...")
         sop_action.setToolTip("查看完整的标准操作流程说明")
         sop_action.triggered.connect(self._show_sop_guide)
+
+        shortcuts_action = help_menu.addAction("快捷键大全...")
+        shortcuts_action.setToolTip("查看所有全局快捷键")
+        shortcuts_action.triggered.connect(self._show_shortcuts)
 
         help_menu.addSeparator()
 
@@ -169,6 +212,21 @@ class MainWindow(QMainWindow):
         """弹出 SOP 操作链说明对话框"""
         from DITWorkstation.Views.first_run_wizard import _SOP_GUIDE_TEXT
         QMessageBox.information(self, "SOP 操作链说明", _SOP_GUIDE_TEXT)
+
+    def _show_shortcuts(self):
+        """弹出快捷键大全对话框"""
+        QMessageBox.information(
+            self, "快捷键大全",
+            "全局快捷键：\n"
+            "• Ctrl+1~9：切换到对应导航页\n"
+            "• Ctrl+F：跳转到素材检索\n"
+            "• Ctrl+I：跳转到媒体导入\n"
+            "• Ctrl+B：跳转到数据备份\n"
+            "• Ctrl+L：跳转到拍摄日志\n"
+            "• Ctrl+Shift+H：重新启动新手向导\n"
+            "• F5：刷新当前视图\n"
+            "• Esc：取消当前后台任务"
+        )
 
     def _show_about(self):
         """关于对话框"""
@@ -222,6 +280,41 @@ class MainWindow(QMainWindow):
         except KeyError:
             pass
 
+    def _refresh_current_view(self):
+        """F5: 刷新当前视图"""
+        idx = self.stack.currentIndex()
+        if 0 <= idx < len(NAV_ITEMS):
+            key = NAV_ITEMS[idx][0]
+            view_map = {
+                "dashboard": self.dashboard_view,
+                "import": self.import_view,
+                "backup": self.backup_view,
+                "log": self.log_view,
+                "raw": self.raw_view,
+                "rename": self.rename_view,
+                "search": self.search_view,
+                "asset_info": self.asset_info_view,
+                "report": self.report_view,
+            }
+            view = view_map.get(key)
+            if view and hasattr(view, "_trigger_refresh_now"):
+                view._trigger_refresh_now()
+
+    def _cancel_running_workers(self):
+        """Esc: 取消当前正在运行的后台 worker"""
+        running = self._running_workers()
+        if not running:
+            return
+        for _view, _attr, w in running:
+            try:
+                # 优先用协作式中断，worker 自行检查 isInterruptionRequested()
+                if hasattr(w, "requestInterruption"):
+                    w.requestInterruption()
+                elif hasattr(w, "quit"):
+                    w.quit()
+            except Exception as e:
+                logger.warning(f"取消 worker 失败: {e}")
+
     def _running_workers(self):
         """收集所有视图中仍在运行的后台 worker。
 
@@ -241,6 +334,46 @@ class MainWindow(QMainWindow):
             if w is not None and w.isRunning():
                 candidates.append((view, attr, w))
         return candidates
+
+    def _on_project_focus_changed(self, project_id):
+        """当前项目切换时更新状态栏"""
+        if not project_id:
+            self.status_label_project.setText("项目: 未选择")
+            return
+        try:
+            from DITWorkstation.Utils import get_db_service
+            db = get_db_service()
+            project = db.get_project(project_id)
+            name = project.name if project else "未知"
+            self.status_label_project.setText(f"项目: {name}")
+        except Exception:
+            self.status_label_project.setText("项目: ?")
+
+    def _on_workspace_focus_changed(self, workspace_id):
+        """当前工作区切换时更新状态栏"""
+        if not workspace_id:
+            self.status_label_workspace.setText("工作区: 未选择")
+            return
+        try:
+            from DITWorkstation.Utils import get_db_service
+            db = get_db_service()
+            ws = db.get_workspace(workspace_id)
+            name = ws.name if ws else "未知"
+            self.status_label_workspace.setText(f"工作区: {name}")
+        except Exception:
+            self.status_label_workspace.setText("工作区: ?")
+
+    def _update_task_status(self):
+        """定时更新后台任务数指示（由 _status_timer 每 2 秒触发）"""
+        from DITWorkstation.Views.Styles.theme import COLOR
+        running = self._running_workers()
+        count = len(running)
+        if count > 0:
+            self.status_label_task.setText(f"⚙ 后台任务: {count} 个")
+            self.status_label_task.setStyleSheet(f"color: {COLOR.WARNING}; font-weight: 600;")
+        else:
+            self.status_label_task.setText("就绪")
+            self.status_label_task.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY};")
 
     def closeEvent(self, event):
         """关闭窗口前检查后台 worker，避免强杀线程导致数据写半截。

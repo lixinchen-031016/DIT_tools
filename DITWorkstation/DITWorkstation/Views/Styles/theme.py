@@ -319,9 +319,18 @@ QCheckBox::indicator {{
     border-radius: 3px;
     background-color: {COLOR.BG_CARD};
 }}
+QCheckBox::indicator:hover {{
+    border-color: {COLOR.PRIMARY};
+}}
 QCheckBox::indicator:checked {{
     background-color: {COLOR.PRIMARY};
     border-color: {COLOR.PRIMARY};
+    /* 内嵌 SVG 对勾：白色描边，跨平台一致，无需外部资源 */
+    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'><path d='M3 8 L6.5 11.5 L13 4.5' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>");
+}}
+QCheckBox::indicator:disabled {{
+    background-color: {COLOR.BG_APP};
+    border-color: {COLOR.DISABLED};
 }}
 
 /* ============ 工具提示 ============ */
