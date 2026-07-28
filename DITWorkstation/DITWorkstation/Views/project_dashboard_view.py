@@ -65,10 +65,16 @@ class ProjectDashboardView(QWidget):
         self.selector.project_changed.connect(self._on_project_changed_from_selector)
         # 监听数据变更广播（素材/日志/备份变更后刷新卡片）
         try:
-            from DITWorkstation.Views.main_window import get_data_bus
+            from DITWorkstation.App.session_context import get_data_bus
             get_data_bus().data_changed.connect(self._on_data_changed)
         except Exception as e:
             logger.warning(f"项目概览连接 data_bus 失败: {e}")
+        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
+        from PySide6.QtCore import QTimer
+        self._show_timer = QTimer(self)
+        self._show_timer.setSingleShot(True)
+        self._show_timer.setInterval(200)
+        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -170,6 +176,11 @@ class ProjectDashboardView(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        # 节流：200ms 内多次 showEvent 只触发一次刷新
+        self._show_timer.start()
+
+    def _on_show_refresh(self):
+        """showEvent 节流后的实际刷新逻辑"""
         self.selector.refresh()
         self._refresh()
 

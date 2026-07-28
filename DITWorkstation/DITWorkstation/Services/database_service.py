@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from DITWorkstation.App import config
 from DITWorkstation.Models import Project, ShootingLog, MediaAsset, Workspace
-from DITWorkstation.Utils import logger
+from DITWorkstation.Utils import logger, normalize_path
 
 
 class DatabaseService:
@@ -24,6 +24,10 @@ class DatabaseService:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA cache_size=-20000")
+        # WAL 模式下允许多读 + 单写；主线程与 worker 线程并发写时，
+        # busy_timeout 让第二个写者等待 5 秒而非立即抛 SQLITE_BUSY，
+        # 避免备份回写 / UI 更新等操作静默失败。
+        conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
     def _init_db(self):
@@ -767,12 +771,9 @@ class DatabaseService:
 
     def asset_exists_by_path(self, project_id: str, file_path: str) -> bool:
         """按文件路径查重"""
-        # asset.file_path 在导入时存的是 str(Path(...).resolve()) 规范化路径，
-        # 查询键同样 resolve，避免符号链接环境下查重失效导致重复入库。
-        try:
-            fp_key = str(Path(file_path).resolve())
-        except (OSError, ValueError):
-            fp_key = file_path
+        # asset.file_path 在导入时存的是 normalize_path() 规范化路径，
+        # 查询键同样规范化，避免符号链接环境下查重失效导致重复入库。
+        fp_key = normalize_path(file_path)
         conn = self._get_conn()
         try:
             row = conn.execute(
@@ -788,12 +789,16 @@ class DatabaseService:
 
         供 RAW 提取等场景使用：JPG 可能在任意项目，按路径反查其 log_id
         以便把提取出的 RAW 文件继承同一日志关联。
+
+        注意：file_path 必须经过 normalize_path() 规范化，与入库时的
+        存储形式保持一致，否则在符号链接 / 相对路径场景下会匹配失败。
         """
+        fp_key = normalize_path(file_path)
         conn = self._get_conn()
         try:
             row = conn.execute(
                 "SELECT log_id FROM media_assets WHERE file_path = ?",
-                (file_path,)
+                (fp_key,)
             ).fetchone()
             return row["log_id"] if row else None
         finally:
@@ -841,32 +846,37 @@ class DatabaseService:
     ) -> bool:
         """按旧文件路径查找 asset 并更新为新路径/文件名（用于重命名后同步 DB）。
 
+        old_path / new_path 均会经过 normalize_path() 规范化，与入库时的
+        存储形式保持一致，避免符号链接 / 相对路径场景下匹配失败。
+
         Returns:
             True 表示找到并更新；False 表示未找到匹配 asset（如该文件未入库）
         """
+        old_key = normalize_path(old_path)
+        new_key = normalize_path(new_path)
         conn = self._get_conn()
         try:
             row = conn.execute(
                 "SELECT asset_id FROM media_assets WHERE file_path = ?",
-                (old_path,)
+                (old_key,)
             ).fetchone()
             if not row:
                 return False
             if new_name:
                 conn.execute(
                     "UPDATE media_assets SET file_path = ?, file_name = ? WHERE asset_id = ?",
-                    (new_path, new_name, row["asset_id"])
+                    (new_key, new_name, row["asset_id"])
                 )
             else:
                 conn.execute(
                     "UPDATE media_assets SET file_path = ? WHERE asset_id = ?",
-                    (new_path, row["asset_id"])
+                    (new_key, row["asset_id"])
                 )
             conn.commit()
-            logger.info(f"按旧路径同步重命名: {old_path} -> {new_path}")
+            logger.info(f"按旧路径同步重命名: {old_key} -> {new_key}")
             return True
         except Exception as e:
-            logger.error(f"按旧路径同步重命名失败 {old_path}: {e}")
+            logger.error(f"按旧路径同步重命名失败 {old_key}: {e}")
             return False
         finally:
             conn.close()
@@ -1125,13 +1135,10 @@ class DatabaseService:
         try:
             updated = 0
             for fp in file_paths:
-                # asset.file_path 在导入时存的是 str(Path(...).resolve()) 规范化路径，
-                # 这里对查询键同样 resolve，避免符号链接环境（如 macOS /var -> /private/var）
+                # asset.file_path 在导入时存的是 normalize_path() 规范化路径，
+                # 查询键同样规范化，避免符号链接环境（如 macOS /var -> /private/var）
                 # 下因路径表示不一致而匹配失败。
-                try:
-                    fp_key = str(Path(fp).resolve())
-                except (OSError, ValueError):
-                    fp_key = fp
+                fp_key = normalize_path(fp)
                 if project_id:
                     row = conn.execute(
                         "SELECT asset_id, backup_locations FROM media_assets "

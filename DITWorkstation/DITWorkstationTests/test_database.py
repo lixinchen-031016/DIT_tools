@@ -843,6 +843,126 @@ class TestDatabaseService(unittest.TestCase):
         results = self.db.search_assets(scene="S001", rating=2)
         self.assertEqual(len(results), 2)
 
+    # ===== 路径规范化回归测试（Finding 3）=====
+    # 回归：DB 中 file_path 必须以 normalize_path() 规范化形式存储，
+    # 且 asset_exists_by_path / get_asset_log_id_by_path /
+    # update_asset_path_by_old_path / add_backup_location_to_assets
+    # 的查询键必须同样规范化，否则在符号链接 / 相对路径 / 含 .. 场景下匹配失败。
+
+    def _make_asset(self, project_id, file_path, name=None):
+        return MediaAsset(
+            asset_id=str(uuid.uuid4())[:8],
+            project_id=project_id,
+            file_path=file_path,
+            file_name=name or Path(file_path).name,
+            file_size=1024,
+            file_type=Path(file_path).suffix.lower(),
+        )
+
+    def test_asset_exists_by_path_with_relative_path(self):
+        """相对路径查重应与入库的规范化路径匹配"""
+        project = self.db.create_project(name="查重测试")
+        with tempfile.TemporaryDirectory() as tmp:
+            fp = Path(tmp) / "IMG_001.cr2"
+            fp.write_bytes(b"x")
+            # 入库用绝对路径
+            asset = self._make_asset(project.project_id, str(fp.resolve()))
+            self.db.add_media_asset(asset)
+            # 查重用相对路径（切到 tmp 后）
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(tmp)
+                self.assertTrue(self.db.asset_exists_by_path(project.project_id, "IMG_001.cr2"))
+            finally:
+                os.chdir(old_cwd)
+
+    def test_asset_exists_by_path_with_dotdot(self):
+        """含 .. 的路径查重应折叠后匹配"""
+        project = self.db.create_project(name="查重测试2")
+        with tempfile.TemporaryDirectory() as tmp:
+            sub = Path(tmp) / "sub"
+            sub.mkdir()
+            fp = sub / "IMG_002.cr2"
+            fp.write_bytes(b"x")
+            asset = self._make_asset(project.project_id, str(fp.resolve()))
+            self.db.add_media_asset(asset)
+            # 通过 tmp/sub/../sub/IMG_002.cr2 查重
+            messy = str(Path(tmp) / "sub" / ".." / "sub" / "IMG_002.cr2")
+            self.assertTrue(self.db.asset_exists_by_path(project.project_id, messy))
+
+    def test_get_asset_log_id_by_path_normalizes_query(self):
+        """get_asset_log_id_by_path 应规范化查询键"""
+        project = self.db.create_project(name="log关联测试")
+        log = ShootingLog(
+            log_id=str(uuid.uuid4())[:8],
+            project_id=project.project_id,
+            scene="S001",
+            shot="001A",
+            take="01",
+        )
+        self.db.create_shooting_log(log)
+        with tempfile.TemporaryDirectory() as tmp:
+            fp = Path(tmp) / "IMG_003.cr2"
+            fp.write_bytes(b"x")
+            asset = self._make_asset(project.project_id, str(fp.resolve()))
+            asset.log_id = log.log_id
+            self.db.add_media_asset(asset)
+
+            # 用相对路径查询应能命中
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(tmp)
+                found_log_id = self.db.get_asset_log_id_by_path("IMG_003.cr2")
+                self.assertEqual(found_log_id, log.log_id)
+            finally:
+                os.chdir(old_cwd)
+
+    def test_update_asset_path_by_old_path_normalizes_both(self):
+        """重命名同步：old_path 和 new_path 都应规范化后匹配/写入"""
+        project = self.db.create_project(name="重命名同步测试")
+        with tempfile.TemporaryDirectory() as tmp:
+            old_fp = Path(tmp) / "old.cr2"
+            old_fp.write_bytes(b"x")
+            new_fp = Path(tmp) / "new.cr2"
+
+            asset = self._make_asset(project.project_id, str(old_fp.resolve()))
+            self.db.add_media_asset(asset)
+
+            # 用含 .. 的路径作为 old_path，应仍能匹配
+            messy_old = str(Path(tmp) / "sub" / ".." / "old.cr2")
+            ok = self.db.update_asset_path_by_old_path(
+                messy_old, str(new_fp), new_name="new.cr2"
+            )
+            self.assertTrue(ok)
+
+            # 验证 DB 中 file_path 已更新为规范化的 new_fp
+            updated = self.db.asset_exists_by_path(project.project_id, str(new_fp))
+            self.assertTrue(updated)
+
+    def test_add_backup_location_normalizes_query(self):
+        """add_backup_location_to_assets 应规范化 file_paths 查询键"""
+        project = self.db.create_project(name="备份回写测试")
+        with tempfile.TemporaryDirectory() as tmp:
+            fp = Path(tmp) / "IMG_004.cr2"
+            fp.write_bytes(b"x")
+            asset = self._make_asset(project.project_id, str(fp.resolve()))
+            self.db.add_media_asset(asset)
+
+            # 用相对路径作为 file_paths 传入，应仍能匹配并回写
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(tmp)
+                updated = self.db.add_backup_location_to_assets(
+                    ["IMG_004.cr2"], "/backup/target", project_id=project.project_id
+                )
+                self.assertEqual(updated, 1)
+            finally:
+                os.chdir(old_cwd)
+
+            # 验证 backup_locations 已写入
+            assets = self.db.get_media_assets(project.project_id)
+            self.assertIn("/backup/target", assets[0].backup_locations)
+
 
 class TestWorkspaceManagement(unittest.TestCase):
     """工作区管理测试 - 验证 Workspace→Project 两级层级"""

@@ -171,9 +171,16 @@ class AssetInfoView(QWidget):
         self.metadata_service = MetadataService()
         self.current_asset = None
         self._batch_worker = None
+        self._assets = []
         self._setup_ui()
         # 项目切换由共享控件广播到全局，本视图仅需监听后刷新素材列表
         self.selector.project_changed.connect(self._on_project_changed)
+        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
+        from PySide6.QtCore import QTimer
+        self._show_timer = QTimer(self)
+        self._show_timer.setSingleShot(True)
+        self._show_timer.setInterval(200)
+        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -249,6 +256,8 @@ class AssetInfoView(QWidget):
         self.asset_table.setAlternatingRowColors(True)
         self.asset_table.setStyleSheet(_TABLE_STYLE)
         self.asset_table.itemSelectionChanged.connect(self._on_asset_selected)
+        self.asset_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.asset_table.customContextMenuRequested.connect(self._on_asset_context_menu)
         left_layout.addWidget(self.asset_table, 1)
 
         refresh_btn = QPushButton("🔄 刷新列表")
@@ -464,9 +473,14 @@ class AssetInfoView(QWidget):
     # ===== 数据加载 =====
     def showEvent(self, event):
         # 切换回本视图时刷新工作区/项目列表（selector 自身监听全局信号，这里补刷列表）
+        super().showEvent(event)
+        # 节流：200ms 内多次 showEvent 只触发一次刷新
+        self._show_timer.start()
+
+    def _on_show_refresh(self):
+        """showEvent 节流后的实际刷新逻辑"""
         self.selector.refresh()
         self._load_assets()
-        super().showEvent(event)
 
     def _on_project_changed(self, _project_id):
         """项目切换（由共享控件广播）→ 刷新素材列表"""
@@ -484,6 +498,7 @@ class AssetInfoView(QWidget):
             return
 
         assets = self.db_service.get_media_assets(project_id)
+        self._assets = assets
         self.asset_table.setRowCount(len(assets))
         self.asset_count_label.setText(f"共 {len(assets)} 个素材")
         self.batch_exif_btn.setEnabled(len(assets) > 0)
@@ -520,6 +535,54 @@ class AssetInfoView(QWidget):
             self.current_file_label.setText(self.current_asset.file_name)
             self._display_properties(self.current_asset)
 
+    def _on_asset_context_menu(self, pos):
+        """素材表右键菜单：打开所在目录 / 复制路径"""
+        from PySide6.QtWidgets import QMenu
+        item = self.asset_table.itemAt(pos)
+        if not item:
+            return
+        row = item.row()
+        asset = self._assets[row] if row < len(self._assets) else None
+        if not asset:
+            return
+
+        menu = QMenu(self)
+        action_open_dir = menu.addAction("打开所在目录")
+        action_copy_path = menu.addAction("复制文件路径")
+
+        action = menu.exec(self.asset_table.viewport().mapToGlobal(pos))
+        if action == action_open_dir:
+            self._open_asset_directory(asset)
+        elif action == action_copy_path:
+            self._copy_asset_path(asset)
+
+    def _open_asset_directory(self, asset):
+        """在文件管理器中打开素材所在目录"""
+        import subprocess
+        import sys
+        import os
+        path = asset.file_path
+        if not path or not os.path.exists(path):
+            QMessageBox.warning(self, "路径不存在", f"文件不存在：\n{path}")
+            return
+        dir_path = os.path.dirname(path)
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", dir_path])
+            elif sys.platform == "win32":
+                subprocess.Popen(["explorer", dir_path])
+            else:
+                subprocess.Popen(["xdg-open", dir_path])
+        except Exception as e:
+            QMessageBox.warning(self, "打开失败", str(e))
+
+    def _copy_asset_path(self, asset):
+        """复制文件路径到剪贴板"""
+        from PySide6.QtWidgets import QApplication
+        clipboard = QApplication.clipboard()
+        clipboard.setText(asset.file_path or "")
+        logger.info(f"已复制路径到剪贴板: {asset.file_path}")
+
     def _sync_rating_buttons(self, rating):
         """同步评级按钮的选中/启用状态
 
@@ -551,7 +614,7 @@ class AssetInfoView(QWidget):
         self._sync_rating_buttons(rating)
         # 广播素材变更，让看板/检索等视图刷新
         try:
-            from DITWorkstation.Views.main_window import get_data_bus
+            from DITWorkstation.App.session_context import get_data_bus
             get_data_bus().emit_data_changed("assets_changed")
         except Exception as e:
             logger.warning(f"广播 assets_changed 失败: {e}")
@@ -751,6 +814,8 @@ class AssetInfoView(QWidget):
         self._batch_worker.progress.connect(self._on_batch_progress)
         self._batch_worker.finished_batch.connect(self._on_batch_finished)
         self._batch_worker.error.connect(self._on_batch_error)
+        # QThread.finished 在线程真正结束时发射，用于自动释放对象避免泄漏
+        self._batch_worker.finished.connect(self._batch_worker.deleteLater)
         self._batch_worker.start()
 
     def _on_batch_progress(self, current, total, message):
@@ -763,6 +828,8 @@ class AssetInfoView(QWidget):
         self.batch_exif_btn.setEnabled(True)
         if self.current_asset:
             self.refresh_exif_btn.setEnabled(True)
+        # worker 已连 deleteLater，这里清空引用避免悬挂
+        self._batch_worker = None
         from PySide6.QtCore import QTimer
         QTimer.singleShot(3000, lambda: self.batch_progress_frame.setVisible(False))
         QMessageBox.critical(self, "批量读取出错", error_msg)
@@ -774,6 +841,8 @@ class AssetInfoView(QWidget):
         self.batch_exif_btn.setEnabled(True)
         if self.current_asset:
             self.refresh_exif_btn.setEnabled(True)
+        # worker 已连 deleteLater，这里清空引用避免悬挂
+        self._batch_worker = None
 
         # 刷新列表和当前详情
         self._load_assets()
@@ -788,7 +857,7 @@ class AssetInfoView(QWidget):
         # 广播 assets_changed，让 search_view / shooting_log_view 等知道 EXIF 已更新
         if success > 0:
             try:
-                from DITWorkstation.Views.main_window import get_data_bus
+                from DITWorkstation.App.session_context import get_data_bus
                 get_data_bus().emit_data_changed("assets_changed")
             except Exception as e:
                 logger.warning(f"批量 EXIF 完成后广播 assets_changed 失败: {e}")

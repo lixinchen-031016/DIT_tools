@@ -29,6 +29,12 @@ class RawExtractionView(QWidget):
         self._setup_ui()
         self._progress_sig.connect(self._on_progress)
         # 项目切换由共享控件处理（broadcast_none=False 保留"不关联"语义）
+        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
+        from PySide6.QtCore import QTimer
+        self._show_timer = QTimer(self)
+        self._show_timer.setSingleShot(True)
+        self._show_timer.setInterval(200)
+        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -115,8 +121,10 @@ class RawExtractionView(QWidget):
         # 操作按钮
         btn_layout = QHBoxLayout()
         self.scan_btn = QPushButton("扫描匹配")
+        self.scan_btn.setToolTip("扫描 JPG 目录")
         self.scan_btn.clicked.connect(self._scan_match)
         self.extract_btn = QPushButton("开始提取")
+        self.extract_btn.setToolTip("从选中的 JPG 提取对应的 RAW 文件")
         self.extract_btn.setStyleSheet("""
             QPushButton {
                 background-color: #34c759;
@@ -133,6 +141,7 @@ class RawExtractionView(QWidget):
         self.extract_btn.setEnabled(False)
 
         self.cancel_btn = QPushButton("取消")
+        self.cancel_btn.setToolTip("取消正在进行的提取任务")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self._cancel_extraction)
 
@@ -178,6 +187,11 @@ class RawExtractionView(QWidget):
     def showEvent(self, event):
         """每次显示时刷新工作区/项目列表"""
         super().showEvent(event)
+        # 节流：200ms 内多次 showEvent 只触发一次刷新
+        self._show_timer.start()
+
+    def _on_show_refresh(self):
+        """showEvent 节流后的实际刷新逻辑"""
         self.selector.refresh()
 
     def _scan_match(self):
@@ -236,6 +250,8 @@ class RawExtractionView(QWidget):
         )
         self.worker.finished.connect(self._on_finished)
         self.worker.error.connect(self._on_error)
+        # 线程结束后自动释放，避免 QThread 对象泄漏
+        self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
         self.status_label.setText("正在提取RAW文件...")
 
@@ -257,6 +273,8 @@ class RawExtractionView(QWidget):
         self.scan_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.progress_bar.setValue(100)
+        # worker 已连 deleteLater，这里清空引用避免悬挂
+        self.worker = None
 
         success = result['extracted']
         not_found = result['not_found']
@@ -307,7 +325,7 @@ class RawExtractionView(QWidget):
         # 广播 assets_changed，让其他视图刷新
         if imported_count > 0:
             try:
-                from DITWorkstation.Views.main_window import get_data_bus
+                from DITWorkstation.App.session_context import get_data_bus
                 get_data_bus().emit_data_changed("assets_changed")
             except Exception as e:
                 logger.error(f"广播 RAW 提取完成事件失败: {e}")
@@ -382,4 +400,5 @@ class RawExtractionView(QWidget):
         self.scan_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.status_label.setText(f"❌ 错误: {error}")
+        self.worker = None
         QMessageBox.critical(self, "提取错误", error)

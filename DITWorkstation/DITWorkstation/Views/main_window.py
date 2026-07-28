@@ -1,12 +1,15 @@
 """主窗口与导航框架"""
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QListWidget, QListWidgetItem, QStackedWidget, QScrollArea
+    QListWidget, QListWidgetItem, QStackedWidget, QScrollArea,
+    QMessageBox
 )
 from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QShortcut, QKeySequence
 
 # 会话上下文（EventBus + 全局项目/工作区状态）已抽离到 App/session_context.py
-# 此处 re-export，保持现有视图的 `from ...main_window import get_data_bus` 等导入不变
+# [DEPRECATED] 此处 re-export 仅为向后兼容；新代码应直接从 App.session_context 导入，
+# 避免形成 main_window ↔ Views 的逻辑循环依赖。
 from DITWorkstation.App.session_context import (
     get_data_bus,
     get_current_project_id,
@@ -100,7 +103,6 @@ class MainWindow(QMainWindow):
         self.report_view = ReportView()
 
         # 统一用 QScrollArea 包裹视图，保证内容超出窗口时出现滚动条。
-        # asset_info_view 内部已实现滚动（右侧详情面板），整体包裹会双重滚动，故跳过。
         self.stack.addWidget(self._wrap_scrollable(self.dashboard_view))
         self.stack.addWidget(self._wrap_scrollable(self.import_view))
         self.stack.addWidget(self._wrap_scrollable(self.backup_view))
@@ -108,7 +110,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self._wrap_scrollable(self.rename_view))
         self.stack.addWidget(self._wrap_scrollable(self.log_view))
         self.stack.addWidget(self._wrap_scrollable(self.search_view))
-        self.stack.addWidget(self.asset_info_view)
+        self.stack.addWidget(self._wrap_scrollable(self.asset_info_view))
         self.stack.addWidget(self._wrap_scrollable(self.report_view))
 
         # 连接跨视图刷新信号总线
@@ -117,6 +119,12 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.nav_list)
         layout.addWidget(self.stack, 1)
+
+        # 全局快捷键
+        QShortcut(QKeySequence("Ctrl+F"), self, activated=self._focus_search)
+        QShortcut(QKeySequence("Ctrl+I"), self, activated=self._focus_import)
+        QShortcut(QKeySequence("Ctrl+B"), self, activated=self._focus_backup)
+        QShortcut(QKeySequence("Ctrl+L"), self, activated=self._focus_log)
 
     def _wrap_scrollable(self, view: QWidget) -> QScrollArea:
         """把视图包裹在 QScrollArea 中，内容超出时自动出现滚动条。
@@ -135,6 +143,99 @@ class MainWindow(QMainWindow):
     def _on_nav_changed(self, index: int):
         """导航切换"""
         self.stack.setCurrentIndex(index)
+
+    def _focus_search(self):
+        """Ctrl+F: 跳转到素材检索并聚焦搜索框"""
+        self._navigate_to("search")
+        self.search_view.keyword_edit.setFocus()
+
+    def _focus_import(self):
+        """Ctrl+I: 跳转到媒体导入"""
+        self._navigate_to("import")
+
+    def _focus_backup(self):
+        """Ctrl+B: 跳转到数据备份"""
+        self._navigate_to("backup")
+
+    def _focus_log(self):
+        """Ctrl+L: 跳转到拍摄日志"""
+        self._navigate_to("log")
+
+    def _navigate_to(self, key: str):
+        """按 key 跳转到对应导航页"""
+        try:
+            self.nav_list.setCurrentRow(get_nav_index(key))
+        except KeyError:
+            pass
+
+    def _running_workers(self):
+        """收集所有视图中仍在运行的后台 worker。
+
+        用于关闭窗口前判断是否有未完成的长耗时操作（备份/导入/RAW提取/重命名/报告/批量EXIF），
+        避免强杀 QThread 导致 DB 写半截或文件拷贝残留。
+        """
+        candidates = []
+        for view, attr in (
+            (self.backup_view, "worker"),
+            (self.import_view, "worker"),
+            (self.raw_view, "worker"),
+            (self.rename_view, "_worker"),
+            (self.report_view, "worker"),
+            (self.asset_info_view, "_batch_worker"),
+        ):
+            w = getattr(view, attr, None)
+            if w is not None and w.isRunning():
+                candidates.append((view, attr, w))
+        return candidates
+
+    def closeEvent(self, event):
+        """关闭窗口前检查后台 worker，避免强杀线程导致数据写半截。
+
+        - 无运行中的 worker：直接关闭
+        - 有运行中的 worker：弹确认框，用户确认后等待各 worker 最多 5 秒再关闭；
+          用户取消则忽略关闭事件
+        """
+        running = self._running_workers()
+        if not running:
+            super().closeEvent(event)
+            return
+
+        names = []
+        view_name_map = {
+            id(self.backup_view): "数据备份",
+            id(self.import_view): "媒体导入",
+            id(self.raw_view): "RAW提取",
+            id(self.rename_view): "文件重命名",
+            id(self.report_view): "报告生成",
+            id(self.asset_info_view): "批量EXIF读取",
+        }
+        for view, _attr, _w in running:
+            names.append(view_name_map.get(id(view), "后台任务"))
+        task_text = "、".join(names)
+
+        reply = QMessageBox.question(
+            self, "确认退出",
+            f"以下任务正在后台执行：{task_text}\n\n"
+            "强制退出可能导致数据写不完整或文件拷贝残留。\n"
+            "是否等待任务完成？点击「Yes」将等待最多 5 秒后退出；点击「No」立即强制退出。",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            QMessageBox.Yes,
+        )
+
+        if reply == QMessageBox.Cancel:
+            event.ignore()
+            return
+
+        if reply == QMessageBox.Yes:
+            # 尝试等待各 worker 结束（最多 5 秒），避免半截写入
+            for _view, _attr, w in running:
+                try:
+                    w.wait(5000)
+                except Exception:
+                    pass
+            logger.info(f"主窗口关闭：已等待 {len(running)} 个后台 worker 结束")
+
+        super().closeEvent(event)
 
     def _on_data_changed(self, event: str):
         """

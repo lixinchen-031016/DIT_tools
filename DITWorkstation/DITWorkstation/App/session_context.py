@@ -9,6 +9,7 @@
 
 main_window.py 仍 re-export 这些符号，现有视图无需改动。
 """
+import threading
 from PySide6.QtCore import QObject, Signal
 
 
@@ -51,6 +52,10 @@ def get_data_bus() -> EventBus:
     return _data_bus
 
 
+# 全局状态锁：保护 _current_workspace_id / _current_project_id 的读写，
+# 避免主线程槽与 worker 线程并发调用 set_current_* 时产生读改写竞争。
+_state_lock = threading.Lock()
+
 # ===== 全局当前工作区 =====
 # 工作区是项目的父级容器；切换工作区会过滤项目下拉，并联动清除/重设当前项目。
 _current_workspace_id = None
@@ -58,7 +63,8 @@ _current_workspace_id = None
 
 def get_current_workspace_id():
     """返回全局当前工作区 ID（可能为 None）"""
-    return _current_workspace_id
+    with _state_lock:
+        return _current_workspace_id
 
 
 def set_current_workspace(workspace_id):
@@ -70,20 +76,22 @@ def set_current_workspace(workspace_id):
       - 广播 data_changed("all") 触发各视图刷新
     """
     global _current_workspace_id, _current_project_id
-    if _current_workspace_id == workspace_id:
-        return
-    _current_workspace_id = workspace_id
+    with _state_lock:
+        if _current_workspace_id == workspace_id:
+            return
+        _current_workspace_id = workspace_id
 
-    # 当前项目若不属于新工作区则清除
-    if workspace_id is not None and _current_project_id is not None:
-        from DITWorkstation.Utils import get_db_service
-        try:
-            proj = get_db_service().get_project(_current_project_id)
-            if proj is None or proj.workspace_id != workspace_id:
+        # 当前项目若不属于新工作区则清除
+        if workspace_id is not None and _current_project_id is not None:
+            from DITWorkstation.Utils import get_db_service
+            try:
+                proj = get_db_service().get_project(_current_project_id)
+                if proj is None or proj.workspace_id != workspace_id:
+                    _current_project_id = None
+            except Exception:
                 _current_project_id = None
-        except Exception:
-            _current_project_id = None
 
+    # 信号发射放在锁外，避免槽函数中再次获取锁导致死锁
     get_data_bus().emit_workspace_focus_changed(workspace_id)
     get_data_bus().emit_project_focus_changed(_current_project_id)
     get_data_bus().emit_data_changed("all")
@@ -97,7 +105,8 @@ _current_project_id = None
 
 def get_current_project_id():
     """返回全局当前项目 ID（可能为 None）"""
-    return _current_project_id
+    with _state_lock:
+        return _current_project_id
 
 
 def set_current_project(project_id):
@@ -109,21 +118,41 @@ def set_current_project(project_id):
     保证工作区下拉与项目下拉始终一致。
     """
     global _current_project_id, _current_workspace_id
-    if _current_project_id == project_id:
-        return
-    _current_project_id = project_id
+    with _state_lock:
+        if _current_project_id == project_id:
+            return
+        _current_project_id = project_id
 
-    # 顺带同步工作区：若项目有 workspace_id，把当前工作区切到该项目所属工作区
-    if project_id is not None:
-        from DITWorkstation.Utils import get_db_service
-        try:
-            proj = get_db_service().get_project(project_id)
-            if proj is not None and proj.workspace_id != _current_workspace_id:
-                _current_workspace_id = proj.workspace_id
-                get_data_bus().emit_workspace_focus_changed(_current_workspace_id)
-        except Exception:
-            pass
+        # 顺带同步工作区：若项目有 workspace_id，把当前工作区切到该项目所属工作区
+        if project_id is not None:
+            from DITWorkstation.Utils import get_db_service
+            try:
+                proj = get_db_service().get_project(project_id)
+                if proj is not None and proj.workspace_id != _current_workspace_id:
+                    _current_workspace_id = proj.workspace_id
+                    _ws_changed = True
+                else:
+                    _ws_changed = False
+            except Exception:
+                _ws_changed = False
+        else:
+            _ws_changed = False
 
+    # 信号发射放在锁外，避免槽函数中再次获取锁导致死锁
+    if project_id is not None and _ws_changed:
+        get_data_bus().emit_workspace_focus_changed(_current_workspace_id)
     get_data_bus().emit_project_focus_changed(project_id)
     # 项目切换也视为数据变更，触发各视图刷新
     get_data_bus().emit_data_changed("all")
+
+
+def reset_session_state():
+    """重置全局会话状态（当前工作区 + 当前项目）。
+
+    供单元测试在 setup/teardown 中调用，确保跨测试状态隔离，
+    避免上一个测试遗留的 current_project_id 影响下一个测试。
+    """
+    global _current_workspace_id, _current_project_id
+    with _state_lock:
+        _current_workspace_id = None
+        _current_project_id = None

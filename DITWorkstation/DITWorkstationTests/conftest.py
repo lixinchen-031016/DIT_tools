@@ -14,8 +14,28 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# session_context 模块在导入时实例化 EventBus(QObject)，需要 QCoreApplication 先存在
+from PySide6.QtCore import QCoreApplication
+_app = QCoreApplication.instance() or QCoreApplication(sys.argv)
+
 from DITWorkstation.Services.database_service import DatabaseService
 from DITWorkstation.Models import Project, ShootingLog, MediaAsset, Workspace
+from DITWorkstation.Utils import reset_singletons
+from DITWorkstation.App.session_context import reset_session_state
+
+
+@pytest.fixture(autouse=True)
+def _reset_global_state():
+    """每个测试前后自动重置全局单例与会话状态，确保跨测试隔离。
+
+    - reset_singletons()：清空 get_db_service / get_checksum_service 的缓存实例
+    - reset_session_state()：清空 _current_workspace_id / _current_project_id
+    """
+    reset_singletons()
+    reset_session_state()
+    yield
+    reset_singletons()
+    reset_session_state()
 
 
 @pytest.fixture
@@ -38,12 +58,10 @@ def project(db_service):
     """预创建的项目"""
     return db_service.create_project(name="测试项目")
 
-
 @pytest.fixture
 def workspace(db_service):
     """预创建的工作区"""
     return db_service.create_workspace(name="测试工作区", path="/tmp/test_ws")
-
 
 @pytest.fixture
 def make_asset(db_service):

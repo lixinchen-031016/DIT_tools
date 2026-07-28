@@ -33,6 +33,12 @@ class MediaImportView(QWidget):
         # 监听选择控件的 项目切换 信号，做本视图业务联动
         # （工作区/项目下拉与全局信号同步已由 WorkspaceProjectSelector 内部处理）
         self.selector.project_changed.connect(self._on_project_changed)
+        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
+        from PySide6.QtCore import QTimer
+        self._show_timer = QTimer(self)
+        self._show_timer.setSingleShot(True)
+        self._show_timer.setInterval(200)
+        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -102,6 +108,7 @@ class MediaImportView(QWidget):
 
         scan_row.addStretch()
         scan_btn = QPushButton("🔍 扫描")
+        scan_btn.setToolTip("扫描源目录中的媒体文件")
         scan_btn.clicked.connect(self._scan_folder)
         scan_row.addWidget(scan_btn)
         source_layout.addLayout(scan_row)
@@ -163,6 +170,7 @@ class MediaImportView(QWidget):
 
         action_row = QHBoxLayout()
         self.import_btn = QPushButton("📥 开始导入")
+        self.import_btn.setToolTip("开始导入选中的文件到当前项目")
         self.import_btn.setStyleSheet("""
             QPushButton {
                 background-color: #34c759;
@@ -180,6 +188,7 @@ class MediaImportView(QWidget):
         action_row.addWidget(self.import_btn)
 
         self.cancel_btn = QPushButton("取消")
+        self.cancel_btn.setToolTip("取消正在进行的导入任务")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self._cancel_import)
         action_row.addWidget(self.cancel_btn)
@@ -201,7 +210,6 @@ class MediaImportView(QWidget):
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setMinimumHeight(60)
-        self.log_text.setMaximumHeight(180)
         self.log_text.setStyleSheet("font-family: 'SF Mono', Menlo, monospace; font-size: 11px;")
         log_layout.addWidget(self.log_text)
         right_layout.addWidget(log_group)
@@ -214,9 +222,14 @@ class MediaImportView(QWidget):
 
     def showEvent(self, event):
         """显示时刷新选择控件（工作区/项目列表）"""
+        super().showEvent(event)
+        # 节流：200ms 内多次 showEvent 只触发一次刷新
+        self._show_timer.start()
+
+    def _on_show_refresh(self):
+        """showEvent 节流后的实际刷新逻辑"""
         self.selector.refresh()
         self._sync_copy_check_state()
-        super().showEvent(event)
 
     @Slot(object)
     def _on_project_changed(self, project_id):
@@ -404,6 +417,8 @@ class MediaImportView(QWidget):
         self.worker.finished.connect(self._on_import_finished)
         self.worker.error.connect(self._on_import_error)
         self.worker.progress.connect(self._on_progress)
+        # 线程结束后自动释放，避免 QThread 对象泄漏
+        self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
 
         self._log("开始导入...")
@@ -426,6 +441,8 @@ class MediaImportView(QWidget):
         self.import_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.progress_bar.setValue(100)
+        # worker 已连 deleteLater，这里清空引用避免悬挂
+        self.worker = None
 
         # 防御 result 为 None 或非 dict
         if not isinstance(result, dict):
@@ -457,7 +474,7 @@ class MediaImportView(QWidget):
 
         # 广播数据变更，通知日志/检索/素材信息视图刷新
         if imported > 0:
-            from DITWorkstation.Views.main_window import get_data_bus
+            from DITWorkstation.App.session_context import get_data_bus
             get_data_bus().emit_data_changed("assets_changed")
 
         QMessageBox.information(
@@ -471,6 +488,7 @@ class MediaImportView(QWidget):
         self.cancel_btn.setEnabled(False)
         self.status_label.setText(f"❌ 错误: {error}")
         self._log(f"导入错误: {error}")
+        self.worker = None
         QMessageBox.critical(self, "导入错误", error)
 
     def _log(self, message: str):

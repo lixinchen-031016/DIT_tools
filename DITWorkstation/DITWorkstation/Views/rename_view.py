@@ -102,8 +102,10 @@ class RenameView(QWidget):
         # 操作按钮
         btn_layout = QHBoxLayout()
         self.preview_btn = QPushButton("预览")
+        self.preview_btn.setToolTip("预览重命名结果")
         self.preview_btn.clicked.connect(self._preview)
         self.rename_btn = QPushButton("执行重命名")
+        self.rename_btn.setToolTip("执行批量重命名")
         self.rename_btn.setStyleSheet("""
             QPushButton {
                 background-color: #ff9500;
@@ -211,11 +213,15 @@ class RenameView(QWidget):
         )
         self._worker.finished.connect(self._on_rename_finished)
         self._worker.error.connect(self._on_rename_error)
+        # 线程结束后自动释放，避免 QThread 对象泄漏
+        self._worker.finished.connect(self._worker.deleteLater)
         self._worker.start()
 
     @Slot(object)
     def _on_rename_finished(self, results):
         self._restore_ui()
+        # worker 已连 deleteLater，这里清空引用避免悬挂
+        self._worker = None
 
         # 数据闭环：把重命名结果回写到 DB 的 media_assets.file_path/file_name
         synced = 0
@@ -243,7 +249,7 @@ class RenameView(QWidget):
         # 广播 assets_changed，让 asset_info_view / search_view 刷新路径
         if synced > 0:
             try:
-                from DITWorkstation.Views.main_window import get_data_bus
+                from DITWorkstation.App.session_context import get_data_bus
                 get_data_bus().emit_data_changed("assets_changed")
             except Exception as e:
                 logger.error(f"广播重命名完成事件失败: {e}")
@@ -256,6 +262,7 @@ class RenameView(QWidget):
     @Slot(str)
     def _on_rename_error(self, error: str):
         self._restore_ui()
+        self._worker = None
         QMessageBox.critical(self, "重命名出错", error)
 
     def _restore_ui(self):

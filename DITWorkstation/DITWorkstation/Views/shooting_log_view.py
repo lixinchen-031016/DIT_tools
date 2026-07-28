@@ -6,7 +6,8 @@ from PySide6.QtWidgets import (
     QLineEdit, QGroupBox, QFormLayout, QTableWidget,
     QTableWidgetItem, QHeaderView, QMessageBox,
     QTextEdit, QSplitter,
-    QDialog, QDialogButtonBox, QAbstractItemView, QTabWidget
+    QDialog, QDialogButtonBox, QAbstractItemView, QTabWidget,
+    QScrollArea, QFrame
 )
 from PySide6.QtCore import Qt, Slot, QTimer
 
@@ -26,10 +27,16 @@ class ShootingLogView(QWidget):
         self.current_project: Project = None
         self.current_log_id: str = None
         self._pending_asset_ids: List[str] = []
+        self._logs = []
         self._setup_ui()
         # 监听选择控件的项目切换，做本视图业务联动
         # （工作区/项目下拉与全局信号同步已由 WorkspaceProjectSelector 内部处理）
         self.selector.project_changed.connect(self._on_project_changed)
+        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
+        self._show_timer = QTimer(self)
+        self._show_timer.setSingleShot(True)
+        self._show_timer.setInterval(200)
+        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
@@ -109,7 +116,7 @@ class ShootingLogView(QWidget):
 
         self.notes_edit = QTextEdit()
         self.notes_edit.setPlaceholderText("备注信息...")
-        self.notes_edit.setMaximumHeight(60)
+        self.notes_edit.setMinimumHeight(60)
         form_layout.addRow("备注:", self.notes_edit)
 
         asset_select_row = QHBoxLayout()
@@ -143,6 +150,7 @@ class ShootingLogView(QWidget):
         form_layout.addRow("", exif_row)
 
         add_log_btn = QPushButton("添加日志")
+        add_log_btn.setToolTip("新建拍摄日志")
         add_log_btn.setStyleSheet("""
             QPushButton {
                 background-color: #0a84ff;
@@ -156,7 +164,13 @@ class ShootingLogView(QWidget):
         add_log_btn.clicked.connect(self._add_log)
         form_layout.addRow("", add_log_btn)
 
-        right_panel.addWidget(form_group)
+        # 表单区套 QScrollArea，矮窗口下表单可滚动而不被挤压
+        form_scroll = QScrollArea()
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QFrame.NoFrame)
+        form_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        form_scroll.setWidget(form_group)
+        right_panel.addWidget(form_scroll)
 
         # 日志列表
         log_group = QGroupBox("拍摄日志列表")
@@ -171,9 +185,12 @@ class ShootingLogView(QWidget):
         self.log_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.log_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.log_table.itemSelectionChanged.connect(self._on_log_selected)
+        self.log_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.log_table.customContextMenuRequested.connect(self._on_log_context_menu)
         log_layout.addWidget(self.log_table)
 
         del_log_btn = QPushButton("删除选中日志")
+        del_log_btn.setToolTip("删除选中的拍摄日志")
         del_log_btn.clicked.connect(self._delete_log)
         log_layout.addWidget(del_log_btn)
 
@@ -264,8 +281,13 @@ class ShootingLogView(QWidget):
 
     def showEvent(self, event):
         # 刷新选择控件（工作区/项目列表），全局信号同步由 selector 内部处理
-        self.selector.refresh()
         super().showEvent(event)
+        # 节流：200ms 内多次 showEvent 只触发一次刷新
+        self._show_timer.start()
+
+    def _on_show_refresh(self):
+        """showEvent 节流后的实际刷新逻辑"""
+        self.selector.refresh()
 
     @Slot(object)
     def _on_project_changed(self, project_id):
@@ -294,6 +316,7 @@ class ShootingLogView(QWidget):
         if not self.current_project:
             return
         logs = self.db_service.get_shooting_logs(self.current_project.project_id)
+        self._logs = logs
         self.log_table.setRowCount(len(logs))
         for i, log in enumerate(logs):
             self.log_table.setItem(i, 0, QTableWidgetItem(log.scene))
@@ -355,7 +378,7 @@ class ShootingLogView(QWidget):
         self._load_project_assets()
 
         # 广播：日志和素材关联均变更
-        from DITWorkstation.Views.main_window import get_data_bus
+        from DITWorkstation.App.session_context import get_data_bus
         bus = get_data_bus()
         bus.emit_data_changed("logs_changed")
         if pending:
@@ -398,10 +421,35 @@ class ShootingLogView(QWidget):
         self._load_project_assets()
 
         # 广播：日志删除会级联清空关联素材的 log_id
-        from DITWorkstation.Views.main_window import get_data_bus
+        from DITWorkstation.App.session_context import get_data_bus
         bus = get_data_bus()
         bus.emit_data_changed("logs_changed")
         bus.emit_data_changed("assets_changed")
+
+    def _on_log_context_menu(self, pos):
+        """日志表右键菜单：删除此日志 / 复制场景信息"""
+        from PySide6.QtWidgets import QMenu, QApplication
+        item = self.log_table.itemAt(pos)
+        if not item:
+            return
+        row = item.row()
+        log = self._logs[row] if row < len(self._logs) else None
+        if not log:
+            return
+
+        menu = QMenu(self)
+        action_delete = menu.addAction("删除此日志")
+        action_copy_scene = menu.addAction("复制场景信息")
+
+        action = menu.exec(self.log_table.viewport().mapToGlobal(pos))
+        if action == action_delete:
+            self.log_table.selectRow(row)
+            self._delete_log()
+        elif action == action_copy_scene:
+            scene_info = f"{log.scene}/{log.shot}/{log.take}"
+            if log.description:
+                scene_info += f" - {log.description}"
+            QApplication.clipboard().setText(scene_info)
 
     def _on_log_selected(self):
         row = self.log_table.currentRow()
@@ -453,7 +501,7 @@ class ShootingLogView(QWidget):
                     self.db_service.update_media_asset_log_id(aid, self.current_log_id)
                 self._load_assets_for_log(self.current_log_id)
                 # 广播素材关联变更
-                from DITWorkstation.Views.main_window import get_data_bus
+                from DITWorkstation.App.session_context import get_data_bus
                 get_data_bus().emit_data_changed("assets_changed")
                 QMessageBox.information(self, "成功", f"已关联 {len(selected_ids)} 个素材")
 
@@ -477,7 +525,7 @@ class ShootingLogView(QWidget):
 
         self._load_assets_for_log(self.current_log_id)
         # 广播素材关联变更
-        from DITWorkstation.Views.main_window import get_data_bus
+        from DITWorkstation.App.session_context import get_data_bus
         get_data_bus().emit_data_changed("assets_changed")
 
     # ===== 媒体文件驱动的日志记录 =====

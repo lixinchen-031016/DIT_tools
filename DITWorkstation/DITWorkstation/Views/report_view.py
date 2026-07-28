@@ -21,6 +21,12 @@ class ReportView(QWidget):
         self.worker = None
         self._setup_ui()
         # 项目切换由共享控件广播，本视图无需额外处理（生成时实时读取选中项目）
+        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
+        from PySide6.QtCore import QTimer
+        self._show_timer = QTimer(self)
+        self._show_timer.setSingleShot(True)
+        self._show_timer.setInterval(200)
+        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -72,6 +78,7 @@ class ReportView(QWidget):
         # 生成按钮
         btn_layout = QHBoxLayout()
         self.generate_btn = QPushButton("📊 生成报告")
+        self.generate_btn.setToolTip("生成 PDF 报告")
         self.generate_btn.setStyleSheet("""
             QPushButton {
                 background-color: #5856d6;
@@ -105,8 +112,13 @@ class ReportView(QWidget):
 
     def showEvent(self, event):
         # 切换回本视图时刷新工作区/项目列表
-        self.selector.refresh()
         super().showEvent(event)
+        # 节流：200ms 内多次 showEvent 只触发一次刷新
+        self._show_timer.start()
+
+    def _on_show_refresh(self):
+        """showEvent 节流后的实际刷新逻辑"""
+        self.selector.refresh()
 
     def _select_output(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -155,6 +167,8 @@ class ReportView(QWidget):
 
         self.worker.finished.connect(self._on_finished)
         self.worker.error.connect(self._on_error)
+        # 线程结束后自动释放，避免 QThread 对象泄漏
+        self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
 
     @Slot(object)
@@ -162,6 +176,8 @@ class ReportView(QWidget):
         self.generate_btn.setEnabled(True)
         self.status_label.setText(f"✅ 报告已生成: {result}")
         self._log(f"报告生成成功: {result}")
+        # worker 已连 deleteLater，这里清空引用避免悬挂
+        self.worker = None
         QMessageBox.information(self, "完成", f"报告已生成:\n{result}")
 
     @Slot(str)
@@ -169,6 +185,7 @@ class ReportView(QWidget):
         self.generate_btn.setEnabled(True)
         self.status_label.setText(f"❌ 生成失败: {error}")
         self._log(f"错误: {error}")
+        self.worker = None
         QMessageBox.critical(self, "报告生成失败", error)
 
     def _log(self, message: str):

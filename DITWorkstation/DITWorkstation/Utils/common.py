@@ -2,6 +2,7 @@
 import re
 import logging
 import functools
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -49,6 +50,31 @@ def get_file_extension(file_path: str, include_dot: bool = True) -> str:
     """获取文件扩展名"""
     ext = Path(file_path).suffix.lower()
     return ext if include_dot else ext.lstrip('.')
+
+
+def normalize_path(file_path: str) -> str:
+    """规范化文件路径，作为 DB 中 file_path 的统一存储/查询键。
+
+    - 使用 Path.resolve() 解析符号链接（macOS /var → /private/var）、相对路径、`..`
+    - resolve 失败（文件已删除/权限问题）时回退到原始字符串，保证查询不抛异常
+    - 所有入库（media_import_service）与按路径查询（database_service /
+      rename_service / raw_extraction_service）必须经过本函数，避免表示形式
+      不一致导致匹配失败（典型表现：重命名后 DB 路径未更新、RAW 提取无法
+      继承 JPG 的 log_id）
+
+    Args:
+        file_path: 原始路径字符串
+
+    Returns:
+        规范化后的绝对路径字符串
+    """
+    if not file_path:
+        return file_path
+    try:
+        return str(Path(file_path).resolve())
+    except (OSError, ValueError):
+        # resolve 失败（如文件已不存在、符号链接断裂），回退到原始字符串
+        return file_path
 
 
 def get_file_stem(file_path: str) -> str:
@@ -151,6 +177,7 @@ logger = Logger()
 
 # ===== 共享数据库服务单例 =====
 _shared_db_service = None
+_singleton_lock = threading.Lock()
 
 
 def get_db_service():
@@ -159,11 +186,17 @@ def get_db_service():
 
     各视图共用同一实例，避免启动时重复执行 _init_db / _migrate_db，
     也避免多实例并发写时无谓的锁竞争。
+
+    线程安全：使用 _singleton_lock 保护 check-then-set，避免主线程与 worker
+    线程同时首次调用时各自创建实例导致单例失效。
     """
     global _shared_db_service
     if _shared_db_service is None:
-        from DITWorkstation.Services.database_service import DatabaseService
-        _shared_db_service = DatabaseService()
+        with _singleton_lock:
+            # double-check：拿到锁后再次确认，避免等待期间已被其他线程初始化
+            if _shared_db_service is None:
+                from DITWorkstation.Services.database_service import DatabaseService
+                _shared_db_service = DatabaseService()
     return _shared_db_service
 
 
@@ -178,12 +211,28 @@ def get_checksum_service():
 
     让 MediaImportService / BackupService / RawExtractionService 复用同一缓存，
     避免导入时已算过的 hash 在备份时再算一次。
+
+    线程安全：同 get_db_service，使用 double-checked locking。
     """
     global _shared_checksum_service
     if _shared_checksum_service is None:
-        from DITWorkstation.Services.checksum_service import ChecksumService
-        _shared_checksum_service = ChecksumService()
+        with _singleton_lock:
+            if _shared_checksum_service is None:
+                from DITWorkstation.Services.checksum_service import ChecksumService
+                _shared_checksum_service = ChecksumService()
     return _shared_checksum_service
+
+
+def reset_singletons():
+    """重置全局单例（DatabaseService + ChecksumService）。
+
+    供单元测试在 setup/teardown 中调用，确保每个测试使用独立的 DB 实例，
+    避免跨测试数据污染。生产代码不应调用此函数。
+    """
+    global _shared_db_service, _shared_checksum_service
+    with _singleton_lock:
+        _shared_db_service = None
+        _shared_checksum_service = None
 
 
 # ===== Qt 槽函数异常安全装饰器 =====

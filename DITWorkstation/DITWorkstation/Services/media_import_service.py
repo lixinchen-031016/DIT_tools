@@ -11,7 +11,7 @@ from DITWorkstation.Models import MediaAsset, AssetType, ChecksumAlgorithm
 from DITWorkstation.Services.checksum_service import ChecksumService
 from DITWorkstation.Services.database_service import DatabaseService
 from DITWorkstation.Services.metadata_service import MetadataService
-from DITWorkstation.Utils import logger, get_checksum_service
+from DITWorkstation.Utils import logger, get_checksum_service, normalize_path
 
 
 class MediaImportService:
@@ -348,7 +348,7 @@ class MediaImportService:
         asset = MediaAsset(
             asset_id=str(uuid.uuid4())[:8],
             project_id=project_id,
-            file_path=str(path.resolve()),
+            file_path=normalize_path(str(path)),
             file_name=path.name,
             file_size=stat.st_size,
             file_type=path.suffix.lower(),

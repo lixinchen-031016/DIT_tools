@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QComboBox, QDateEdit,
     QCheckBox
 )
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, Qt
 
 from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger
 from DITWorkstation.Models import RATING_LABELS, AssetRating
@@ -19,12 +19,23 @@ class SearchView(QWidget):
         self.db_service = get_db_service()
         # 全局日志缓存：跨项目搜索时也能显示日志标签而非裸 UUID
         self._log_cache = {}
+        self._results = []
         self._setup_ui()
         self.project_combo.currentIndexChanged.connect(self._on_project_changed)
         self._load_projects()
         # 监听全局工作区切换，重新加载项目列表（按新工作区过滤）
-        from DITWorkstation.Views.main_window import get_data_bus
-        get_data_bus().workspace_focus_changed.connect(self._on_global_workspace_changed)
+        from DITWorkstation.App.session_context import get_data_bus
+        bus = get_data_bus()
+        bus.workspace_focus_changed.connect(self._on_global_workspace_changed)
+        # 监听全局项目切换，同步下拉选中项（其他视图切项目后回到检索页不再过期）
+        # 这是用户多次反馈的「上下文不同步」类问题的最后一片拼图
+        bus.project_focus_changed.connect(self._on_global_project_changed)
+        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
+        from PySide6.QtCore import QTimer
+        self._show_timer = QTimer(self)
+        self._show_timer.setSingleShot(True)
+        self._show_timer.setInterval(200)
+        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -52,6 +63,7 @@ class SearchView(QWidget):
         row1.addWidget(self.project_combo)
         self.keyword_edit = QLineEdit()
         self.keyword_edit.setPlaceholderText("输入关键词搜索文件名...")
+        self.keyword_edit.setToolTip("输入文件名、场景、镜头等关键词")
         self.keyword_edit.returnPressed.connect(self._search)
         row1.addWidget(QLabel("关键词:"))
         row1.addWidget(self.keyword_edit, 1)
@@ -115,8 +127,9 @@ class SearchView(QWidget):
 
         # 搜索按钮
         btn_layout = QHBoxLayout()
-        search_btn = QPushButton("🔍 搜索")
-        search_btn.setStyleSheet("""
+        self.search_btn = QPushButton("🔍 搜索")
+        self.search_btn.setToolTip("按条件检索素材")
+        self.search_btn.setStyleSheet("""
             QPushButton {
                 background-color: #0a84ff;
                 color: white;
@@ -127,10 +140,10 @@ class SearchView(QWidget):
             }
             QPushButton:hover { background-color: #0070e0; }
         """)
-        search_btn.clicked.connect(self._search)
+        self.search_btn.clicked.connect(self._search)
         reset_btn = QPushButton("重置")
         reset_btn.clicked.connect(self._reset)
-        btn_layout.addWidget(search_btn)
+        btn_layout.addWidget(self.search_btn)
         btn_layout.addWidget(reset_btn)
         btn_layout.addStretch()
         self.result_label = QLabel("")
@@ -146,6 +159,8 @@ class SearchView(QWidget):
         )
         self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.result_table.setAlternatingRowColors(True)
+        self.result_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.result_table.customContextMenuRequested.connect(self._on_result_context_menu)
         layout.addWidget(self.result_table, 1)
 
         # 数据过期提示条（其他视图改了数据后，提示用户当前结果可能过期）
@@ -161,7 +176,7 @@ class SearchView(QWidget):
 
         # 监听全局数据总线，数据变更时显示过期提示
         try:
-            from DITWorkstation.Views.main_window import get_data_bus
+            from DITWorkstation.App.session_context import get_data_bus
             get_data_bus().data_changed.connect(self._on_data_changed)
         except Exception as e:
             logger.warning(f"素材检索连接 data_bus 失败: {e}")
@@ -182,7 +197,7 @@ class SearchView(QWidget):
         self.project_combo.blockSignals(True)
         self.project_combo.clear()
         self.project_combo.addItem("全部项目", None)
-        from DITWorkstation.Views.main_window import get_current_workspace_id
+        from DITWorkstation.App.session_context import get_current_workspace_id
         ws_id = get_current_workspace_id()
         projects = self.db_service.get_projects(workspace_id=ws_id)
         restore_index = 0
@@ -196,8 +211,13 @@ class SearchView(QWidget):
         self._refresh_log_combo()
 
     def showEvent(self, event):
-        self._load_projects()
         super().showEvent(event)
+        # 节流：200ms 内多次 showEvent 只触发一次刷新
+        self._show_timer.start()
+
+    def _on_show_refresh(self):
+        """showEvent 节流后的实际刷新逻辑"""
+        self._load_projects()
 
     def _on_project_changed(self, index: int):
         self._refresh_log_combo()
@@ -207,6 +227,42 @@ class SearchView(QWidget):
         self._load_projects()
         self.result_table.setRowCount(0)
         self.result_label.setText("")
+
+    def _on_global_project_changed(self, project_id):
+        """全局项目切换 -> 同步下拉选中项，保持检索上下文与其他视图一致。
+
+        - project_id 为 None：选中「全部项目」（index 0）
+        - project_id 在当前下拉中存在：选中它
+        - project_id 不在当前下拉（可能因工作区过滤被排除）：重载项目列表后再选中
+        """
+        if project_id is None:
+            self.project_combo.blockSignals(True)
+            self.project_combo.setCurrentIndex(0)
+            self.project_combo.blockSignals(False)
+            self._refresh_log_combo()
+            return
+
+        # 在下拉中查找匹配项
+        target_index = -1
+        for i in range(self.project_combo.count()):
+            if self.project_combo.itemData(i) == project_id:
+                target_index = i
+                break
+
+        if target_index == -1:
+            # 不在当前列表（可能工作区已切换但本视图尚未重载），先重载再查找
+            self._load_projects()
+            for i in range(self.project_combo.count()):
+                if self.project_combo.itemData(i) == project_id:
+                    target_index = i
+                    break
+
+        if target_index >= 0 and target_index != self.project_combo.currentIndex():
+            self.project_combo.blockSignals(True)
+            self.project_combo.setCurrentIndex(target_index)
+            self.project_combo.blockSignals(False)
+            # 手动刷新日志下拉（blockSignals 阻止了 _on_project_changed）
+            self._refresh_log_combo()
 
     def _refresh_log_combo(self):
         project_id = self.project_combo.currentData()
@@ -278,6 +334,7 @@ class SearchView(QWidget):
         self._display_results(results, truncated)
 
     def _display_results(self, results, truncated: bool = False):
+        self._results = results
         self.result_table.setRowCount(len(results))
         if truncated:
             self.result_label.setText(
@@ -331,3 +388,52 @@ class SearchView(QWidget):
         self.project_combo.setCurrentIndex(0)
         self.result_table.setRowCount(0)
         self.result_label.setText("")
+
+    def _on_result_context_menu(self, pos):
+        """检索结果表右键菜单：打开所在目录 / 复制路径"""
+        from PySide6.QtWidgets import QMenu
+        item = self.result_table.itemAt(pos)
+        if not item:
+            return
+        row = item.row()
+        asset = self._results[row] if row < len(self._results) else None
+        if not asset:
+            return
+
+        menu = QMenu(self)
+        action_open_dir = menu.addAction("打开所在目录")
+        action_copy_path = menu.addAction("复制文件路径")
+
+        action = menu.exec(self.result_table.viewport().mapToGlobal(pos))
+        if action == action_open_dir:
+            self._open_result_directory(asset)
+        elif action == action_copy_path:
+            self._copy_result_path(asset)
+
+    def _open_result_directory(self, asset):
+        """在文件管理器中打开素材所在目录"""
+        import subprocess
+        import sys
+        import os
+        from PySide6.QtWidgets import QMessageBox
+        path = asset.file_path
+        if not path or not os.path.exists(path):
+            QMessageBox.warning(self, "路径不存在", f"文件不存在：\n{path}")
+            return
+        dir_path = os.path.dirname(path)
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", dir_path])
+            elif sys.platform == "win32":
+                subprocess.Popen(["explorer", dir_path])
+            else:
+                subprocess.Popen(["xdg-open", dir_path])
+        except Exception as e:
+            QMessageBox.warning(self, "打开失败", str(e))
+
+    def _copy_result_path(self, asset):
+        """复制文件路径到剪贴板"""
+        from PySide6.QtWidgets import QApplication
+        clipboard = QApplication.clipboard()
+        clipboard.setText(asset.file_path or "")
+        logger.info(f"已复制路径到剪贴板: {asset.file_path}")

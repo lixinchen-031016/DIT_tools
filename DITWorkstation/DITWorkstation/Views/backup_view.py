@@ -34,6 +34,12 @@ class BackupView(QWidget):
         self._target_paths: list[str] = []
         self._setup_ui()
         # 项目切换由共享控件处理（broadcast_none=False 保留"不关联"语义）
+        # showEvent 节流：快速切导航时只执行最后一次刷新，避免反复打 DB
+        from PySide6.QtCore import QTimer
+        self._show_timer = QTimer(self)
+        self._show_timer.setSingleShot(True)
+        self._show_timer.setInterval(200)
+        self._show_timer.timeout.connect(self._on_show_refresh)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -84,7 +90,6 @@ class BackupView(QWidget):
         self.target_scroll = QScrollArea()
         self.target_scroll.setWidgetResizable(True)
         self.target_scroll.setMinimumHeight(80)
-        self.target_scroll.setMaximumHeight(200)
         self.target_scroll.setFrameShape(QFrame.NoFrame)
         self.target_scroll.setStyleSheet("""
             QScrollArea {
@@ -111,8 +116,10 @@ class BackupView(QWidget):
 
         target_btn_layout = QHBoxLayout()
         add_target_btn = QPushButton("+ 添加目标")
+        add_target_btn.setToolTip("添加一个备份目标目录")
         add_target_btn.clicked.connect(self._add_target)
         clear_target_btn = QPushButton("清空全部")
+        clear_target_btn.setToolTip("清空所有备份目标")
         clear_target_btn.clicked.connect(self._clear_targets)
         target_btn_layout.addWidget(add_target_btn)
         target_btn_layout.addWidget(clear_target_btn)
@@ -137,6 +144,7 @@ class BackupView(QWidget):
         # 操作按钮
         btn_layout = QHBoxLayout()
         self.start_btn = QPushButton("开始备份")
+        self.start_btn.setToolTip("开始备份（将文件复制到所有目标目录）")
         self.start_btn.setStyleSheet("""
             QPushButton {
                 background-color: #0a84ff;
@@ -152,6 +160,7 @@ class BackupView(QWidget):
         self.start_btn.clicked.connect(self._start_backup)
 
         self.cancel_btn = QPushButton("取消")
+        self.cancel_btn.setToolTip("取消正在进行的备份任务")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self._cancel_backup)
 
@@ -181,7 +190,6 @@ class BackupView(QWidget):
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setMinimumHeight(80)
-        self.log_text.setMaximumHeight(220)
         self.log_text.setStyleSheet("font-family: 'SF Mono', Menlo, monospace; font-size: 11px;")
         log_layout.addWidget(self.log_text)
         layout.addWidget(log_group)
@@ -191,6 +199,11 @@ class BackupView(QWidget):
     def showEvent(self, event):
         """每次显示时刷新工作区/项目列表"""
         super().showEvent(event)
+        # 节流：200ms 内多次 showEvent 只触发一次刷新
+        self._show_timer.start()
+
+    def _on_show_refresh(self):
+        """showEvent 节流后的实际刷新逻辑"""
         try:
             self.selector.refresh()
         except Exception as e:
@@ -334,18 +347,20 @@ class BackupView(QWidget):
         self.cancel_btn.setEnabled(True)
         self.progress_bar.setValue(0)
 
-        # 把 project_id 通过 lambda 传给 execute_backup
+        # 调用约定：调用方一律不传回调参数，由 WorkerThread 自动注入
+        # （旧写法以位置参数传 None 会被 _maybe_inject_callback 判定为「已覆盖」而跳过注入，
+        #  导致 progress/file_completed 信号永不 emit，备份进度条静默失效）
         self.worker = WorkerThread(
             self.backup_service.execute_backup,
             self.current_job,
-            None,   # progress_callback（worker 自身通过 emit 转发）
-            None,   # file_completed_callback
-            project_id
+            project_id=project_id,
         )
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_finished)
         self.worker.error.connect(self._on_error)
         self.worker.file_completed.connect(self._on_file_completed)
+        # 线程结束后自动释放，避免 QThread 对象泄漏
+        self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
 
     def _cancel_backup(self):
@@ -373,6 +388,8 @@ class BackupView(QWidget):
         self.start_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.progress_bar.setValue(1000)
+        # worker 已连 deleteLater，这里清空引用避免悬挂
+        self.worker = None
 
         job = result
         if job.status.value == "completed":
@@ -430,7 +447,7 @@ class BackupView(QWidget):
         # 广播 assets_changed，让 asset_info_view / search_view 知道 backup_locations 已更新
         if job.status.value in ("completed", "partial"):
             try:
-                from DITWorkstation.Views.main_window import get_data_bus
+                from DITWorkstation.App.session_context import get_data_bus
                 get_data_bus().emit_data_changed("assets_changed")
                 self._log("已通知其他视图刷新素材备份位置信息")
             except Exception as e:
@@ -442,6 +459,7 @@ class BackupView(QWidget):
         self.cancel_btn.setEnabled(False)
         self.status_label.setText(f"❌ 错误: {error}")
         self._log(f"错误: {error}")
+        self.worker = None
         QMessageBox.critical(self, "备份错误", error)
 
     def _log(self, message: str):
