@@ -3,9 +3,9 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QGroupBox, QFormLayout,
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
-    QSpinBox, QComboBox, QProgressBar
+    QSpinBox, QComboBox, QProgressBar, QSplitter
 )
-from PySide6.QtCore import Slot, Signal
+from PySide6.QtCore import Slot, Signal, Qt
 from pathlib import Path
 
 from DITWorkstation.Models import RenameRule
@@ -45,6 +45,15 @@ class RenameView(QWidget):
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
+        # 上下两段可拖动分割：上段配置区，下段结果区
+        main_splitter = QSplitter(Qt.Vertical)
+        main_splitter.setChildrenCollapsible(False)
+
+        config_widget = QWidget()
+        config_layout = QVBoxLayout(config_widget)
+        config_layout.setContentsMargins(0, 0, 0, 0)
+        config_layout.setSpacing(16)
+
         # 文件选择
         file_group = QGroupBox("选择文件")
         file_layout = QHBoxLayout(file_group)
@@ -55,7 +64,7 @@ class RenameView(QWidget):
         folder_btn.clicked.connect(self._select_folder)
         file_layout.addWidget(self.folder_edit, 1)
         file_layout.addWidget(folder_btn)
-        layout.addWidget(file_group)
+        config_layout.addWidget(file_group)
 
         # 命名规则
         rule_group = QGroupBox("命名规则")
@@ -113,7 +122,7 @@ class RenameView(QWidget):
         opt_row.addWidget(self.padding_spin)
         rule_layout.addRow("", opt_row)
 
-        layout.addWidget(rule_group)
+        config_layout.addWidget(rule_group)
 
         # 操作按钮
         btn_layout = QHBoxLayout()
@@ -128,7 +137,15 @@ class RenameView(QWidget):
         btn_layout.addWidget(self.preview_btn)
         btn_layout.addWidget(self.rename_btn)
         btn_layout.addStretch()
-        layout.addLayout(btn_layout)
+        config_layout.addLayout(btn_layout)
+        config_layout.addStretch()
+        main_splitter.addWidget(config_widget)
+
+        # 下段：结果区
+        result_widget = QWidget()
+        result_layout = QVBoxLayout(result_widget)
+        result_layout.setContentsMargins(0, 0, 0, 0)
+        result_layout.setSpacing(8)
 
         # 预览表格
         preview_group = QGroupBox("预览结果")
@@ -142,17 +159,23 @@ class RenameView(QWidget):
         self.preview_table.setSelectionBehavior(QTableWidget.SelectRows)
         preview_layout.addWidget(self.preview_table)
         attach_empty_state(self.preview_table, "📝", "暂无预览", "选择文件夹并设置规则后点击「预览」")
-        layout.addWidget(preview_group, 1)
+        result_layout.addWidget(preview_group)
 
         # 进度条（重命名执行时显示）
         self.status_label = QLabel()
         self.status_label.setVisible(False)
         self.status_label.setStyleSheet(f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};")
-        layout.addWidget(self.status_label)
+        result_layout.addWidget(self.status_label)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
-        layout.addWidget(self.progress_bar)
+        result_layout.addWidget(self.progress_bar)
+
+        main_splitter.addWidget(result_widget)
+        main_splitter.setStretchFactor(0, 2)
+        main_splitter.setStretchFactor(1, 3)
+        main_splitter.setMinimumHeight(400)
+        layout.addWidget(main_splitter, 1)
 
     @safe_slot("选择文件夹失败")
     def _select_folder(self):

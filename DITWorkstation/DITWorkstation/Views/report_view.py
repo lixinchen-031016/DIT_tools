@@ -2,9 +2,9 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QGroupBox, QComboBox, QMessageBox,
-    QTextEdit, QLineEdit, QFormLayout
+    QTextEdit, QLineEdit, QFormLayout, QSplitter
 )
-from PySide6.QtCore import Slot
+from PySide6.QtCore import Slot, Qt
 
 from DITWorkstation.Services.report_service import ReportService
 from DITWorkstation.Utils import get_db_service, safe_slot, pick_save_file
@@ -38,9 +38,16 @@ class ReportView(RefreshOnShowView):
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
+        main_splitter = QSplitter(Qt.Vertical)
+        main_splitter.setChildrenCollapsible(False)
+        config_widget = QWidget()
+        config_layout = QVBoxLayout(config_widget)
+        config_layout.setContentsMargins(0, 0, 0, 0)
+        config_layout.setSpacing(16)
+
         # 报告配置
         config_group = QGroupBox("报告配置")
-        config_layout = QFormLayout(config_group)
+        form_layout = QFormLayout(config_group)
 
         # 共享控件：工作区 + 项目两级选择
         from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
@@ -50,14 +57,14 @@ class ReportView(RefreshOnShowView):
             none_label="（暂无项目，请先在拍摄日志中创建）",
             db_service=self.db_service,
         )
-        config_layout.addRow("选择项目:", self.selector)
+        form_layout.addRow("选择项目:", self.selector)
 
         self.report_type_combo = QComboBox()
         self.report_type_combo.addItems([
             "数据备份报告",
             "素材统计报告",
         ])
-        config_layout.addRow("报告类型:", self.report_type_combo)
+        form_layout.addRow("报告类型:", self.report_type_combo)
 
         # 输出路径（用 QLineEdit 避免多行输入混入换行符）
         out_row = QHBoxLayout()
@@ -67,9 +74,9 @@ class ReportView(RefreshOnShowView):
         out_btn.clicked.connect(self._select_output)
         out_row.addWidget(self.output_edit, 1)
         out_row.addWidget(out_btn)
-        config_layout.addRow("输出路径:", out_row)
+        form_layout.addRow("输出路径:", out_row)
 
-        layout.addWidget(config_group)
+        config_layout.addWidget(config_group)
 
         # 生成按钮
         btn_layout = QHBoxLayout()
@@ -90,12 +97,15 @@ class ReportView(RefreshOnShowView):
         self.generate_btn.clicked.connect(self._generate_report)
         btn_layout.addWidget(self.generate_btn)
         btn_layout.addStretch()
-        layout.addLayout(btn_layout)
+        config_layout.addLayout(btn_layout)
 
         # 状态
         self.status_label = QLabel("就绪")
         self.status_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.BASE}px;")
-        layout.addWidget(self.status_label)
+        config_layout.addWidget(self.status_label)
+
+        config_layout.addStretch()
+        main_splitter.addWidget(config_widget)
 
         # 报告预览/日志
         log_group = QGroupBox("生成日志")
@@ -104,7 +114,17 @@ class ReportView(RefreshOnShowView):
         self.log_text.setReadOnly(True)
         self.log_text.setStyleSheet(MONO_FONT_QSS)
         log_layout.addWidget(self.log_text)
-        layout.addWidget(log_group, 1)
+        result_widget = QWidget()
+        result_layout = QVBoxLayout(result_widget)
+        result_layout.setContentsMargins(0, 0, 0, 0)
+        result_layout.setSpacing(8)
+        result_layout.addWidget(log_group)
+        main_splitter.addWidget(result_widget)
+
+        main_splitter.setStretchFactor(0, 2)
+        main_splitter.setStretchFactor(1, 3)
+        main_splitter.setMinimumHeight(400)
+        layout.addWidget(main_splitter, 1)
 
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""

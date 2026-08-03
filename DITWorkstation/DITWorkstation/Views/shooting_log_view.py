@@ -290,8 +290,8 @@ class ShootingLogView(RefreshOnShowView):
         bottom_layout.addWidget(self.bottom_tabs)
         right_splitter.addWidget(bottom_widget)
 
-        right_splitter.setStretchFactor(0, 3)
-        right_splitter.setStretchFactor(1, 2)
+        right_splitter.setStretchFactor(0, 2)
+        right_splitter.setStretchFactor(1, 3)
 
         layout.addWidget(right_splitter, 3)
 

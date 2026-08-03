@@ -3,9 +3,9 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QProgressBar, QGroupBox,
     QFormLayout, QCheckBox, QTableWidget,
-    QTableWidgetItem, QHeaderView, QMessageBox
+    QTableWidgetItem, QHeaderView, QMessageBox, QSplitter
 )
-from PySide6.QtCore import Slot, Signal
+from PySide6.QtCore import Qt, Slot, Signal
 
 from DITWorkstation.Services.raw_extraction_service import RawExtractionService
 from DITWorkstation.Services.media_import_service import MediaImportService
@@ -47,6 +47,13 @@ class RawExtractionView(RefreshOnShowView):
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
+        main_splitter = QSplitter(Qt.Vertical)
+        main_splitter.setChildrenCollapsible(False)
+        config_widget = QWidget()
+        config_layout = QVBoxLayout(config_widget)
+        config_layout.setContentsMargins(0, 0, 0, 0)
+        config_layout.setSpacing(16)
+
         # 关联项目 + 自动入库
         link_group = QGroupBox("项目关联（用于提取后自动入库）")
         link_layout = QHBoxLayout(link_group)
@@ -65,7 +72,7 @@ class RawExtractionView(RefreshOnShowView):
         self.auto_import_check.setChecked(True)
         link_layout.addWidget(self.auto_import_check)
         link_layout.addStretch()
-        layout.addWidget(link_group)
+        config_layout.addWidget(link_group)
 
         # 路径配置
         path_group = QGroupBox("路径配置")
@@ -108,7 +115,7 @@ class RawExtractionView(RefreshOnShowView):
         out_row.addWidget(out_btn)
         path_layout.addRow("输出文件夹:", out_row)
 
-        layout.addWidget(path_group)
+        config_layout.addWidget(path_group)
 
         # 选项
         opt_group = QGroupBox("选项")
@@ -117,7 +124,7 @@ class RawExtractionView(RefreshOnShowView):
         self.verify_check.setChecked(True)
         opt_layout.addWidget(self.verify_check)
         opt_layout.addStretch()
-        layout.addWidget(opt_group)
+        config_layout.addWidget(opt_group)
 
         # 操作按钮
         btn_layout = QHBoxLayout()
@@ -139,7 +146,10 @@ class RawExtractionView(RefreshOnShowView):
         btn_layout.addWidget(self.extract_btn)
         btn_layout.addWidget(self.cancel_btn)
         btn_layout.addStretch()
-        layout.addLayout(btn_layout)
+        config_layout.addLayout(btn_layout)
+
+        config_layout.addStretch()
+        main_splitter.addWidget(config_widget)
 
         # 匹配结果表格
         result_group = QGroupBox("匹配结果")
@@ -159,19 +169,29 @@ class RawExtractionView(RefreshOnShowView):
         self.match_label = QLabel("")
         self.match_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
         result_layout.addWidget(self.match_label)
-        layout.addWidget(result_group)
+
+        # 下段容器
+        result_widget = QWidget()
+        result_layout = QVBoxLayout(result_widget)
+        result_layout.setContentsMargins(0, 0, 0, 0)
+        result_layout.setSpacing(8)
+        result_layout.addWidget(result_group)
 
         # 进度
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        layout.addWidget(self.progress_bar)
+        result_layout.addWidget(self.progress_bar)
 
         self.status_label = QLabel("就绪")
         self.status_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
-        layout.addWidget(self.status_label)
+        result_layout.addWidget(self.status_label)
 
-        layout.addStretch()
+        main_splitter.addWidget(result_widget)
+        main_splitter.setStretchFactor(0, 2)
+        main_splitter.setStretchFactor(1, 3)
+        main_splitter.setMinimumHeight(400)
+        layout.addWidget(main_splitter, 1)
 
     def _select_folder(self, edit: QLineEdit, title: str, category: str = "default"):
         path = pick_directory(self, title, category=category)

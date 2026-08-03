@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QGroupBox, QFormLayout, QTableWidget,
     QTableWidgetItem, QHeaderView, QComboBox, QDateEdit,
-    QCheckBox
+    QCheckBox, QSplitter
 )
 from PySide6.QtCore import QDate, Qt
 
@@ -47,6 +47,14 @@ class SearchView(RefreshOnShowView):
         subtitle = QLabel("按场景、镜头、日期、文件类型等维度快速检索素材")
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
+
+        # 上下两段可拖动分割
+        main_splitter = QSplitter(Qt.Vertical)
+        main_splitter.setChildrenCollapsible(False)
+        config_widget = QWidget()
+        config_layout = QVBoxLayout(config_widget)
+        config_layout.setContentsMargins(0, 0, 0, 0)
+        config_layout.setSpacing(16)
 
         # 搜索条件
         search_group = QGroupBox("搜索条件")
@@ -120,7 +128,7 @@ class SearchView(RefreshOnShowView):
         row4.addStretch()
         search_layout.addRow("", row4)
 
-        layout.addWidget(search_group)
+        config_layout.addWidget(search_group)
 
         # 搜索按钮
         btn_layout = QHBoxLayout()
@@ -136,7 +144,15 @@ class SearchView(RefreshOnShowView):
         self.result_label = QLabel("")
         self.result_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY};")
         btn_layout.addWidget(self.result_label)
-        layout.addLayout(btn_layout)
+        config_layout.addLayout(btn_layout)
+        config_layout.addStretch()
+        main_splitter.addWidget(config_widget)
+
+        # 下段：结果区
+        result_widget = QWidget()
+        result_layout = QVBoxLayout(result_widget)
+        result_layout.setContentsMargins(0, 0, 0, 0)
+        result_layout.setSpacing(8)
 
         # 结果表格
         self.result_table = QTableWidget()
@@ -153,7 +169,7 @@ class SearchView(RefreshOnShowView):
         self.result_table.doubleClicked.connect(self._on_result_double_clicked)
         self.result_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.result_table.customContextMenuRequested.connect(self._on_result_context_menu)
-        layout.addWidget(self.result_table, 1)
+        result_layout.addWidget(self.result_table)
         attach_empty_state(self.result_table, "🔍", "暂无搜索结果", "设置搜索条件后点击「搜索」按钮")
 
         # 数据过期提示条（其他视图改了数据后，提示用户当前结果可能过期）
@@ -165,7 +181,12 @@ class SearchView(RefreshOnShowView):
         )
         # 点击提示条触发重搜
         self.stale_banner.mousePressEvent = lambda _e: self._search()
-        layout.addWidget(self.stale_banner)
+        result_layout.addWidget(self.stale_banner)
+        main_splitter.addWidget(result_widget)
+        main_splitter.setStretchFactor(0, 2)
+        main_splitter.setStretchFactor(1, 3)
+        main_splitter.setMinimumHeight(400)
+        layout.addWidget(main_splitter, 1)
 
         # 监听全局数据总线，数据变更时显示过期提示
         try:

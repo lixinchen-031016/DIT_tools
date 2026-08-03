@@ -71,10 +71,8 @@ class MediaImportView(RefreshOnShowView):
 
         main_splitter.addWidget(left_panel)
 
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(12)
+        right_splitter = QSplitter(Qt.Vertical)
+        right_splitter.setChildrenCollapsible(False)
 
         source_group = QGroupBox("导入源")
         source_layout = QVBoxLayout(source_group)
@@ -156,7 +154,7 @@ class MediaImportView(RefreshOnShowView):
 
         source_layout.addLayout(time_row)
 
-        right_layout.addWidget(source_group)
+        right_splitter.addWidget(source_group)
 
         files_group = QGroupBox("待导入文件")
         files_layout = QVBoxLayout(files_group)
@@ -185,7 +183,13 @@ class MediaImportView(RefreshOnShowView):
         self.files_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
         files_layout.addWidget(self.files_label)
 
-        right_layout.addWidget(files_group, 1)
+        right_splitter.addWidget(files_group)
+
+        # 下段容器：选项 + 按钮 + 执行状态
+        bottom_widget = QWidget()
+        bottom_layout = QVBoxLayout(bottom_widget)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(8)
 
         options_group = QGroupBox("导入选项")
         options_layout = QVBoxLayout(options_group)
@@ -220,7 +224,7 @@ class MediaImportView(RefreshOnShowView):
         opt_row2.addStretch()
         options_layout.addLayout(opt_row2)
 
-        right_layout.addWidget(options_group)
+        bottom_layout.addWidget(options_group)
 
         action_row = QHBoxLayout()
         self.import_btn = QPushButton("📥 开始导入")
@@ -248,7 +252,7 @@ class MediaImportView(RefreshOnShowView):
         action_row.addWidget(self.cancel_btn)
 
         action_row.addStretch()
-        right_layout.addLayout(action_row)
+        bottom_layout.addLayout(action_row)
 
         # 执行状态（合并进度条 + 状态标签 + 日志输出）
         status_group = QGroupBox("执行状态")
@@ -264,12 +268,18 @@ class MediaImportView(RefreshOnShowView):
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMinimumHeight(60)
+        self.log_text.setMinimumHeight(40)
         self.log_text.setStyleSheet(MONO_FONT_QSS)
         status_layout.addWidget(self.log_text)
-        right_layout.addWidget(status_group)
+        bottom_layout.addWidget(status_group)
 
-        main_splitter.addWidget(right_panel)
+        right_splitter.addWidget(bottom_widget)
+        right_splitter.setStretchFactor(0, 1)
+        right_splitter.setStretchFactor(1, 4)
+        right_splitter.setStretchFactor(2, 2)
+        right_splitter.setMinimumHeight(500)
+
+        main_splitter.addWidget(right_splitter)
         main_splitter.setStretchFactor(0, 1)
         main_splitter.setStretchFactor(1, 4)
 

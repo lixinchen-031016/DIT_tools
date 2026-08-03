@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QProgressBar, QComboBox,
     QGroupBox, QTextEdit,
-    QMessageBox, QCheckBox, QScrollArea, QFrame
+    QMessageBox, QCheckBox, QScrollArea, QFrame, QSplitter
 )
 from PySide6.QtCore import Slot, Qt
 
@@ -51,6 +51,16 @@ class BackupView(RefreshOnShowView):
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
+        # 上下两段可拖动分割：上段配置区，下段执行状态区
+        main_splitter = QSplitter(Qt.Vertical)
+        main_splitter.setChildrenCollapsible(False)
+
+        # 上段容器：配置区
+        config_widget = QWidget()
+        config_layout = QVBoxLayout(config_widget)
+        config_layout.setContentsMargins(0, 0, 0, 0)
+        config_layout.setSpacing(16)
+
         # 关联项目（可选，但建议选择以便回写 asset.backup_locations）
         project_group = QGroupBox("关联项目（可选，不选则仅做文件备份）")
         project_layout = QHBoxLayout(project_group)
@@ -64,7 +74,7 @@ class BackupView(RefreshOnShowView):
             db_service=self.db_service,
         )
         project_layout.addWidget(self.selector, 1)
-        layout.addWidget(project_group)
+        config_layout.addWidget(project_group)
 
         # 源路径选择
         source_group = QGroupBox("源路径（存储卡）")
@@ -76,7 +86,7 @@ class BackupView(RefreshOnShowView):
         source_btn.clicked.connect(self._select_source)
         source_layout.addWidget(self.source_edit, 1)
         source_layout.addWidget(source_btn)
-        layout.addWidget(source_group)
+        config_layout.addWidget(source_group)
 
         # 目标路径列表（内联删除按钮式，每行一个路径 + 独立删除按钮）
         target_group = QGroupBox("备份目标（支持多目标）")
@@ -121,7 +131,7 @@ class BackupView(RefreshOnShowView):
         target_btn_layout.addWidget(clear_target_btn)
         target_btn_layout.addStretch()
         target_layout.addLayout(target_btn_layout)
-        layout.addWidget(target_group)
+        config_layout.addWidget(target_group)
 
         # 配置选项（内联，不再单独 GroupBox）
         config_row = QHBoxLayout()
@@ -141,7 +151,7 @@ class BackupView(RefreshOnShowView):
         )
         config_row.addWidget(self.verify_check)
         config_row.addStretch()
-        layout.addLayout(config_row)
+        config_layout.addLayout(config_row)
 
         # 操作按钮
         btn_layout = QHBoxLayout()
@@ -158,7 +168,16 @@ class BackupView(RefreshOnShowView):
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.cancel_btn)
         btn_layout.addStretch()
-        layout.addLayout(btn_layout)
+        config_layout.addLayout(btn_layout)
+
+        config_layout.addStretch()
+        main_splitter.addWidget(config_widget)
+
+        # 下段容器：执行状态区
+        result_widget = QWidget()
+        result_layout = QVBoxLayout(result_widget)
+        result_layout.setContentsMargins(0, 0, 0, 0)
+        result_layout.setSpacing(8)
 
         # 执行状态与日志（合并进度条 + 状态标签 + 日志输出）
         status_group = QGroupBox("执行状态")
@@ -178,9 +197,13 @@ class BackupView(RefreshOnShowView):
         self.log_text.setMinimumHeight(80)
         self.log_text.setStyleSheet(MONO_FONT_QSS)
         status_layout.addWidget(self.log_text)
-        layout.addWidget(status_group)
+        result_layout.addWidget(status_group)
 
-        layout.addStretch()
+        main_splitter.addWidget(result_widget)
+        main_splitter.setStretchFactor(0, 3)
+        main_splitter.setStretchFactor(1, 2)
+        main_splitter.setMinimumHeight(400)
+        layout.addWidget(main_splitter, 1)
 
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
