@@ -13,6 +13,8 @@ from DITWorkstation.Utils.workers import SimpleWorkerThread
 from DITWorkstation.Utils import get_db_service, logger, pick_directory
 from DITWorkstation.Views.Widgets import RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Widgets.status_panel import StatusPanel
+from DITWorkstation.Views.Widgets.table_factory import make_table
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS
 
 
@@ -155,14 +157,8 @@ class RawExtractionView(RefreshOnShowView):
         result_group = QGroupBox("匹配结果")
         result_layout = QVBoxLayout(result_group)
 
-        self.result_table = QTableWidget()
-        self.result_table.setColumnCount(3)
-        self.result_table.setHorizontalHeaderLabels(["JPG文件", "匹配RAW", "状态"])
-        self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.result_table = make_table(["JPG文件", "匹配RAW", "状态"])
         self.result_table.setMinimumHeight(120)
-        self.result_table.setAlternatingRowColors(True)
-        self.result_table.verticalHeader().setDefaultSectionSize(32)
-        self.result_table.setSelectionBehavior(QTableWidget.SelectRows)
         result_layout.addWidget(self.result_table)
         attach_empty_state(self.result_table, "🔍", "暂无匹配结果", "选择 JPG 和 RAW 目录后点击「扫描匹配」")
 
@@ -178,14 +174,11 @@ class RawExtractionView(RefreshOnShowView):
         result_layout.addWidget(result_group)
 
         # 进度
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        result_layout.addWidget(self.progress_bar)
-
-        self.status_label = QLabel("就绪")
-        self.status_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
-        result_layout.addWidget(self.status_label)
+        self.status_panel = StatusPanel(show_log=False)
+        result_layout.addWidget(self.status_panel)
+        # 保留别名以减少方法体内 self.progress_bar / status_label 的改动
+        self.progress_bar = self.status_panel.progress_bar
+        self.status_label = self.status_panel.status_label
 
         main_splitter.addWidget(result_widget)
         main_splitter.setStretchFactor(0, 2)

@@ -14,9 +14,11 @@ from PySide6.QtCore import Qt, Slot, QDateTime
 
 from DITWorkstation.Models import Project
 from DITWorkstation.Services.media_import_service import MediaImportService
-from DITWorkstation.Utils import format_size, generate_log_message, WorkerThread, get_db_service, pick_directory, find_overwrite_conflicts
+from DITWorkstation.Utils import format_size, WorkerThread, get_db_service, pick_directory, find_overwrite_conflicts
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Widgets.status_panel import StatusPanel
+from DITWorkstation.Views.Widgets.table_factory import make_table
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, MONO_FONT_QSS
 
 
@@ -159,18 +161,11 @@ class MediaImportView(RefreshOnShowView):
         files_group = QGroupBox("待导入文件")
         files_layout = QVBoxLayout(files_group)
 
-        self.files_table = QTableWidget()
-        self.files_table.setColumnCount(5)
-        self.files_table.setHorizontalHeaderLabels(["文件名", "类型", "大小", "修改时间", "路径"])
-        self.files_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.files_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.files_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.files_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.files_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.files_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.files_table.setAlternatingRowColors(True)
-        self.files_table.verticalHeader().setDefaultSectionSize(32)
-        self.files_table.setSortingEnabled(True)
+        self.files_table = make_table(
+            ["文件名", "类型", "大小", "修改时间", "路径"],
+            sortable=True,
+            resize_to_contents_cols=[0, 1, 2, 3],
+        )
         # 双击打开所在目录
         self.files_table.doubleClicked.connect(self._on_file_double_clicked)
         # 右键菜单：打开目录 / 复制路径
@@ -257,20 +252,12 @@ class MediaImportView(RefreshOnShowView):
         # 执行状态（合并进度条 + 状态标签 + 日志输出）
         status_group = QGroupBox("执行状态")
         status_layout = QVBoxLayout(status_group)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        status_layout.addWidget(self.progress_bar)
-
-        self.status_label = QLabel("就绪")
-        self.status_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
-        status_layout.addWidget(self.status_label)
-
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setMinimumHeight(40)
-        self.log_text.setStyleSheet(MONO_FONT_QSS)
-        status_layout.addWidget(self.log_text)
+        self.status_panel = StatusPanel(log_min_height=40)
+        status_layout.addWidget(self.status_panel)
+        # 保留别名以减少方法体内 self.progress_bar / status_label / log_text 的改动
+        self.progress_bar = self.status_panel.progress_bar
+        self.status_label = self.status_panel.status_label
+        self.log_text = self.status_panel.log_text
         bottom_layout.addWidget(status_group)
 
         right_splitter.addWidget(bottom_widget)
@@ -592,7 +579,8 @@ class MediaImportView(RefreshOnShowView):
             log_id=log_id,
             scene=scene,
             shot=shot,
-            cancel_check=lambda: self._cancel_requested
+            cancel_check=lambda: self._cancel_requested,
+            inject_progress=True,
         )
         self.worker.finished.connect(self._on_import_finished)
         self.worker.error.connect(self._on_import_error)
@@ -669,7 +657,7 @@ class MediaImportView(RefreshOnShowView):
             try:
                 main_window = self.window()
                 if hasattr(main_window, 'nav_list'):
-                    from DITWorkstation.Views.main_window import get_nav_index
+                    from DITWorkstation.App.navigation import get_nav_index
                     main_window.nav_list.setCurrentRow(get_nav_index("backup"))
             except Exception as e:
                 from DITWorkstation.Utils import logger
@@ -691,4 +679,4 @@ class MediaImportView(RefreshOnShowView):
         )
 
     def _log(self, message: str):
-        self.log_text.append(generate_log_message(message))
+        self.status_panel.log(message)

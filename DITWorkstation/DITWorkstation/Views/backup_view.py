@@ -13,8 +13,9 @@ from typing import Optional
 from DITWorkstation.Models import ChecksumAlgorithm, BackupJob
 from DITWorkstation.Services.backup_service import BackupService
 from DITWorkstation.Services.media_import_service import MediaImportService
-from DITWorkstation.Utils import WorkerThread, format_size, generate_log_message, safe_slot, get_db_service, pick_directory, find_overwrite_conflicts
+from DITWorkstation.Utils import WorkerThread, format_size, safe_slot, get_db_service, pick_directory, find_overwrite_conflicts
 from DITWorkstation.Views.Widgets import RefreshOnShowView
+from DITWorkstation.Views.Widgets.status_panel import StatusPanel
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS, MONO_FONT_QSS
 
 
@@ -183,20 +184,12 @@ class BackupView(RefreshOnShowView):
         status_group = QGroupBox("执行状态")
         status_layout = QVBoxLayout(status_group)
 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 1000)
-        self.progress_bar.setValue(0)
-        status_layout.addWidget(self.progress_bar)
-
-        self.status_label = QLabel("就绪")
-        self.status_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
-        status_layout.addWidget(self.status_label)
-
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setMinimumHeight(80)
-        self.log_text.setStyleSheet(MONO_FONT_QSS)
-        status_layout.addWidget(self.log_text)
+        self.status_panel = StatusPanel(progress_range=(0, 1000), log_min_height=80)
+        status_layout.addWidget(self.status_panel)
+        # 保留别名以减少方法体内 self.progress_bar / status_label / log_text 的改动
+        self.progress_bar = self.status_panel.progress_bar
+        self.status_label = self.status_panel.status_label
+        self.log_text = self.status_panel.log_text
         result_layout.addWidget(status_group)
 
         main_splitter.addWidget(result_widget)
@@ -377,13 +370,14 @@ class BackupView(RefreshOnShowView):
         self.cancel_btn.setEnabled(True)
         self.progress_bar.setValue(0)
 
-        # 调用约定：调用方一律不传回调参数，由 WorkerThread 自动注入
-        # （旧写法以位置参数传 None 会被 _maybe_inject_callback 判定为「已覆盖」而跳过注入，
-        #  导致 progress/file_completed 信号永不 emit，备份进度条静默失效）
+        # 显式契约：声明注入 progress / file_completed 信号转发回调，
+        # 由 WorkerThread 在 run() 中以关键字参数注入 execute_backup
         self.worker = WorkerThread(
             self.backup_service.execute_backup,
             self.current_job,
             project_id=project_id,
+            inject_progress=True,
+            inject_file_completed=True,
         )
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_finished)
@@ -498,7 +492,7 @@ class BackupView(RefreshOnShowView):
                 try:
                     main_window = self.window()
                     if hasattr(main_window, 'nav_list'):
-                        from DITWorkstation.Views.main_window import get_nav_index
+                        from DITWorkstation.App.navigation import get_nav_index
                         main_window.nav_list.setCurrentRow(get_nav_index("log"))
                 except Exception as e:
                     from DITWorkstation.Utils import logger
@@ -520,4 +514,4 @@ class BackupView(RefreshOnShowView):
         )
 
     def _log(self, message: str):
-        self.log_text.append(generate_log_message(message))
+        self.status_panel.log(message)

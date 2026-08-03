@@ -10,6 +10,7 @@ from DITWorkstation.Services.report_service import ReportService
 from DITWorkstation.Utils import get_db_service, safe_slot, pick_save_file
 from DITWorkstation.Utils.workers import SimpleWorkerThread
 from DITWorkstation.Views.Widgets import RefreshOnShowView
+from DITWorkstation.Views.Widgets.status_panel import StatusPanel
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, MONO_FONT_QSS
 
 
@@ -110,10 +111,10 @@ class ReportView(RefreshOnShowView):
         # 报告预览/日志
         log_group = QGroupBox("生成日志")
         log_layout = QVBoxLayout(log_group)
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setStyleSheet(MONO_FONT_QSS)
-        log_layout.addWidget(self.log_text)
+        self.status_panel = StatusPanel(show_progress=False, show_status=False, log_min_height=None)
+        # 保留别名以减少方法体内 self.log_text 的改动
+        self.log_text = self.status_panel.log_text
+        log_layout.addWidget(self.status_panel)
         result_widget = QWidget()
         result_layout = QVBoxLayout(result_widget)
         result_layout.setContentsMargins(0, 0, 0, 0)
@@ -205,6 +206,4 @@ class ReportView(RefreshOnShowView):
         )
 
     def _log(self, message: str):
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_text.append(f"[{timestamp}] {message}")
+        self.status_panel.log(message)

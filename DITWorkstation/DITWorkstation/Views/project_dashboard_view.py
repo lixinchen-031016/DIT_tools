@@ -12,8 +12,8 @@ from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QS
 
 
 def _nav_index(key: str) -> int:
-    """从 main_window 单一事实源查询导航索引（延迟导入避免循环依赖）"""
-    from DITWorkstation.Views.main_window import get_nav_index
+    """从 navigation 单一事实源查询导航索引"""
+    from DITWorkstation.App.navigation import get_nav_index
     return get_nav_index(key)
 
 

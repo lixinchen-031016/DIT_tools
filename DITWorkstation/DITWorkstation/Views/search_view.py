@@ -11,6 +11,7 @@ from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger,
 from DITWorkstation.Models import RATING_LABELS, AssetRating
 from DITWorkstation.Views.Widgets import RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Widgets.table_factory import make_table
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS
 
 
@@ -155,16 +156,10 @@ class SearchView(RefreshOnShowView):
         result_layout.setSpacing(8)
 
         # 结果表格
-        self.result_table = QTableWidget()
-        self.result_table.setColumnCount(9)
-        self.result_table.setHorizontalHeaderLabels(
-            ["文件名", "类型", "大小", "场景", "镜头", "关联日志", "评级", "校验和", "导入时间"]
+        self.result_table = make_table(
+            ["文件名", "类型", "大小", "场景", "镜头", "关联日志", "评级", "校验和", "导入时间"],
+            sortable=True,
         )
-        self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.result_table.setAlternatingRowColors(True)
-        self.result_table.verticalHeader().setDefaultSectionSize(32)
-        self.result_table.setSortingEnabled(True)
-        self.result_table.setSelectionBehavior(QTableWidget.SelectRows)
         # 双击打开所在目录
         self.result_table.doubleClicked.connect(self._on_result_double_clicked)
         self.result_table.setContextMenuPolicy(Qt.CustomContextMenu)

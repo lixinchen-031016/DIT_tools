@@ -1,6 +1,6 @@
 """拍摄日志管理页面"""
 import uuid
-from typing import List
+from typing import List, Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QGroupBox, QFormLayout, QTableWidget,
@@ -11,11 +11,12 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Slot, QTimer
 
-from DITWorkstation.Models import Project, ShootingLog
+from DITWorkstation.Models import Project, ShootingLog, MediaAsset
 from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Utils import format_size, get_db_service, safe_slot
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Widgets.table_factory import make_table
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS
 
 
@@ -31,15 +32,18 @@ class ShootingLogView(RefreshOnShowView):
         self._pending_asset_ids: List[str] = []
         self._logs = []
         self._setup_ui()
-        # 监听选择控件的项目切换，做本视图业务联动
-        # （工作区/项目下拉与全局信号同步已由 WorkspaceProjectSelector 内部处理）
-        self.selector.project_changed.connect(self._on_project_changed)
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
+        self._setup_selector(layout)
+
+        right_splitter = self._setup_right_splitter()
+        layout.addWidget(right_splitter, 3)
+
+    def _setup_selector(self, layout):
         # 左侧：工作区 + 项目两级选择控件（封装下拉/列表/新建对话框/全局信号同步）
         self.selector = WorkspaceProjectSelector(
             project_widget="list",
@@ -49,7 +53,11 @@ class ShootingLogView(RefreshOnShowView):
             db_service=self.db_service,
         )
         layout.addWidget(self.selector, 1)
+        # 监听选择控件的项目切换，做本视图业务联动
+        # （工作区/项目下拉与全局信号同步已由 WorkspaceProjectSelector 内部处理）
+        self.selector.project_changed.connect(self._on_project_changed)
 
+    def _setup_right_splitter(self):
         # 右侧：上下 Splitter（上：日志管理，下：关联素材）
         right_splitter = QSplitter(Qt.Vertical)
 
@@ -58,14 +66,56 @@ class ShootingLogView(RefreshOnShowView):
         right_panel = QVBoxLayout(top_widget)
         right_panel.setContentsMargins(0, 0, 0, 0)
 
+        self._setup_header(right_panel)
+        right_panel.addWidget(self._setup_form_group())
+        right_panel.addWidget(self._setup_log_group(), 1)
+
+        right_splitter.addWidget(top_widget)
+
+        # 下半部分：标签页（关联素材 / 项目素材）
+        bottom_widget = QWidget()
+        bottom_layout = QVBoxLayout(bottom_widget)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.addWidget(self._setup_bottom_tabs())
+        right_splitter.addWidget(bottom_widget)
+
+        right_splitter.setStretchFactor(0, 2)
+        right_splitter.setStretchFactor(1, 3)
+
+        return right_splitter
+
+    def _setup_header(self, layout):
         title = QLabel("拍摄日志")
         title.setStyleSheet(TITLE_QSS)
-        right_panel.addWidget(title)
+        layout.addWidget(title)
 
+    def _setup_form_group(self):
         # 新建日志表单
         form_group = QGroupBox("记录拍摄信息")
         form_layout = QFormLayout(form_group)
 
+        self._build_form_basic_fields(form_layout)
+
+        self.desc_edit = QLineEdit()
+        self.desc_edit.setPlaceholderText("镜头描述...")
+        form_layout.addRow("描述:", self.desc_edit)
+
+        self.notes_edit = QTextEdit()
+        self.notes_edit.setPlaceholderText("备注信息...")
+        self.notes_edit.setMinimumHeight(60)
+        form_layout.addRow("备注:", self.notes_edit)
+
+        self._build_form_buttons(form_layout)
+
+        # 表单区套 QScrollArea，矮窗口下表单可滚动而不被挤压
+        form_scroll = QScrollArea()
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QFrame.NoFrame)
+        form_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        form_scroll.setWidget(form_group)
+        return form_scroll
+
+    def _build_form_basic_fields(self, form_layout):
         info_row1 = QHBoxLayout()
         self.scene_edit = QLineEdit()
         self.scene_edit.setPlaceholderText("场景号 如: S001")
@@ -113,15 +163,7 @@ class ShootingLogView(RefreshOnShowView):
         info_row3.addWidget(self.shutter_edit)
         form_layout.addRow("", info_row3)
 
-        self.desc_edit = QLineEdit()
-        self.desc_edit.setPlaceholderText("镜头描述...")
-        form_layout.addRow("描述:", self.desc_edit)
-
-        self.notes_edit = QTextEdit()
-        self.notes_edit.setPlaceholderText("备注信息...")
-        self.notes_edit.setMinimumHeight(60)
-        form_layout.addRow("备注:", self.notes_edit)
-
+    def _build_form_buttons(self, form_layout):
         asset_select_row = QHBoxLayout()
         self.select_assets_btn = QPushButton("选择关联素材")
         self.select_assets_btn.clicked.connect(self._pick_assets_for_new_log)
@@ -167,28 +209,15 @@ class ShootingLogView(RefreshOnShowView):
         add_log_btn.clicked.connect(self._add_log)
         form_layout.addRow("", add_log_btn)
 
-        # 表单区套 QScrollArea，矮窗口下表单可滚动而不被挤压
-        form_scroll = QScrollArea()
-        form_scroll.setWidgetResizable(True)
-        form_scroll.setFrameShape(QFrame.NoFrame)
-        form_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-        form_scroll.setWidget(form_group)
-        right_panel.addWidget(form_scroll)
-
+    def _setup_log_group(self):
         # 日志列表
         log_group = QGroupBox("拍摄日志列表")
         log_layout = QVBoxLayout(log_group)
 
-        self.log_table = QTableWidget()
-        self.log_table.setColumnCount(6)
-        self.log_table.setHorizontalHeaderLabels(
-            ["场景", "镜头", "镜次", "描述", "摄影机", "时间"]
+        self.log_table = make_table(
+            ["场景", "镜头", "镜次", "描述", "摄影机", "时间"],
+            selection_mode=QAbstractItemView.SingleSelection,
         )
-        self.log_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.log_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.log_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.log_table.setAlternatingRowColors(True)
-        self.log_table.verticalHeader().setDefaultSectionSize(32)
         self.log_table.itemSelectionChanged.connect(self._on_log_selected)
         self.log_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.log_table.customContextMenuRequested.connect(self._on_log_context_menu)
@@ -200,17 +229,15 @@ class ShootingLogView(RefreshOnShowView):
         del_log_btn.clicked.connect(self._delete_log)
         log_layout.addWidget(del_log_btn)
 
-        right_panel.addWidget(log_group, 1)
+        return log_group
 
-        right_splitter.addWidget(top_widget)
-
-        # 下半部分：标签页（关联素材 / 项目素材）
-        bottom_widget = QWidget()
-        bottom_layout = QVBoxLayout(bottom_widget)
-        bottom_layout.setContentsMargins(0, 0, 0, 0)
-
+    def _setup_bottom_tabs(self):
         self.bottom_tabs = QTabWidget()
+        self.bottom_tabs.addTab(self._setup_linked_tab(), "关联素材")
+        self.bottom_tabs.addTab(self._setup_project_tab(), "项目素材")
+        return self.bottom_tabs
 
+    def _setup_linked_tab(self):
         # 标签页 1：关联素材（绑定到选中日志）
         linked_tab = QWidget()
         linked_layout = QVBoxLayout(linked_tab)
@@ -233,24 +260,19 @@ class ShootingLogView(RefreshOnShowView):
         asset_btn_row.addStretch()
         linked_layout.addLayout(asset_btn_row)
 
-        self.asset_table = QTableWidget()
-        self.asset_table.setColumnCount(5)
-        self.asset_table.setHorizontalHeaderLabels(
-            ["文件名", "类型", "大小", "场景", "镜头"]
+        self.asset_table = make_table(
+            ["文件名", "类型", "大小", "场景", "镜头"],
+            sortable=True,
         )
-        self.asset_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.asset_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.asset_table.setAlternatingRowColors(True)
-        self.asset_table.verticalHeader().setDefaultSectionSize(32)
-        self.asset_table.setSortingEnabled(True)
         self.asset_table.itemSelectionChanged.connect(self._on_asset_selection_changed)
         # 双击打开所在目录
         self.asset_table.doubleClicked.connect(self._on_linked_asset_double_clicked)
         linked_layout.addWidget(self.asset_table, 1)
         attach_empty_state(self.asset_table, "🔗", "暂无关联素材", "选择日志后点击「+ 关联素材」")
 
-        self.bottom_tabs.addTab(linked_tab, "关联素材")
+        return linked_tab
 
+    def _setup_project_tab(self):
         # 标签页 2：项目素材（多选后创建日志）
         proj_tab = QWidget()
         proj_layout = QVBoxLayout(proj_tab)
@@ -268,32 +290,18 @@ class ShootingLogView(RefreshOnShowView):
         proj_btn_row.addStretch()
         proj_layout.addLayout(proj_btn_row)
 
-        self.proj_asset_table = QTableWidget()
-        self.proj_asset_table.setColumnCount(6)
-        self.proj_asset_table.setHorizontalHeaderLabels(
-            ["文件名", "类型", "大小", "场景", "镜头", "关联状态"]
+        self.proj_asset_table = make_table(
+            ["文件名", "类型", "大小", "场景", "镜头", "关联状态"],
+            sortable=True,
+            selection_mode=QAbstractItemView.ExtendedSelection,
         )
-        self.proj_asset_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.proj_asset_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.proj_asset_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.proj_asset_table.setAlternatingRowColors(True)
-        self.proj_asset_table.verticalHeader().setDefaultSectionSize(32)
-        self.proj_asset_table.setSortingEnabled(True)
         # 双击打开所在目录
         self.proj_asset_table.doubleClicked.connect(self._on_proj_asset_double_clicked)
         self.proj_asset_table.itemSelectionChanged.connect(self._on_proj_asset_selection_changed)
         proj_layout.addWidget(self.proj_asset_table, 1)
         attach_empty_state(self.proj_asset_table, "📂", "暂无项目素材", "请先在「媒体导入」中导入素材")
 
-        self.bottom_tabs.addTab(proj_tab, "项目素材")
-
-        bottom_layout.addWidget(self.bottom_tabs)
-        right_splitter.addWidget(bottom_widget)
-
-        right_splitter.setStretchFactor(0, 2)
-        right_splitter.setStretchFactor(1, 3)
-
-        layout.addWidget(right_splitter, 3)
+        return proj_tab
 
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
@@ -595,14 +603,37 @@ class ShootingLogView(RefreshOnShowView):
 
         降低用户手动录入成本：从已导入素材中选一个代表帧，EXIF 即可整组带出。
         """
+        asset = self._pick_representative_asset()
+        if asset is None:
+            return
+
+        filled = self._apply_exif_to_form(asset)
+        if filled is None:
+            return
+
+        if filled:
+            QMessageBox.information(
+                self, "已填充 EXIF",
+                f"从 {asset.file_name} 读取并填充：{ '、'.join(filled) }"
+            )
+        else:
+            QMessageBox.information(
+                self, "提示",
+                "未填充任何字段。\n可能原因：\n"
+                "  • 该素材没有 EXIF 信息\n"
+                "  • 表单中相关字段已被填写（不会覆盖）"
+            )
+
+    def _pick_representative_asset(self) -> Optional[MediaAsset]:
+        """弹对话框让用户从项目素材中选择一个代表素材，返回选中的素材（取消则 None）。"""
         if not self.current_project:
             QMessageBox.warning(self, "提示", "请先选择项目")
-            return
+            return None
 
         all_assets = self.db_service.get_media_assets(self.current_project.project_id)
         if not all_assets:
             QMessageBox.information(self, "提示", "该项目下还没有导入素材，无法填充 EXIF。")
-            return
+            return None
 
         # 单选对话框：用 QListWidget 让用户挑一个代表素材
         from PySide6.QtWidgets import QDialog as _QDialog, QListWidget as _QListWidget, \
@@ -624,18 +655,24 @@ class ShootingLogView(RefreshOnShowView):
         bb.rejected.connect(dlg.reject)
         dl.addWidget(bb)
         if dlg.exec() != _QDialog.Accepted:
-            return
+            return None
 
         row = pick_list.currentRow()
         if row < 0:
-            return
-        asset = all_assets[row]
+            return None
+        return all_assets[row]
+
+    def _apply_exif_to_form(self, asset) -> Optional[List[str]]:
+        """读取 asset 的 EXIF/视频元数据，仅在表单字段为空时填充。
+
+        返回已填充字段名列表；文件不存在或读取失败时弹出警告并返回 None。
+        """
         file_path = asset.file_path
 
         from pathlib import Path
         if not file_path or not Path(file_path).exists():
             QMessageBox.warning(self, "提示", f"素材文件不存在：\n{file_path}")
-            return
+            return None
 
         # 读取 EXIF（图片/RAW）或视频元数据
         camera_make = ""
@@ -660,7 +697,7 @@ class ShootingLogView(RefreshOnShowView):
                 shutter = meta.shutter_speed or ""
         except Exception as e:
             QMessageBox.warning(self, "提示", f"读取 EXIF 失败：{e}")
-            return
+            return None
 
         # 合并 make+model 为 camera 字段（与 ShootingLog.camera 语义一致）
         camera_value = " ".join(p for p in (camera_make, camera_model) if p).strip()
@@ -683,18 +720,7 @@ class ShootingLogView(RefreshOnShowView):
             self.shutter_edit.setText(shutter)
             filled.append("快门")
 
-        if filled:
-            QMessageBox.information(
-                self, "已填充 EXIF",
-                f"从 {asset.file_name} 读取并填充：{ '、'.join(filled) }"
-            )
-        else:
-            QMessageBox.information(
-                self, "提示",
-                "未填充任何字段。\n可能原因：\n"
-                "  • 该素材没有 EXIF 信息\n"
-                "  • 表单中相关字段已被填写（不会覆盖）"
-            )
+        return filled
 
     def _load_project_assets(self):
         if not self.current_project:

@@ -414,8 +414,8 @@ class Logger:
                 )
                 file_handler.setFormatter(formatter)
                 self.logger.addHandler(file_handler)
-            except PermissionError:
-                pass
+            except PermissionError as e:
+                self.logger.warning(f"无法创建日志文件（仅控制台输出）: {e}")
 
     def info(self, message: str):
         self.logger.info(message)
@@ -563,7 +563,7 @@ def safe_slot(error_title: str = "操作失败"):
                                 f"{error_title}\n{type(e).__name__}: {e}\n\n"
                                 f"Traceback:\n{traceback.format_exc()}"
                             )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"错误对话框/剪贴板操作失败: {e}")
         return wrapper
     return decorator

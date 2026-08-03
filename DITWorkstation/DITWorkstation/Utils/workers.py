@@ -1,5 +1,4 @@
 """后台工作线程工具"""
-import inspect
 from PySide6.QtCore import QThread, Signal, QObject
 from typing import Callable
 
@@ -13,64 +12,50 @@ class WorkerSignals(QObject):
 
 
 class WorkerThread(QThread):
-    """通用后台工作线程"""
+    """通用后台工作线程
+
+    回调注入采用显式契约：调用方通过 ``inject_progress`` /
+    ``inject_file_completed`` 显式声明是否需要 worker 把自身的信号转发
+    回调以关键字参数注入目标函数。相比旧版基于 ``inspect.signature`` 的
+    反射推断，避免了「位置参数传 None 被误判为已覆盖」与
+    "got multiple values for argument" 的坑。
+
+    调用方若自行提供 ``progress_callback`` / ``file_completed_callback``
+    （如 rename_view 用 lambda 桥接到自定义信号），只需保持两个开关为
+    False（默认），传入的回调会原样透传，不会被覆盖。
+    """
     progress = Signal(str, float, str)
     finished = Signal(object)
     error = Signal(str)
     file_completed = Signal(str, object)
 
-    def __init__(self, func: Callable, *args, **kwargs):
+    def __init__(
+        self,
+        func: Callable,
+        *args,
+        inject_progress: bool = False,
+        inject_file_completed: bool = False,
+        **kwargs,
+    ):
         super().__init__()
-        self.func = func
-        self.args = args
-        self.kwargs = kwargs
+        self._func = func
+        self._args = args
+        self._kwargs = kwargs
+        self._inject_progress = inject_progress
+        self._inject_file_completed = inject_file_completed
         self._result = None
-
-    @staticmethod
-    def _accepts_kwarg(func: Callable, name: str) -> bool:
-        """判断函数是否接受指定关键字参数（含 **kwargs）"""
-        try:
-            sig = inspect.signature(func)
-        except (ValueError, TypeError):
-            return False
-        params = sig.parameters
-        if name in params:
-            return True
-        return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
 
     def run(self):
         try:
-            # 仅在调用方未显式提供回调时（无论位置参数还是关键字参数）才自动注入，
-            # 避免 "got multiple values for argument" 错误
-            self._maybe_inject_callback('progress_callback', self._on_progress)
-            self._maybe_inject_callback('file_completed_callback', self._on_file_completed)
-            self._result = self.func(*self.args, **self.kwargs)
+            kwargs = dict(self._kwargs)
+            if self._inject_progress:
+                kwargs['progress_callback'] = self._on_progress
+            if self._inject_file_completed:
+                kwargs['file_completed_callback'] = self._on_file_completed
+            self._result = self._func(*self._args, **kwargs)
             self.finished.emit(self._result)
         except Exception as e:
             self.error.emit(str(e))
-
-    def _maybe_inject_callback(self, name: str, callback: Callable) -> None:
-        """判断是否需要自动注入回调参数。
-
-        跳过注入的条件（任一即可）：
-        1. 函数不接受该关键字参数
-        2. 调用方已通过 kwargs 显式传递（即使值为 None）
-        3. 调用方已通过位置参数覆盖该参数在签名中的位置
-        """
-        if name in self.kwargs:
-            return  # 调用方已通过关键字参数显式传递
-        if not self._accepts_kwarg(self.func, name):
-            return  # 函数不接受该参数
-        # 检查位置参数是否已覆盖该参数位置
-        try:
-            sig = inspect.signature(self.func)
-            params = list(sig.parameters.values())
-            for i, p in enumerate(params):
-                if p.name == name and i < len(self.args):
-                    return  # 位置参数已覆盖
-        except (ValueError, TypeError):
-            return  # 无法分析签名，保守起见不注入
-        self.kwargs[name] = callback
 
     def _on_progress(self, target: str, progress: float, message: str):
         self.progress.emit(target, progress, message)

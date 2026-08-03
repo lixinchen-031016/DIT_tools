@@ -14,6 +14,8 @@ from PySide6.QtCore import Qt, QRect
 from PySide6.QtGui import QFont, QFontDatabase, QIcon, QPainter, QPixmap, QColor
 
 from DITWorkstation.App import config
+from DITWorkstation.App.navigation import get_nav_index
+from DITWorkstation.Utils import logger
 from DITWorkstation.Views.main_window import (
     MainWindow, set_current_project, set_current_workspace
 )
@@ -146,9 +148,9 @@ def main():
         if wizard._created_project_id:
             set_current_project(wizard._created_project_id)
         try:
-            window.nav_list.setCurrentRow(1)  # 1 = 媒体导入
-        except Exception:
-            pass
+            window.nav_list.setCurrentRow(get_nav_index("import"))
+        except Exception as e:
+            logger.debug(f"向导后跳转媒体导入失败: {e}")
 
     sys.exit(app.exec())
 

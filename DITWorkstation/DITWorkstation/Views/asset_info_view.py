@@ -14,6 +14,7 @@ from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger, open_in_file_manager
 from DITWorkstation.Views.Widgets import RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Widgets.table_factory import make_table
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS
 
 # 缺失值占位符
@@ -157,6 +158,28 @@ class AssetInfoView(RefreshOnShowView):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
+        self._setup_header(layout)
+        splitter = self._setup_splitter()
+        layout.addWidget(splitter, 1)
+
+        # === 底部批量操作进度条 ===
+        self.batch_progress_frame = QFrame()
+        self.batch_progress_frame.setStyleSheet("background: transparent;")
+        batch_layout = QVBoxLayout(self.batch_progress_frame)
+        batch_layout.setContentsMargins(0, 0, 0, 0)
+        batch_layout.setSpacing(4)
+
+        self.batch_status_label = QLabel("")
+        self.batch_status_label.setStyleSheet(f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};")
+        batch_layout.addWidget(self.batch_status_label)
+
+        self.batch_progress = QProgressBar()
+        self.batch_progress.setVisible(False)
+        batch_layout.addWidget(self.batch_progress)
+        self.batch_progress_frame.setVisible(False)
+        layout.addWidget(self.batch_progress_frame)
+
+    def _setup_header(self, layout):
         # === 标题区 ===
         header = QHBoxLayout()
         title_col = QVBoxLayout()
@@ -191,9 +214,16 @@ class AssetInfoView(RefreshOnShowView):
 
         layout.addLayout(header)
 
+    def _setup_splitter(self):
         # === 主体：左右分栏 ===
         splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self._setup_left_panel())
+        splitter.addWidget(self._setup_right_panel())
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 3)
+        return splitter
 
+    def _setup_left_panel(self):
         # --- 左侧：工作区/项目选择 + 素材列表 ---
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
@@ -214,18 +244,11 @@ class AssetInfoView(RefreshOnShowView):
         self.asset_count_label.setStyleSheet(f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};")
         left_layout.addWidget(self.asset_count_label)
 
-        self.asset_table = QTableWidget()
-        self.asset_table.setColumnCount(4)
-        self.asset_table.setHorizontalHeaderLabels(["文件名", "类型", "大小", "EXIF"])
-        self.asset_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.asset_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.asset_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.asset_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.asset_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.asset_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.asset_table.setAlternatingRowColors(True)
-        self.asset_table.verticalHeader().setDefaultSectionSize(32)
-        self.asset_table.setSortingEnabled(True)
+        self.asset_table = make_table(
+            ["文件名", "类型", "大小", "EXIF"],
+            sortable=True,
+            resize_to_contents_cols=[1, 2, 3],
+        )
         # 表格全局样式由 main.py 注入的 GLOBAL_QSS 统一控制，不再单独 setStyleSheet
         self.asset_table.itemSelectionChanged.connect(self._on_asset_selected)
         # 双击打开所在目录
@@ -239,8 +262,9 @@ class AssetInfoView(RefreshOnShowView):
         refresh_btn.clicked.connect(self._load_assets)
         left_layout.addWidget(refresh_btn)
 
-        splitter.addWidget(left_widget)
+        return left_widget
 
+    def _setup_right_panel(self):
         # --- 右侧：属性详情面板 ---
         right_scroll = QScrollArea()
         right_scroll.setWidgetResizable(True)
@@ -253,6 +277,15 @@ class AssetInfoView(RefreshOnShowView):
         props_layout.setContentsMargins(8, 0, 8, 8)
         props_layout.setSpacing(0)
 
+        self._setup_props_file_header(props_layout)
+        self._setup_rating_row(props_layout)
+        self._setup_props_groups(props_layout)
+
+        props_layout.addStretch()
+        right_scroll.setWidget(props_widget)
+        return right_scroll
+
+    def _setup_props_file_header(self, props_layout):
         # 当前选中文件名标题
         self.current_file_label = QLabel("请选择左侧素材查看详情")
         self.current_file_label.setStyleSheet(
@@ -282,6 +315,7 @@ class AssetInfoView(RefreshOnShowView):
         single_refresh_row.addStretch()
         props_layout.addLayout(single_refresh_row)
 
+    def _setup_rating_row(self, props_layout):
         # 镜次评级快捷按钮（评级值与标签来自 Models.RATING_LABELS 单一事实源）
         rating_row = QHBoxLayout()
         rating_label = QLabel("⭐ 镜次评级")
@@ -318,6 +352,7 @@ class AssetInfoView(RefreshOnShowView):
             rating_row.addWidget(btn)
         props_layout.addLayout(rating_row)
 
+    def _setup_props_groups(self, props_layout):
         # 各分组（使用统一的 _create_group 方法）
         self._group_widgets = {}
         self._label_refs = {}
@@ -374,31 +409,6 @@ class AssetInfoView(RefreshOnShowView):
             ("checksum_algorithm", "校验算法"),
             ("checksum_value", "校验值"),
         ])
-
-        props_layout.addStretch()
-        right_scroll.setWidget(props_widget)
-        splitter.addWidget(right_scroll)
-
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 3)
-        layout.addWidget(splitter, 1)
-
-        # === 底部批量操作进度条 ===
-        self.batch_progress_frame = QFrame()
-        self.batch_progress_frame.setStyleSheet("background: transparent;")
-        batch_layout = QVBoxLayout(self.batch_progress_frame)
-        batch_layout.setContentsMargins(0, 0, 0, 0)
-        batch_layout.setSpacing(4)
-
-        self.batch_status_label = QLabel("")
-        self.batch_status_label.setStyleSheet(f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};")
-        batch_layout.addWidget(self.batch_status_label)
-
-        self.batch_progress = QProgressBar()
-        self.batch_progress.setVisible(False)
-        batch_layout.addWidget(self.batch_progress)
-        self.batch_progress_frame.setVisible(False)
-        layout.addWidget(self.batch_progress_frame)
 
     def _create_group(self, parent_layout, group_key, title, fields):
         """创建一个信息分组"""
@@ -631,8 +641,8 @@ class AssetInfoView(RefreshOnShowView):
         if asset.video_metadata:
             try:
                 video_info = json.loads(asset.video_metadata)
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.debug(f"解析 video_metadata 失败: {e}")
         if asset.duration_seconds:
             mins = int(asset.duration_seconds // 60)
             secs = asset.duration_seconds % 60

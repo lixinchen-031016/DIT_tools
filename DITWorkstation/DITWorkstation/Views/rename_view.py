@@ -12,6 +12,8 @@ from DITWorkstation.Models import RenameRule
 from DITWorkstation.Services.rename_service import RenameService
 from DITWorkstation.Utils import WorkerThread, safe_slot, get_db_service, logger, pick_directory
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Widgets.status_panel import StatusPanel
+from DITWorkstation.Views.Widgets.table_factory import make_table
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS
 
 
@@ -150,26 +152,21 @@ class RenameView(QWidget):
         # 预览表格
         preview_group = QGroupBox("预览结果")
         preview_layout = QVBoxLayout(preview_group)
-        self.preview_table = QTableWidget()
-        self.preview_table.setColumnCount(2)
-        self.preview_table.setHorizontalHeaderLabels(["原文件名", "新文件名"])
-        self.preview_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.preview_table.setAlternatingRowColors(True)
-        self.preview_table.verticalHeader().setDefaultSectionSize(32)
-        self.preview_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.preview_table = make_table(["原文件名", "新文件名"])
         preview_layout.addWidget(self.preview_table)
         attach_empty_state(self.preview_table, "📝", "暂无预览", "选择文件夹并设置规则后点击「预览」")
         result_layout.addWidget(preview_group)
 
         # 进度条（重命名执行时显示）
-        self.status_label = QLabel()
-        self.status_label.setVisible(False)
-        self.status_label.setStyleSheet(f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};")
-        result_layout.addWidget(self.status_label)
-
-        self.progress_bar = QProgressBar()
+        self.status_panel = StatusPanel(show_log=False, status_text="")
+        result_layout.addWidget(self.status_panel)
+        # 保留别名以减少方法体内 self.progress_bar / status_label 的改动
+        self.progress_bar = self.status_panel.progress_bar
+        self.status_label = self.status_panel.status_label
+        # 默认隐藏，执行重命名时再显示
+        self.status_panel.setVisible(False)
         self.progress_bar.setVisible(False)
-        result_layout.addWidget(self.progress_bar)
+        self.status_label.setVisible(False)
 
         main_splitter.addWidget(result_widget)
         main_splitter.setStretchFactor(0, 2)
@@ -242,6 +239,7 @@ class RenameView(QWidget):
         # 禁用按钮，显示进度
         self.rename_btn.setEnabled(False)
         self.preview_btn.setEnabled(False)
+        self.status_panel.setVisible(True)
         self.progress_bar.setVisible(True)
         self.status_label.setVisible(True)
         self.progress_bar.setRange(0, 100)  # 确定模式，按百分比推进
@@ -328,5 +326,6 @@ class RenameView(QWidget):
         """重命名结束后恢复按钮与进度条状态"""
         self.rename_btn.setEnabled(True)
         self.preview_btn.setEnabled(True)
+        self.status_panel.setVisible(False)
         self.progress_bar.setVisible(False)
         self.status_label.setVisible(False)

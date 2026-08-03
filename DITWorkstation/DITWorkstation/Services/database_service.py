@@ -1,6 +1,7 @@
 """拍摄日志与项目管理服务 - SQLite持久化"""
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -29,6 +30,28 @@ class DatabaseService:
         # 避免备份回写 / UI 更新等操作静默失败。
         conn.execute("PRAGMA busy_timeout=5000")
         return conn
+
+    @contextmanager
+    def _connection(self):
+        """连接上下文管理器：自动关闭连接，不自动提交。"""
+        conn = self._get_conn()
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    @contextmanager
+    def _transaction(self):
+        """事务上下文管理器：自动提交/回滚 + 关闭连接。"""
+        conn = self._get_conn()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _init_db(self):
         """初始化数据库表"""
@@ -214,19 +237,14 @@ class DatabaseService:
         Returns:
             是否成功
         """
-        conn = self._get_conn()
         try:
-            conn.execute("BEGIN TRANSACTION")
-            for sql, params in operations:
-                conn.execute(sql, params)
-            conn.commit()
+            with self._transaction() as conn:
+                for sql, params in operations:
+                    conn.execute(sql, params)
             return True
         except Exception as e:
-            conn.rollback()
             logger.error(f"事务执行失败: {e}")
             return False
-        finally:
-            conn.close()
 
     # ===== 工作区管理 =====
 
@@ -244,41 +262,31 @@ class DatabaseService:
             path=path,
             description=description
         )
-        conn = self._get_conn()
-        try:
+        with self._transaction() as conn:
             conn.execute(
                 "INSERT INTO workspaces (workspace_id, name, path, description, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (workspace.workspace_id, workspace.name, workspace.path, workspace.description,
                  workspace.created_at.isoformat(), workspace.updated_at.isoformat())
             )
-            conn.commit()
             logger.info(f"创建工作区: {workspace.workspace_id} - {workspace.name} (path={workspace.path})")
-        finally:
-            conn.close()
         return workspace
 
     def get_workspaces(self) -> List[Workspace]:
         """获取所有工作区，按创建时间倒序"""
-        conn = self._get_conn()
-        try:
+        with self._connection() as conn:
             rows = conn.execute(
                 "SELECT * FROM workspaces ORDER BY created_at DESC"
             ).fetchall()
             return [self._row_to_workspace(r) for r in rows]
-        finally:
-            conn.close()
 
     def get_workspace(self, workspace_id: str) -> Optional[Workspace]:
         """获取单个工作区"""
-        conn = self._get_conn()
-        try:
+        with self._connection() as conn:
             row = conn.execute(
                 "SELECT * FROM workspaces WHERE workspace_id = ?", (workspace_id,)
             ).fetchone()
             return self._row_to_workspace(row) if row else None
-        finally:
-            conn.close()
 
     def update_workspace(self, workspace_id: str, **kwargs) -> bool:
         """更新工作区（支持 name / path / description）"""
@@ -296,17 +304,14 @@ class DatabaseService:
         params.append(datetime.now().isoformat())
         params.append(workspace_id)
 
-        conn = self._get_conn()
         try:
-            conn.execute(f"UPDATE workspaces SET {', '.join(fields)} WHERE workspace_id = ?", params)
-            conn.commit()
-            logger.info(f"更新工作区: {workspace_id}")
-            return True
+            with self._transaction() as conn:
+                conn.execute(f"UPDATE workspaces SET {', '.join(fields)} WHERE workspace_id = ?", params)
+                logger.info(f"更新工作区: {workspace_id}")
+                return True
         except Exception as e:
             logger.error(f"更新工作区失败 {workspace_id}: {e}")
             return False
-        finally:
-            conn.close()
 
     def delete_workspace(self, workspace_id: str, reassign_to: Optional[str] = None) -> bool:
         """删除工作区。
@@ -323,31 +328,26 @@ class DatabaseService:
             logger.warning("拒绝删除默认工作区")
             return False
 
-        conn = self._get_conn()
         try:
-            conn.execute("BEGIN TRANSACTION")
-            if reassign_to:
-                conn.execute(
-                    "UPDATE projects SET workspace_id = ? WHERE workspace_id = ?",
-                    (reassign_to, workspace_id)
-                )
-            else:
-                # 置 NULL，迁移逻辑会在下次启动时归入默认工作区；
-                # 此处也立即归集以保持运行期一致性
-                conn.execute(
-                    "UPDATE projects SET workspace_id = 'default' WHERE workspace_id = ?",
-                    (workspace_id,)
-                )
-            conn.execute("DELETE FROM workspaces WHERE workspace_id = ?", (workspace_id,))
-            conn.commit()
-            logger.info(f"删除工作区: {workspace_id}（项目已归入 default）")
-            return True
+            with self._transaction() as conn:
+                if reassign_to:
+                    conn.execute(
+                        "UPDATE projects SET workspace_id = ? WHERE workspace_id = ?",
+                        (reassign_to, workspace_id)
+                    )
+                else:
+                    # 置 NULL，迁移逻辑会在下次启动时归入默认工作区；
+                    # 此处也立即归集以保持运行期一致性
+                    conn.execute(
+                        "UPDATE projects SET workspace_id = 'default' WHERE workspace_id = ?",
+                        (workspace_id,)
+                    )
+                conn.execute("DELETE FROM workspaces WHERE workspace_id = ?", (workspace_id,))
+                logger.info(f"删除工作区: {workspace_id}（项目已归入 default）")
+                return True
         except Exception as e:
-            conn.rollback()
             logger.error(f"删除工作区失败 {workspace_id}: {e}")
             return False
-        finally:
-            conn.close()
 
     def _row_to_workspace(self, row: sqlite3.Row) -> Workspace:
         return Workspace(
@@ -380,15 +380,11 @@ class DatabaseService:
                 # 数据库刚初始化且无任何工作区时，先建默认工作区
                 ws = self.create_workspace(name="默认工作区", description="默认工作区")
                 # 强制其 ID 为 'default' 以保证幂等
-                conn = self._get_conn()
-                try:
+                with self._transaction() as conn:
                     conn.execute(
                         "UPDATE workspaces SET workspace_id = 'default' WHERE workspace_id = ?",
                         (ws.workspace_id,)
                     )
-                    conn.commit()
-                finally:
-                    conn.close()
                 ws.workspace_id = "default"
             workspace_id = ws.workspace_id
 
@@ -399,18 +395,14 @@ class DatabaseService:
             base_path=base_path,
             workspace_id=workspace_id
         )
-        conn = self._get_conn()
-        try:
+        with self._transaction() as conn:
             conn.execute(
                 "INSERT INTO projects (project_id, name, description, base_path, workspace_id, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (project.project_id, project.name, project.description, project.base_path,
                  project.workspace_id, project.created_at.isoformat(), project.updated_at.isoformat())
             )
-            conn.commit()
             logger.info(f"创建项目: {project.project_id} - {project.name} (workspace={workspace_id})")
-        finally:
-            conn.close()
         return project
 
     def get_projects(self, workspace_id: Optional[str] = None) -> List[Project]:
@@ -419,8 +411,7 @@ class DatabaseService:
         Args:
             workspace_id: 指定则只返回该工作区下的项目；None 返回所有项目
         """
-        conn = self._get_conn()
-        try:
+        with self._connection() as conn:
             if workspace_id:
                 rows = conn.execute(
                     "SELECT * FROM projects WHERE workspace_id = ? ORDER BY created_at DESC",
@@ -429,17 +420,12 @@ class DatabaseService:
             else:
                 rows = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
             return [self._row_to_project(r) for r in rows]
-        finally:
-            conn.close()
 
     def get_project(self, project_id: str) -> Optional[Project]:
         """获取单个项目"""
-        conn = self._get_conn()
-        try:
+        with self._connection() as conn:
             row = conn.execute("SELECT * FROM projects WHERE project_id = ?", (project_id,)).fetchone()
             return self._row_to_project(row) if row else None
-        finally:
-            conn.close()
 
     def update_project(self, project_id: str, **kwargs) -> bool:
         """更新项目"""
@@ -456,45 +442,33 @@ class DatabaseService:
         params.append(datetime.now().isoformat())
         params.append(project_id)
 
-        conn = self._get_conn()
         try:
-            conn.execute(f"UPDATE projects SET {', '.join(fields)} WHERE project_id = ?", params)
-            conn.commit()
-            logger.info(f"更新项目: {project_id}")
-            return True
+            with self._transaction() as conn:
+                conn.execute(f"UPDATE projects SET {', '.join(fields)} WHERE project_id = ?", params)
+                logger.info(f"更新项目: {project_id}")
+                return True
         except Exception as e:
             logger.error(f"更新项目失败 {project_id}: {e}")
             return False
-        finally:
-            conn.close()
 
     def delete_project(self, project_id: str):
         """删除项目（事务级联清理 media_assets + shooting_logs + projects）
 
         注意：backup_jobs 表无 project_id 外键，保留备份历史记录不级联删除。
         """
-        conn = self._get_conn()
-        try:
-            conn.execute("BEGIN TRANSACTION")
+        with self._transaction() as conn:
             conn.execute("DELETE FROM media_assets WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM shooting_logs WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
-            conn.commit()
             logger.info(f"删除项目: {project_id}")
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     # ===== 拍摄日志 =====
 
     def create_shooting_log(self, log: ShootingLog) -> ShootingLog:
         """创建拍摄日志"""
-        conn = self._get_conn()
-        try:
+        with self._transaction() as conn:
             conn.execute(
-                """INSERT INTO shooting_logs 
+                """INSERT INTO shooting_logs
                    (log_id, project_id, scene, shot, take, description, camera, lens, iso, aperture, shutter_speed, notes, file_paths, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (log.log_id, log.project_id, log.scene, log.shot, log.take,
@@ -502,49 +476,36 @@ class DatabaseService:
                  log.shutter_speed, log.notes, "|".join(log.file_paths),
                  log.created_at.isoformat())
             )
-            conn.commit()
             logger.info(f"创建拍摄日志: {log.log_id} - {log.scene}/{log.shot}/{log.take}")
-        finally:
-            conn.close()
         return log
 
     def get_shooting_logs(self, project_id: str) -> List[ShootingLog]:
         """获取项目的拍摄日志"""
-        conn = self._get_conn()
-        try:
+        with self._connection() as conn:
             rows = conn.execute(
                 "SELECT * FROM shooting_logs WHERE project_id = ? ORDER BY created_at DESC",
                 (project_id,)
             ).fetchall()
             return [self._row_to_log(r) for r in rows]
-        finally:
-            conn.close()
 
     def get_shooting_log(self, log_id: str) -> Optional[ShootingLog]:
         """获取单个拍摄日志"""
-        conn = self._get_conn()
-        try:
+        with self._connection() as conn:
             row = conn.execute("SELECT * FROM shooting_logs WHERE log_id = ?", (log_id,)).fetchone()
             return self._row_to_log(row) if row else None
-        finally:
-            conn.close()
 
     def update_shooting_log(self, log: ShootingLog):
         """更新拍摄日志"""
-        conn = self._get_conn()
-        try:
+        with self._transaction() as conn:
             conn.execute(
-                """UPDATE shooting_logs SET scene=?, shot=?, take=?, description=?, camera=?, 
+                """UPDATE shooting_logs SET scene=?, shot=?, take=?, description=?, camera=?,
                    lens=?, iso=?, aperture=?, shutter_speed=?, notes=?, file_paths=?
                    WHERE log_id=?""",
                 (log.scene, log.shot, log.take, log.description, log.camera,
                  log.lens, log.iso, log.aperture, log.shutter_speed, log.notes,
                  "|".join(log.file_paths), log.log_id)
             )
-            conn.commit()
             logger.info(f"更新拍摄日志: {log.log_id}")
-        finally:
-            conn.close()
 
     def delete_shooting_log(self, log_id: str):
         """删除拍摄日志（级联清除关联素材的 log_id 与 scene/shot）
@@ -554,22 +515,17 @@ class DatabaseService:
         scene/shot，导致后续检索/报告把残留字段当作有效数据。
         故删除日志时一并清空 scene/shot，保持数据一致性。
         """
-        conn = self._get_conn()
         try:
-            conn.execute("BEGIN TRANSACTION")
-            conn.execute(
-                "UPDATE media_assets SET log_id = NULL, scene = '', shot = '' WHERE log_id = ?",
-                (log_id,)
-            )
-            conn.execute("DELETE FROM shooting_logs WHERE log_id = ?", (log_id,))
-            conn.commit()
-            logger.info(f"删除拍摄日志: {log_id}（已级联清空关联素材的 scene/shot）")
+            with self._transaction() as conn:
+                conn.execute(
+                    "UPDATE media_assets SET log_id = NULL, scene = '', shot = '' WHERE log_id = ?",
+                    (log_id,)
+                )
+                conn.execute("DELETE FROM shooting_logs WHERE log_id = ?", (log_id,))
+                logger.info(f"删除拍摄日志: {log_id}（已级联清空关联素材的 scene/shot）")
         except Exception as e:
-            conn.rollback()
             logger.error(f"删除拍摄日志失败 {log_id}: {e}")
             raise
-        finally:
-            conn.close()
 
     def create_log_with_assets(
         self,
@@ -586,46 +542,40 @@ class DatabaseService:
         Returns:
             已创建的 log
         """
-        conn = self._get_conn()
         try:
-            conn.execute("BEGIN TRANSACTION")
-            conn.execute(
-                """INSERT INTO shooting_logs
-                   (log_id, project_id, scene, shot, take, description, camera, lens, iso, aperture, shutter_speed, notes, file_paths, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (log.log_id, log.project_id, log.scene, log.shot, log.take,
-                 log.description, log.camera, log.lens, log.iso, log.aperture,
-                 log.shutter_speed, log.notes, "|".join(log.file_paths),
-                 log.created_at.isoformat())
-            )
-            if sync_scene_shot:
-                for aid in asset_ids:
-                    conn.execute(
-                        "UPDATE media_assets SET log_id = ?, scene = ?, shot = ? WHERE asset_id = ?",
-                        (log.log_id, log.scene, log.shot, aid)
-                    )
-            else:
-                for aid in asset_ids:
-                    conn.execute(
-                        "UPDATE media_assets SET log_id = ? WHERE asset_id = ?",
-                        (log.log_id, aid)
-                    )
-            conn.commit()
-            logger.info(f"创建日志并关联素材: {log.log_id} - {len(asset_ids)} 个素材")
+            with self._transaction() as conn:
+                conn.execute(
+                    """INSERT INTO shooting_logs
+                       (log_id, project_id, scene, shot, take, description, camera, lens, iso, aperture, shutter_speed, notes, file_paths, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (log.log_id, log.project_id, log.scene, log.shot, log.take,
+                     log.description, log.camera, log.lens, log.iso, log.aperture,
+                     log.shutter_speed, log.notes, "|".join(log.file_paths),
+                     log.created_at.isoformat())
+                )
+                if sync_scene_shot:
+                    for aid in asset_ids:
+                        conn.execute(
+                            "UPDATE media_assets SET log_id = ?, scene = ?, shot = ? WHERE asset_id = ?",
+                            (log.log_id, log.scene, log.shot, aid)
+                        )
+                else:
+                    for aid in asset_ids:
+                        conn.execute(
+                            "UPDATE media_assets SET log_id = ? WHERE asset_id = ?",
+                            (log.log_id, aid)
+                        )
+                logger.info(f"创建日志并关联素材: {log.log_id} - {len(asset_ids)} 个素材")
         except Exception as e:
-            conn.rollback()
             logger.error(f"create_log_with_assets 失败: {e}")
             raise
-        finally:
-            conn.close()
         return log
 
     # ===== 素材资产 =====
 
     def add_media_asset(self, asset: MediaAsset) -> MediaAsset:
         """添加素材资产"""
-        conn = self._get_conn()
-        try:
+        with self._transaction() as conn:
             conn.execute(
                 """INSERT INTO media_assets
                    (asset_id, project_id, file_path, file_name, file_size, file_type,
@@ -648,10 +598,7 @@ class DatabaseService:
                  asset.lens_model, asset.focal_length, asset.video_metadata,
                  asset.rating)
             )
-            conn.commit()
             logger.info(f"添加素材资产: {asset.asset_id} - {asset.file_name}")
-        finally:
-            conn.close()
         return asset
 
     def add_media_assets_batch(self, assets: List[MediaAsset]) -> int:
@@ -659,62 +606,51 @@ class DatabaseService:
         if not assets:
             return 0
 
-        conn = self._get_conn()
         try:
-            conn.execute("BEGIN TRANSACTION")
-            for asset in assets:
-                conn.execute(
-                    """INSERT INTO media_assets
-                       (asset_id, project_id, file_path, file_name, file_size, file_type,
-                        asset_type, checksum_algorithm, checksum_value, scene, shot, take, date_imported,
-                        date_taken, camera_make, camera_model, backup_locations, log_id,
-                        is_working_copy, original_path, width, height, duration_seconds,
-                        lens_model, focal_length, video_metadata, rating)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (asset.asset_id, asset.project_id, asset.file_path, asset.file_name,
-                     asset.file_size, asset.file_type, asset.asset_type,
-                     asset.checksum_algorithm, asset.checksum_value,
-                     asset.scene, asset.shot, asset.take,
-                     asset.date_imported.isoformat(),
-                     asset.date_taken.isoformat() if asset.date_taken else None,
-                     asset.camera_make, asset.camera_model,
-                     "|".join(asset.backup_locations), asset.log_id,
-                     1 if asset.is_working_copy else 0,
-                     asset.original_path,
-                     asset.width, asset.height, asset.duration_seconds,
-                     asset.lens_model, asset.focal_length, asset.video_metadata,
-                     asset.rating)
-                )
-            conn.commit()
-            logger.info(f"批量添加素材资产: {len(assets)} 个")
-            return len(assets)
+            with self._transaction() as conn:
+                for asset in assets:
+                    conn.execute(
+                        """INSERT INTO media_assets
+                           (asset_id, project_id, file_path, file_name, file_size, file_type,
+                            asset_type, checksum_algorithm, checksum_value, scene, shot, take, date_imported,
+                            date_taken, camera_make, camera_model, backup_locations, log_id,
+                            is_working_copy, original_path, width, height, duration_seconds,
+                            lens_model, focal_length, video_metadata, rating)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (asset.asset_id, asset.project_id, asset.file_path, asset.file_name,
+                         asset.file_size, asset.file_type, asset.asset_type,
+                         asset.checksum_algorithm, asset.checksum_value,
+                         asset.scene, asset.shot, asset.take,
+                         asset.date_imported.isoformat(),
+                         asset.date_taken.isoformat() if asset.date_taken else None,
+                         asset.camera_make, asset.camera_model,
+                         "|".join(asset.backup_locations), asset.log_id,
+                         1 if asset.is_working_copy else 0,
+                         asset.original_path,
+                         asset.width, asset.height, asset.duration_seconds,
+                         asset.lens_model, asset.focal_length, asset.video_metadata,
+                         asset.rating)
+                    )
+                logger.info(f"批量添加素材资产: {len(assets)} 个")
+                return len(assets)
         except Exception as e:
-            conn.rollback()
             logger.error(f"批量添加素材资产失败: {e}")
             return 0
-        finally:
-            conn.close()
 
     def get_media_assets(self, project_id: str) -> List[MediaAsset]:
         """获取项目素材"""
-        conn = self._get_conn()
-        try:
+        with self._connection() as conn:
             rows = conn.execute(
                 "SELECT * FROM media_assets WHERE project_id = ? ORDER BY date_imported DESC",
                 (project_id,)
             ).fetchall()
             return [self._row_to_asset(r) for r in rows]
-        finally:
-            conn.close()
 
     def get_media_asset(self, asset_id: str) -> Optional[MediaAsset]:
         """获取单个素材资产"""
-        conn = self._get_conn()
-        try:
+        with self._connection() as conn:
             row = conn.execute("SELECT * FROM media_assets WHERE asset_id = ?", (asset_id,)).fetchone()
             return self._row_to_asset(row) if row else None
-        finally:
-            conn.close()
 
     def update_media_asset(self, asset_id: str, **kwargs) -> bool:
         """更新素材资产"""
@@ -743,46 +679,37 @@ class DatabaseService:
                 params.append(value)
         params.append(asset_id)
 
-        conn = self._get_conn()
         try:
-            conn.execute(f"UPDATE media_assets SET {', '.join(fields)} WHERE asset_id = ?", params)
-            conn.commit()
-            logger.info(f"更新素材资产: {asset_id}")
-            return True
+            with self._transaction() as conn:
+                conn.execute(f"UPDATE media_assets SET {', '.join(fields)} WHERE asset_id = ?", params)
+                logger.info(f"更新素材资产: {asset_id}")
+                return True
         except Exception as e:
             logger.error(f"更新素材资产失败 {asset_id}: {e}")
             return False
-        finally:
-            conn.close()
 
     def delete_media_asset(self, asset_id: str) -> bool:
         """删除素材资产"""
-        conn = self._get_conn()
         try:
-            conn.execute("DELETE FROM media_assets WHERE asset_id = ?", (asset_id,))
-            conn.commit()
-            logger.info(f"删除素材资产: {asset_id}")
-            return True
+            with self._transaction() as conn:
+                conn.execute("DELETE FROM media_assets WHERE asset_id = ?", (asset_id,))
+                logger.info(f"删除素材资产: {asset_id}")
+                return True
         except Exception as e:
             logger.error(f"删除素材资产失败 {asset_id}: {e}")
             return False
-        finally:
-            conn.close()
 
     def asset_exists_by_path(self, project_id: str, file_path: str) -> bool:
         """按文件路径查重"""
         # asset.file_path 在导入时存的是 normalize_path() 规范化路径，
         # 查询键同样规范化，避免符号链接环境下查重失效导致重复入库。
         fp_key = normalize_path(file_path)
-        conn = self._get_conn()
-        try:
+        with self._connection() as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM media_assets WHERE project_id = ? AND file_path = ?",
                 (project_id, fp_key)
             ).fetchone()
             return row[0] > 0
-        finally:
-            conn.close()
 
     def get_asset_log_id_by_path(self, file_path: str) -> Optional[str]:
         """按文件路径全局查询素材关联的 log_id（不限 project_id）。
@@ -794,52 +721,43 @@ class DatabaseService:
         存储形式保持一致，否则在符号链接 / 相对路径场景下会匹配失败。
         """
         fp_key = normalize_path(file_path)
-        conn = self._get_conn()
-        try:
+        with self._connection() as conn:
             row = conn.execute(
                 "SELECT log_id FROM media_assets WHERE file_path = ?",
                 (fp_key,)
             ).fetchone()
             return row["log_id"] if row else None
-        finally:
-            conn.close()
 
     def asset_exists_by_checksum(self, project_id: str, checksum_value: str) -> bool:
         """按校验和查重"""
         if not checksum_value:
             return False
-        conn = self._get_conn()
-        try:
+        with self._connection() as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM media_assets WHERE project_id = ? AND checksum_value = ?",
                 (project_id, checksum_value)
             ).fetchone()
             return row[0] > 0
-        finally:
-            conn.close()
 
     def update_asset_path(self, asset_id: str, new_path: str, new_name: str = None) -> bool:
         """更新素材路径"""
-        conn = self._get_conn()
         try:
-            if new_name:
-                conn.execute(
-                    "UPDATE media_assets SET file_path = ?, file_name = ? WHERE asset_id = ?",
-                    (new_path, new_name, asset_id)
-                )
-            else:
-                conn.execute(
-                    "UPDATE media_assets SET file_path = ? WHERE asset_id = ?",
-                    (new_path, asset_id)
-                )
-            conn.commit()
-            logger.info(f"更新素材路径: {asset_id}")
-            return True
+            with self._transaction() as conn:
+                if new_name:
+                    conn.execute(
+                        "UPDATE media_assets SET file_path = ?, file_name = ? WHERE asset_id = ?",
+                        (new_path, new_name, asset_id)
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE media_assets SET file_path = ? WHERE asset_id = ?",
+                        (new_path, asset_id)
+                    )
+                logger.info(f"更新素材路径: {asset_id}")
+                return True
         except Exception as e:
             logger.error(f"更新素材路径失败 {asset_id}: {e}")
             return False
-        finally:
-            conn.close()
 
     def update_asset_path_by_old_path(
         self, old_path: str, new_path: str, new_name: Optional[str] = None
@@ -854,32 +772,29 @@ class DatabaseService:
         """
         old_key = normalize_path(old_path)
         new_key = normalize_path(new_path)
-        conn = self._get_conn()
         try:
-            row = conn.execute(
-                "SELECT asset_id FROM media_assets WHERE file_path = ?",
-                (old_key,)
-            ).fetchone()
-            if not row:
-                return False
-            if new_name:
-                conn.execute(
-                    "UPDATE media_assets SET file_path = ?, file_name = ? WHERE asset_id = ?",
-                    (new_key, new_name, row["asset_id"])
-                )
-            else:
-                conn.execute(
-                    "UPDATE media_assets SET file_path = ? WHERE asset_id = ?",
-                    (new_key, row["asset_id"])
-                )
-            conn.commit()
-            logger.info(f"按旧路径同步重命名: {old_key} -> {new_key}")
-            return True
+            with self._transaction() as conn:
+                row = conn.execute(
+                    "SELECT asset_id FROM media_assets WHERE file_path = ?",
+                    (old_key,)
+                ).fetchone()
+                if not row:
+                    return False
+                if new_name:
+                    conn.execute(
+                        "UPDATE media_assets SET file_path = ?, file_name = ? WHERE asset_id = ?",
+                        (new_key, new_name, row["asset_id"])
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE media_assets SET file_path = ? WHERE asset_id = ?",
+                        (new_key, row["asset_id"])
+                    )
+                logger.info(f"按旧路径同步重命名: {old_key} -> {new_key}")
+                return True
         except Exception as e:
             logger.error(f"按旧路径同步重命名失败 {old_key}: {e}")
             return False
-        finally:
-            conn.close()
 
     def search_assets(
         self,
@@ -900,8 +815,7 @@ class DatabaseService:
             rating: 按 rating 过滤（>=rating）。None 表示不过滤。
             limit: 返回结果上限。None 表示不限制；达到上限时调用方应提示用户缩小条件。
         """
-        conn = self._get_conn()
-        try:
+        with self._connection() as conn:
             query = "SELECT * FROM media_assets WHERE 1=1"
             params = []
 
@@ -939,8 +853,6 @@ class DatabaseService:
                 params.append(limit)
             rows = conn.execute(query, params).fetchall()
             return [self._row_to_asset(r) for r in rows]
-        finally:
-            conn.close()
 
     def get_assets_by_log_id(self, log_id: str) -> List[MediaAsset]:
         """按拍摄日志ID获取关联的素材"""
@@ -954,33 +866,29 @@ class DatabaseService:
         - log_id 非 None 时只更新 log_id，scene/shot 由调用方另行处理
           （如 create_log_with_assets 的 sync_scene_shot 路径）。
         """
-        conn = self._get_conn()
         try:
-            if log_id is None:
-                conn.execute(
-                    "UPDATE media_assets SET log_id = NULL, scene = '', shot = '' WHERE asset_id = ?",
-                    (asset_id,)
-                )
-            else:
-                conn.execute(
-                    "UPDATE media_assets SET log_id = ? WHERE asset_id = ?",
-                    (log_id, asset_id)
-                )
-            conn.commit()
-            logger.info(f"更新素材日志关联: {asset_id} -> {log_id or 'None'}")
-            return True
+            with self._transaction() as conn:
+                if log_id is None:
+                    conn.execute(
+                        "UPDATE media_assets SET log_id = NULL, scene = '', shot = '' WHERE asset_id = ?",
+                        (asset_id,)
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE media_assets SET log_id = ? WHERE asset_id = ?",
+                        (log_id, asset_id)
+                    )
+                logger.info(f"更新素材日志关联: {asset_id} -> {log_id or 'None'}")
+                return True
         except Exception as e:
             logger.error(f"更新素材日志关联失败 {asset_id}: {e}")
             return False
-        finally:
-            conn.close()
 
     # ===== 统计查询 =====
 
     def get_project_stats(self, project_id: str) -> dict:
         """获取项目统计信息"""
-        conn = self._get_conn()
-        try:
+        with self._connection() as conn:
             asset_count = conn.execute(
                 "SELECT COUNT(*) FROM media_assets WHERE project_id = ?",
                 (project_id,)
@@ -1013,8 +921,6 @@ class DatabaseService:
                 "backup_job_count": backup_job_count,
                 "backed_up_count": backed_up_count,
             }
-        finally:
-            conn.close()
 
     # ===== 备份作业持久化 =====
 
@@ -1042,26 +948,23 @@ class DatabaseService:
             } for t in job.targets
         ], ensure_ascii=False)
 
-        conn = self._get_conn()
         try:
-            conn.execute(
-                """INSERT OR REPLACE INTO backup_jobs
-                   (job_id, project_id, source_path, algorithm, total_files, total_bytes,
-                    status, targets_json, created_at, completed_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (job.job_id, project_id, job.source_path, job.algorithm.value,
-                 job.total_files, job.total_bytes, job.status.value, targets_json,
-                 job.created_at.isoformat(),
-                 job.completed_at.isoformat() if job.completed_at else None)
-            )
-            conn.commit()
-            logger.info(f"持久化备份作业: {job.job_id} (project={project_id})")
-            return True
+            with self._transaction() as conn:
+                conn.execute(
+                    """INSERT OR REPLACE INTO backup_jobs
+                       (job_id, project_id, source_path, algorithm, total_files, total_bytes,
+                        status, targets_json, created_at, completed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (job.job_id, project_id, job.source_path, job.algorithm.value,
+                     job.total_files, job.total_bytes, job.status.value, targets_json,
+                     job.created_at.isoformat(),
+                     job.completed_at.isoformat() if job.completed_at else None)
+                )
+                logger.info(f"持久化备份作业: {job.job_id} (project={project_id})")
+                return True
         except Exception as e:
             logger.error(f"持久化备份作业失败 {job.job_id}: {e}")
             return False
-        finally:
-            conn.close()
 
     def get_backup_jobs(self, project_id: Optional[str] = None) -> List[dict]:
         """获取备份作业列表（原始 dict 形式，由调用方解析）。
@@ -1070,8 +973,7 @@ class DatabaseService:
             project_id: 若提供则只返回该项目的备份；None 返回全部
         """
         import json
-        conn = self._get_conn()
-        try:
+        with self._connection() as conn:
             if project_id:
                 rows = conn.execute(
                     "SELECT * FROM backup_jobs WHERE project_id = ? ORDER BY created_at DESC",
@@ -1107,8 +1009,6 @@ class DatabaseService:
                     "completed_at": completed_at,
                 })
             return results
-        finally:
-            conn.close()
 
     def add_backup_location_to_assets(
         self,
@@ -1131,51 +1031,47 @@ class DatabaseService:
         if not file_paths or not target_path:
             return 0
 
-        conn = self._get_conn()
         try:
-            updated = 0
-            for fp in file_paths:
-                # asset.file_path 在导入时存的是 normalize_path() 规范化路径，
-                # 查询键同样规范化，避免符号链接环境（如 macOS /var -> /private/var）
-                # 下因路径表示不一致而匹配失败。
-                fp_key = normalize_path(fp)
-                if project_id:
-                    row = conn.execute(
-                        "SELECT asset_id, backup_locations FROM media_assets "
-                        "WHERE project_id = ? AND file_path = ?",
-                        (project_id, fp_key)
-                    ).fetchone()
-                else:
-                    row = conn.execute(
-                        "SELECT asset_id, backup_locations FROM media_assets "
-                        "WHERE file_path = ?",
-                        (fp_key,)
-                    ).fetchone()
+            with self._transaction() as conn:
+                updated = 0
+                for fp in file_paths:
+                    # asset.file_path 在导入时存的是 normalize_path() 规范化路径，
+                    # 查询键同样规范化，避免符号链接环境（如 macOS /var -> /private/var）
+                    # 下因路径表示不一致而匹配失败。
+                    fp_key = normalize_path(fp)
+                    if project_id:
+                        row = conn.execute(
+                            "SELECT asset_id, backup_locations FROM media_assets "
+                            "WHERE project_id = ? AND file_path = ?",
+                            (project_id, fp_key)
+                        ).fetchone()
+                    else:
+                        row = conn.execute(
+                            "SELECT asset_id, backup_locations FROM media_assets "
+                            "WHERE file_path = ?",
+                            (fp_key,)
+                        ).fetchone()
 
-                if not row:
-                    continue
+                    if not row:
+                        continue
 
-                existing = row["backup_locations"] or ""
-                locations = [l for l in existing.split("|") if l] if existing else []
-                if target_path in locations:
-                    continue  # 幂等
-                locations.append(target_path)
-                new_val = "|".join(locations)
-                conn.execute(
-                    "UPDATE media_assets SET backup_locations = ? WHERE asset_id = ?",
-                    (new_val, row["asset_id"])
-                )
-                updated += 1
-            conn.commit()
-            if updated:
-                logger.info(f"批量回写 backup_locations: {updated} 个 asset += {target_path}")
-            return updated
+                    existing = row["backup_locations"] or ""
+                    locations = [l for l in existing.split("|") if l] if existing else []
+                    if target_path in locations:
+                        continue  # 幂等
+                    locations.append(target_path)
+                    new_val = "|".join(locations)
+                    conn.execute(
+                        "UPDATE media_assets SET backup_locations = ? WHERE asset_id = ?",
+                        (new_val, row["asset_id"])
+                    )
+                    updated += 1
+                if updated:
+                    logger.info(f"批量回写 backup_locations: {updated} 个 asset += {target_path}")
+                return updated
         except Exception as e:
-            conn.rollback()
             logger.error(f"批量回写 backup_locations 失败: {e}")
             return 0
-        finally:
-            conn.close()
 
     # ===== 辅助方法 =====
 

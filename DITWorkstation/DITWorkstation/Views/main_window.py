@@ -30,29 +30,9 @@ from DITWorkstation.Views.project_dashboard_view import ProjectDashboardView
 from DITWorkstation.Utils import logger
 
 
-# ===== 导航栏单一事实源 =====
-# 修改导航栏顺序/项目时，只需调整此列表，所有依赖索引的视图（如 dashboard 跳转按钮）
-# 通过 get_nav_index(key) 自动获取最新索引，避免索引错位 bug。
-# (key, label, tooltip)
-NAV_ITEMS = [
-    ("dashboard",  "🏠 项目概览",    "当前项目进度看板与 SOP 引导"),
-    ("import",     "① 📁 媒体导入",  "导入图片视频到项目"),
-    ("backup",     "② 📦 数据备份",  "安全拷贝与多重备份"),
-    ("log",        "③ 📋 拍摄日志",  "场景/镜头/镜次管理"),
-    ("raw",        "④ 🎞 RAW提取",   "JPG筛选后提取RAW"),
-    ("rename",     "⑤ ✏️ 文件重命名", "批量重命名与元数据"),
-    ("search",     "⑥ 🔍 素材检索",  "按条件快速检索"),
-    ("asset_info", "⑦ ℹ️ 素材信息",  "查看素材EXIF与元数据详情"),
-    ("report",     "⑧ 📊 报告生成",  "数据管理与QC报告"),
-]
-
-
-def get_nav_index(key: str) -> int:
-    """按 key 查询导航栏索引。key 不存在时抛 KeyError，便于尽早发现配置错误。"""
-    for i, (k, _label, _tooltip) in enumerate(NAV_ITEMS):
-        if k == key:
-            return i
-    raise KeyError(f"未知导航 key: {key}")
+# 导航配置（NAV_ITEMS / get_nav_index）已抽离到 App/navigation.py 作为单一事实源，
+# 消除 Views ↔ main_window 的循环依赖。视图跳转请直接从 App.navigation 导入。
+from DITWorkstation.App.navigation import NAV_ITEMS, get_nav_index
 
 
 class MainWindow(QMainWindow):
@@ -205,8 +185,8 @@ class MainWindow(QMainWindow):
             set_current_project(wizard._created_project_id)
             try:
                 self.nav_list.setCurrentRow(get_nav_index("import"))
-            except KeyError:
-                pass
+            except KeyError as e:
+                logger.debug(f"向导后跳转媒体导入失败: {e}")
 
     def _show_sop_guide(self):
         """弹出 SOP 操作链说明对话框"""
@@ -275,10 +255,9 @@ class MainWindow(QMainWindow):
 
     def _navigate_to(self, key: str):
         """按 key 跳转到对应导航页"""
-        try:
-            self.nav_list.setCurrentRow(get_nav_index(key))
-        except KeyError:
-            pass
+        idx = get_nav_index(key)
+        if idx is not None:
+            self.nav_list.setCurrentRow(idx)
 
     def _refresh_current_view(self):
         """F5: 刷新当前视图"""
@@ -425,8 +404,8 @@ class MainWindow(QMainWindow):
             for _view, _attr, w in running:
                 try:
                     w.wait(5000)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"等待 worker 结束失败: {e}")
             logger.info(f"主窗口关闭：已等待 {len(running)} 个后台 worker 结束")
 
         super().closeEvent(event)
