@@ -12,6 +12,8 @@ main_window.py 仍 re-export 这些符号，现有视图无需改动。
 import threading
 from PySide6.QtCore import QObject, Signal
 
+from DITWorkstation.Utils import get_db_service
+
 
 class EventBus(QObject):
     """
@@ -83,7 +85,6 @@ def set_current_workspace(workspace_id):
 
         # 当前项目若不属于新工作区则清除
         if workspace_id is not None and _current_project_id is not None:
-            from DITWorkstation.Utils import get_db_service
             try:
                 proj = get_db_service().get_project(_current_project_id)
                 if proj is None or proj.workspace_id != workspace_id:
@@ -125,7 +126,6 @@ def set_current_project(project_id):
 
         # 顺带同步工作区：若项目有 workspace_id，把当前工作区切到该项目所属工作区
         if project_id is not None:
-            from DITWorkstation.Utils import get_db_service
             try:
                 proj = get_db_service().get_project(project_id)
                 if proj is not None and proj.workspace_id != _current_workspace_id:

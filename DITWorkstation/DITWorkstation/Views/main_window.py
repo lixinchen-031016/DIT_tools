@@ -27,7 +27,9 @@ from DITWorkstation.Views.report_view import ReportView
 from DITWorkstation.Views.media_import_view import MediaImportView
 from DITWorkstation.Views.asset_info_view import AssetInfoView
 from DITWorkstation.Views.project_dashboard_view import ProjectDashboardView
-from DITWorkstation.Utils import logger
+from DITWorkstation.Views.first_run_wizard import FirstRunWizard, _SOP_GUIDE_TEXT
+from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS
+from DITWorkstation.Utils import logger, get_db_service
 
 
 # 导航配置（NAV_ITEMS / get_nav_index）已抽离到 App/navigation.py 作为单一事实源，
@@ -118,7 +120,6 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Esc"), self, activated=self._cancel_running_workers)
 
         # 全局状态栏
-        from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE
         self.status_bar = self.statusBar()  # QMainWindow 自带 statusBar()
         self.status_bar.setSizeGripEnabled(False)
         self.status_bar.setStyleSheet(f"""
@@ -175,7 +176,6 @@ class MainWindow(QMainWindow):
 
     def _restart_wizard(self):
         """重新启动新手向导，允许用户回顾 SOP 并创建新的工作区/项目"""
-        from DITWorkstation.Views.first_run_wizard import FirstRunWizard
         wizard = FirstRunWizard(self)
         wizard.exec()
         # 如果向导创建了工作区/项目，设为全局当前并跳转到媒体导入
@@ -190,7 +190,6 @@ class MainWindow(QMainWindow):
 
     def _show_sop_guide(self):
         """弹出 SOP 操作链说明对话框"""
-        from DITWorkstation.Views.first_run_wizard import _SOP_GUIDE_TEXT
         QMessageBox.information(self, "SOP 操作链说明", _SOP_GUIDE_TEXT)
 
     def _show_shortcuts(self):
@@ -320,7 +319,6 @@ class MainWindow(QMainWindow):
             self.status_label_project.setText("项目: 未选择")
             return
         try:
-            from DITWorkstation.Utils import get_db_service
             db = get_db_service()
             project = db.get_project(project_id)
             name = project.name if project else "未知"
@@ -334,7 +332,6 @@ class MainWindow(QMainWindow):
             self.status_label_workspace.setText("工作区: 未选择")
             return
         try:
-            from DITWorkstation.Utils import get_db_service
             db = get_db_service()
             ws = db.get_workspace(workspace_id)
             name = ws.name if ws else "未知"
@@ -344,7 +341,6 @@ class MainWindow(QMainWindow):
 
     def _update_task_status(self):
         """定时更新后台任务数指示（由 _status_timer 每 2 秒触发）"""
-        from DITWorkstation.Views.Styles.theme import COLOR
         running = self._running_workers()
         count = len(running)
         if count > 0:
@@ -452,7 +448,6 @@ class MainWindow(QMainWindow):
 
     def _apply_style(self):
         """应用样式（主窗口 + 侧栏）。全局 QSS 由 main.py 通过 theme.apply_global_style 注入。"""
-        from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS
         self.setStyleSheet(f"""
             QMainWindow {{
                 background-color: {COLOR.BG_APP};

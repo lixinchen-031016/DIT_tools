@@ -9,6 +9,7 @@ from PySide6.QtCore import QDate, Qt
 
 from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger, open_in_file_manager
 from DITWorkstation.Models import RATING_LABELS, AssetRating
+from DITWorkstation.App.session_context import get_data_bus, get_current_workspace_id
 from DITWorkstation.Views.Widgets import RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 from DITWorkstation.Views.Widgets.table_factory import make_table
@@ -28,7 +29,6 @@ class SearchView(RefreshOnShowView):
         self.project_combo.currentIndexChanged.connect(self._on_project_changed)
         self._load_projects()
         # 监听全局工作区切换，重新加载项目列表（按新工作区过滤）
-        from DITWorkstation.App.session_context import get_data_bus
         bus = get_data_bus()
         bus.workspace_focus_changed.connect(self._on_global_workspace_changed)
         # 监听全局项目切换，同步下拉选中项（其他视图切项目后回到检索页不再过期）
@@ -185,7 +185,6 @@ class SearchView(RefreshOnShowView):
 
         # 监听全局数据总线，数据变更时显示过期提示
         try:
-            from DITWorkstation.App.session_context import get_data_bus
             get_data_bus().data_changed.connect(self._on_data_changed)
         except Exception as e:
             logger.warning(f"素材检索连接 data_bus 失败: {e}")
@@ -206,7 +205,6 @@ class SearchView(RefreshOnShowView):
         self.project_combo.blockSignals(True)
         self.project_combo.clear()
         self.project_combo.addItem("全部项目", None)
-        from DITWorkstation.App.session_context import get_current_workspace_id
         ws_id = get_current_workspace_id()
         projects = self.db_service.get_projects(workspace_id=ws_id)
         restore_index = 0

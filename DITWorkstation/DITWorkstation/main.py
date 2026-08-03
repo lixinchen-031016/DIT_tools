@@ -20,6 +20,7 @@ from DITWorkstation.Views.main_window import (
     MainWindow, set_current_project, set_current_workspace
 )
 from DITWorkstation.Views.first_run_wizard import maybe_show_wizard
+from DITWorkstation.Views.Styles.theme import apply_global_style
 
 
 def _pick_default_font_family() -> str:
@@ -131,7 +132,6 @@ def main():
     _ensure_emoji_font_fallback()
 
     # 应用全局 QSS（颜色 / 字号 / 表格 / 输入框 / 滚动条 等统一基础样式）
-    from DITWorkstation.Views.Styles.theme import apply_global_style
     apply_global_style(app)
 
     # 创建并显示主窗口

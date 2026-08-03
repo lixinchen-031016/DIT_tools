@@ -12,11 +12,14 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Slot, QDateTime
 
+from DITWorkstation.App.navigation import get_nav_index
+from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import Project
 from DITWorkstation.Services.media_import_service import MediaImportService
-from DITWorkstation.Utils import format_size, WorkerThread, get_db_service, pick_directory, find_overwrite_conflicts
+from DITWorkstation.Utils import format_size, WorkerThread, get_db_service, pick_directory, find_overwrite_conflicts, open_in_file_manager, logger
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Widgets.error_dialog import show_error
 from DITWorkstation.Views.Widgets.status_panel import StatusPanel
 from DITWorkstation.Views.Widgets.table_factory import make_table
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, MONO_FONT_QSS
@@ -391,7 +394,6 @@ class MediaImportView(RefreshOnShowView):
             self._log(f"扫描完成: 发现 {len(files)} 个媒体文件, 总大小 {format_size(total_size)}")
         except Exception as e:
             import traceback
-            from DITWorkstation.Views.Widgets.error_dialog import show_error
             show_error(
                 title="扫描错误",
                 description=str(e),
@@ -490,7 +492,6 @@ class MediaImportView(RefreshOnShowView):
             return
         from pathlib import Path as _Path
         path = str(_Path(parent_item.text()) / name_item.text())
-        from DITWorkstation.Utils import open_in_file_manager
         open_in_file_manager(path)
 
     def _on_files_context_menu(self, pos):
@@ -510,7 +511,6 @@ class MediaImportView(RefreshOnShowView):
         action_copy = menu.addAction("复制文件路径")
         chosen = menu.exec(self.files_table.viewport().mapToGlobal(pos))
         if chosen is action_open:
-            from DITWorkstation.Utils import open_in_file_manager
             open_in_file_manager(path)
         elif chosen is action_copy:
             QApplication.clipboard().setText(path)
@@ -642,7 +642,6 @@ class MediaImportView(RefreshOnShowView):
 
         # 广播数据变更，通知日志/检索/素材信息视图刷新
         if imported > 0:
-            from DITWorkstation.App.session_context import get_data_bus
             get_data_bus().emit_data_changed("assets_changed")
 
         msg_box = QMessageBox(self)
@@ -657,10 +656,8 @@ class MediaImportView(RefreshOnShowView):
             try:
                 main_window = self.window()
                 if hasattr(main_window, 'nav_list'):
-                    from DITWorkstation.App.navigation import get_nav_index
                     main_window.nav_list.setCurrentRow(get_nav_index("backup"))
             except Exception as e:
-                from DITWorkstation.Utils import logger
                 logger.warning(f"跳转备份视图失败: {e}")
 
     @Slot(str)
@@ -670,7 +667,6 @@ class MediaImportView(RefreshOnShowView):
         self.status_label.setText(f"❌ 错误: {error}")
         self._log(f"导入错误: {error}")
         self.worker = None
-        from DITWorkstation.Views.Widgets.error_dialog import show_error
         show_error(
             title="导入错误",
             description=error,

@@ -8,10 +8,12 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Slot, Signal, Qt
 from pathlib import Path
 
+from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import RenameRule
 from DITWorkstation.Services.rename_service import RenameService
 from DITWorkstation.Utils import WorkerThread, safe_slot, get_db_service, logger, pick_directory
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Widgets.error_dialog import show_error
 from DITWorkstation.Views.Widgets.status_panel import StatusPanel
 from DITWorkstation.Views.Widgets.table_factory import make_table
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS
@@ -300,7 +302,6 @@ class RenameView(QWidget):
         # 广播 assets_changed，让 asset_info_view / search_view 刷新路径
         if synced > 0:
             try:
-                from DITWorkstation.App.session_context import get_data_bus
                 get_data_bus().emit_data_changed("assets_changed")
             except Exception as e:
                 logger.error(f"广播重命名完成事件失败: {e}")
@@ -314,7 +315,6 @@ class RenameView(QWidget):
     def _on_rename_error(self, error: str):
         self._restore_ui()
         self._worker = None
-        from DITWorkstation.Views.Widgets.error_dialog import show_error
         show_error(
             title="重命名出错",
             description=error,

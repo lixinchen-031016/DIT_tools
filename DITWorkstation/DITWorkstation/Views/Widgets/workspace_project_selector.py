@@ -14,8 +14,12 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, Slot
 
+from DITWorkstation.App.session_context import (
+    get_data_bus, get_current_workspace_id, get_current_project_id,
+    set_current_workspace, set_current_project
+)
 from DITWorkstation.Models import Workspace, Project
-from DITWorkstation.Utils import get_db_service, safe_slot
+from DITWorkstation.Utils import get_db_service, safe_slot, logger
 from DITWorkstation.Views.Widgets.workspace_dialog import WorkspaceDialog
 
 
@@ -182,12 +186,11 @@ class WorkspaceProjectSelector(QWidget):
     def _connect_global_signals(self):
         """监听全局工作区/项目切换，同步本控件选择"""
         try:
-            from DITWorkstation.App.session_context import get_data_bus
             bus = get_data_bus()
             bus.workspace_focus_changed.connect(self._on_global_workspace_changed)
             bus.project_focus_changed.connect(self._on_global_project_changed)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"全局信号连接失败: {e}")
 
     # ===== 加载 =====
     def refresh(self):
@@ -197,7 +200,6 @@ class WorkspaceProjectSelector(QWidget):
 
     def _load_workspaces(self):
         """加载工作区下拉，优先选中全局 current_workspace_id"""
-        from DITWorkstation.App.session_context import get_current_workspace_id
         prev_id = get_current_workspace_id()
         self.workspace_combo.blockSignals(True)
         self.workspace_combo.clear()
@@ -224,9 +226,6 @@ class WorkspaceProjectSelector(QWidget):
 
     def _load_projects(self):
         """加载项目下拉，按当前选中工作区过滤"""
-        from DITWorkstation.App.session_context import (
-            get_current_project_id, get_current_workspace_id
-        )
         prev_pid = get_current_project_id()
         ws_id = self.workspace_combo.currentData()
         if ws_id is None:
@@ -260,7 +259,6 @@ class WorkspaceProjectSelector(QWidget):
         if self._suppress_broadcast:
             return
         ws_id = self.workspace_combo.currentData()
-        from DITWorkstation.App.session_context import set_current_workspace
         set_current_workspace(ws_id)
         # set_current_workspace 会触发 _on_global_workspace_changed，但同 ID 不触发
         # 手动重载保证一致性
@@ -298,7 +296,6 @@ class WorkspaceProjectSelector(QWidget):
         if project_id is None and not self._broadcast_none:
             self.project_changed.emit(project_id)
             return
-        from DITWorkstation.App.session_context import set_current_project
         set_current_project(project_id)
         self.project_changed.emit(project_id)
 
@@ -368,9 +365,6 @@ class WorkspaceProjectSelector(QWidget):
         if ws is None:
             return
         # 新建后自动设为当前工作区，广播变更
-        from DITWorkstation.App.session_context import (
-            set_current_workspace, get_data_bus
-        )
         set_current_workspace(ws.workspace_id)
         get_data_bus().emit_data_changed("workspaces_changed")
 
@@ -390,7 +384,6 @@ class WorkspaceProjectSelector(QWidget):
         )
         if updated is None:
             return
-        from DITWorkstation.App.session_context import get_data_bus
         get_data_bus().emit_data_changed("workspaces_changed")
         # 刷新下拉显示
         self._load_workspaces()
@@ -407,9 +400,6 @@ class WorkspaceProjectSelector(QWidget):
             return
         project = self._db_service.create_project(name=name, workspace_id=ws_id)
         # 新建后选中并广播
-        from DITWorkstation.App.session_context import (
-            get_data_bus, set_current_project
-        )
         self._load_projects()
         set_current_project(project.project_id)
         get_data_bus().emit_data_changed("projects_changed")
@@ -431,7 +421,6 @@ class WorkspaceProjectSelector(QWidget):
             return
         self._db_service.delete_project(project_id)
         self._load_projects()
-        from DITWorkstation.App.session_context import get_data_bus, set_current_project
         set_current_project(None)
         get_data_bus().emit_data_changed("projects_changed")
 

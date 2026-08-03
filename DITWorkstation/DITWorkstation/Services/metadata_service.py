@@ -10,6 +10,7 @@ from typing import List
 from datetime import datetime
 
 from DITWorkstation.Models import MediaMetadata, VideoMetadata
+from DITWorkstation.Utils import logger
 
 
 class MetadataService:
@@ -116,8 +117,8 @@ class MetadataService:
                             break
                         except (ValueError, TypeError):
                             pass
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"EXIF 读取失败 ({path}): {e}")
 
         # 2. 用 Pillow 读取图像尺寸（仅对 Pillow 能打开的格式，作为补充）
         if not metadata.width or not metadata.height:
@@ -127,8 +128,8 @@ class MetadataService:
                 with Image.open(path) as img:
                     metadata.width = img.width
                     metadata.height = img.height
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Pillow 读取尺寸失败 ({path}): {e}")
 
     def batch_read_metadata(self, file_paths: List[str]) -> List[MediaMetadata]:
         """批量读取元数据"""
@@ -184,8 +185,8 @@ class MetadataService:
                         vm.audio_codec = track.codec_id or track.format or ""
                     if track.sampling_rate:
                         vm.audio_sample_rate = int(track.sampling_rate)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"视频元数据读取失败 ({file_path}): {e}")
         return vm
 
     @staticmethod

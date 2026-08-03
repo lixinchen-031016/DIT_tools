@@ -7,13 +7,14 @@ from PySide6.QtCore import Slot
 from PySide6.QtGui import QColor
 
 from DITWorkstation.Utils import get_db_service, format_size, logger
+from DITWorkstation.App.navigation import get_nav_index
+from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS
 
 
 def _nav_index(key: str) -> int:
     """从 navigation 单一事实源查询导航索引"""
-    from DITWorkstation.App.navigation import get_nav_index
     return get_nav_index(key)
 
 
@@ -80,7 +81,6 @@ class ProjectDashboardView(RefreshOnShowView):
         self.selector.project_changed.connect(self._on_project_changed_from_selector)
         # 监听数据变更广播（素材/日志/备份变更后刷新卡片）
         try:
-            from DITWorkstation.App.session_context import get_data_bus
             get_data_bus().data_changed.connect(self._on_data_changed)
         except Exception as e:
             logger.warning(f"项目概览连接 data_bus 失败: {e}")
@@ -308,8 +308,6 @@ class ProjectDashboardView(RefreshOnShowView):
             if hasattr(main_window, "nav_list"):
                 main_window.nav_list.setCurrentRow(view_index)
             else:
-                from DITWorkstation.Utils import logger
                 logger.warning(f"_jump_to 找不到 nav_list，view_index={view_index}")
         except Exception as e:
-            from DITWorkstation.Utils import logger
             logger.error(f"_jump_to 跳转失败 view_index={view_index}: {e}", exc_info=True)

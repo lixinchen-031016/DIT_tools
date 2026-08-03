@@ -9,7 +9,8 @@ from PySide6.QtCore import Slot, Qt
 from DITWorkstation.Services.report_service import ReportService
 from DITWorkstation.Utils import get_db_service, safe_slot, pick_save_file
 from DITWorkstation.Utils.workers import SimpleWorkerThread
-from DITWorkstation.Views.Widgets import RefreshOnShowView
+from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
+from DITWorkstation.Views.Widgets.error_dialog import show_error
 from DITWorkstation.Views.Widgets.status_panel import StatusPanel
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, MONO_FONT_QSS
 
@@ -51,7 +52,6 @@ class ReportView(RefreshOnShowView):
         form_layout = QFormLayout(config_group)
 
         # 共享控件：工作区 + 项目两级选择
-        from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
         self.selector = WorkspaceProjectSelector(
             project_widget="combo",
             show_new_project=True,
@@ -197,7 +197,6 @@ class ReportView(RefreshOnShowView):
         self.status_label.setText(f"❌ 生成失败: {error}")
         self._log(f"错误: {error}")
         self.worker = None
-        from DITWorkstation.Views.Widgets.error_dialog import show_error
         show_error(
             title="报告生成失败",
             description=error,

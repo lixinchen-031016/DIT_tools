@@ -11,9 +11,10 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Slot, QTimer
 
+from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import Project, ShootingLog, MediaAsset
 from DITWorkstation.Services.metadata_service import MetadataService
-from DITWorkstation.Utils import format_size, get_db_service, safe_slot
+from DITWorkstation.Utils import format_size, get_db_service, safe_slot, open_in_file_manager
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 from DITWorkstation.Views.Widgets.table_factory import make_table
@@ -400,7 +401,6 @@ class ShootingLogView(RefreshOnShowView):
         self._load_project_assets()
 
         # 广播：日志和素材关联均变更
-        from DITWorkstation.App.session_context import get_data_bus
         bus = get_data_bus()
         bus.emit_data_changed("logs_changed")
         if pending:
@@ -453,7 +453,6 @@ class ShootingLogView(RefreshOnShowView):
         self._load_project_assets()
 
         # 广播：日志删除会级联清空关联素材的 log_id
-        from DITWorkstation.App.session_context import get_data_bus
         bus = get_data_bus()
         bus.emit_data_changed("logs_changed")
         bus.emit_data_changed("assets_changed")
@@ -526,7 +525,6 @@ class ShootingLogView(RefreshOnShowView):
             return
         asset = self.db_service.get_media_asset(asset_id)
         if asset is not None:
-            from DITWorkstation.Utils import open_in_file_manager
             open_in_file_manager(asset.file_path)
 
     @safe_slot("关联素材失败")
@@ -550,7 +548,6 @@ class ShootingLogView(RefreshOnShowView):
                     self.db_service.update_media_asset_log_id(aid, self.current_log_id)
                 self._load_assets_for_log(self.current_log_id)
                 # 广播素材关联变更
-                from DITWorkstation.App.session_context import get_data_bus
                 get_data_bus().emit_data_changed("assets_changed")
                 QMessageBox.information(self, "成功", f"已关联 {len(selected_ids)} 个素材")
 
@@ -574,7 +571,6 @@ class ShootingLogView(RefreshOnShowView):
 
         self._load_assets_for_log(self.current_log_id)
         # 广播素材关联变更
-        from DITWorkstation.App.session_context import get_data_bus
         get_data_bus().emit_data_changed("assets_changed")
 
     # ===== 媒体文件驱动的日志记录 =====
@@ -766,7 +762,6 @@ class ShootingLogView(RefreshOnShowView):
             return
         asset = self.db_service.get_media_asset(asset_id)
         if asset is not None:
-            from DITWorkstation.Utils import open_in_file_manager
             open_in_file_manager(asset.file_path)
 
     def _batch_create_log_for_selected(self):

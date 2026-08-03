@@ -13,9 +13,12 @@ from typing import Optional
 from DITWorkstation.Models import ChecksumAlgorithm, BackupJob
 from DITWorkstation.Services.backup_service import BackupService
 from DITWorkstation.Services.media_import_service import MediaImportService
-from DITWorkstation.Utils import WorkerThread, format_size, safe_slot, get_db_service, pick_directory, find_overwrite_conflicts
-from DITWorkstation.Views.Widgets import RefreshOnShowView
+from DITWorkstation.Utils import WorkerThread, format_size, safe_slot, get_db_service, pick_directory, find_overwrite_conflicts, logger
+from DITWorkstation.App.session_context import get_data_bus
+from DITWorkstation.App.navigation import get_nav_index
+from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
 from DITWorkstation.Views.Widgets.status_panel import StatusPanel
+from DITWorkstation.Views.Widgets.error_dialog import show_error
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS, MONO_FONT_QSS
 
 
@@ -66,7 +69,6 @@ class BackupView(RefreshOnShowView):
         project_group = QGroupBox("关联项目（可选，不选则仅做文件备份）")
         project_layout = QHBoxLayout(project_group)
         # 共享控件：broadcast_none=False 保留"不关联"语义（选 None 不清空全局项目）
-        from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
         self.selector = WorkspaceProjectSelector(
             project_widget="combo",
             show_new_project=True,
@@ -471,7 +473,6 @@ class BackupView(RefreshOnShowView):
         # 广播 assets_changed，让 asset_info_view / search_view 知道 backup_locations 已更新
         if job.status.value in ("completed", "partial"):
             try:
-                from DITWorkstation.App.session_context import get_data_bus
                 get_data_bus().emit_data_changed("assets_changed")
                 self._log("已通知其他视图刷新素材备份位置信息")
             except Exception as e:
@@ -492,10 +493,8 @@ class BackupView(RefreshOnShowView):
                 try:
                     main_window = self.window()
                     if hasattr(main_window, 'nav_list'):
-                        from DITWorkstation.App.navigation import get_nav_index
                         main_window.nav_list.setCurrentRow(get_nav_index("log"))
                 except Exception as e:
-                    from DITWorkstation.Utils import logger
                     logger.warning(f"跳转日志视图失败: {e}")
 
     @Slot(str)
@@ -505,7 +504,6 @@ class BackupView(RefreshOnShowView):
         self.status_label.setText(f"❌ 错误: {error}")
         self._log(f"错误: {error}")
         self.worker = None
-        from DITWorkstation.Views.Widgets.error_dialog import show_error
         show_error(
             title="备份错误",
             description=error,

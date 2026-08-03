@@ -10,11 +10,13 @@ from PySide6.QtCore import Qt, Slot, Signal
 from DITWorkstation.Services.raw_extraction_service import RawExtractionService
 from DITWorkstation.Services.media_import_service import MediaImportService
 from DITWorkstation.Utils.workers import SimpleWorkerThread
-from DITWorkstation.Utils import get_db_service, logger, pick_directory
-from DITWorkstation.Views.Widgets import RefreshOnShowView
+from DITWorkstation.Utils import get_db_service, logger, pick_directory, find_overwrite_conflicts
+from DITWorkstation.App.session_context import get_data_bus
+from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 from DITWorkstation.Views.Widgets.status_panel import StatusPanel
 from DITWorkstation.Views.Widgets.table_factory import make_table
+from DITWorkstation.Views.Widgets.error_dialog import show_error
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS
 
 
@@ -61,7 +63,6 @@ class RawExtractionView(RefreshOnShowView):
         link_layout = QHBoxLayout(link_group)
         link_layout.addWidget(QLabel("目标项目:"))
         # 共享控件：broadcast_none=False 保留"不关联"语义
-        from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
         self.selector = WorkspaceProjectSelector(
             project_widget="combo",
             show_new_project=True,
@@ -232,7 +233,6 @@ class RawExtractionView(RefreshOnShowView):
 
         except Exception as e:
             import traceback
-            from DITWorkstation.Views.Widgets.error_dialog import show_error
             show_error(
                 title="扫描错误",
                 description=str(e),
@@ -248,7 +248,6 @@ class RawExtractionView(RefreshOnShowView):
 
         # 覆盖确认：检查 output 目录中是否已存在同名 RAW 文件
         try:
-            from DITWorkstation.Utils import find_overwrite_conflicts
             matches = getattr(self, "_last_matches", []) or []
             raw_names = [raw.name for _, raw in matches if raw]
             if raw_names:
@@ -357,7 +356,6 @@ class RawExtractionView(RefreshOnShowView):
         # 广播 assets_changed，让其他视图刷新
         if imported_count > 0:
             try:
-                from DITWorkstation.App.session_context import get_data_bus
                 get_data_bus().emit_data_changed("assets_changed")
             except Exception as e:
                 logger.error(f"广播 RAW 提取完成事件失败: {e}")
@@ -433,7 +431,6 @@ class RawExtractionView(RefreshOnShowView):
         self.cancel_btn.setEnabled(False)
         self.status_label.setText(f"❌ 错误: {error}")
         self.worker = None
-        from DITWorkstation.Views.Widgets.error_dialog import show_error
         show_error(
             title="提取错误",
             description=error,

@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from DITWorkstation.App import config
+
 
 def format_size(size_bytes: int) -> str:
     """格式化文件大小"""
@@ -118,7 +120,6 @@ _MAX_RECENT = 10
 
 def _get_settings_path() -> Path:
     """返回 settings.json 路径（与 DB 同目录）"""
-    from DITWorkstation.App import config
     return Path(config.effective_db_dir) / "settings.json"
 
 

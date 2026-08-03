@@ -10,10 +10,13 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QThread, Signal
 
+from DITWorkstation.App.session_context import get_data_bus
+from DITWorkstation.Models import RATING_LABELS
 from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger, open_in_file_manager
-from DITWorkstation.Views.Widgets import RefreshOnShowView
+from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Widgets.error_dialog import show_error
 from DITWorkstation.Views.Widgets.table_factory import make_table
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS
 
@@ -231,7 +234,6 @@ class AssetInfoView(RefreshOnShowView):
         left_layout.setSpacing(10)
 
         # 共享控件：工作区 + 项目两级选择（combo 模式，适合顶部）
-        from DITWorkstation.Views.Widgets import WorkspaceProjectSelector
         self.selector = WorkspaceProjectSelector(
             project_widget="combo",
             show_new_project=True,
@@ -324,7 +326,6 @@ class AssetInfoView(RefreshOnShowView):
         rating_row.addStretch()
 
         self._rating_buttons = []
-        from DITWorkstation.Models import RATING_LABELS
         rating_options = sorted(RATING_LABELS.items())
         for value, text in rating_options:
             btn = QPushButton(text)
@@ -601,7 +602,6 @@ class AssetInfoView(RefreshOnShowView):
         self._sync_rating_buttons(rating)
         # 广播素材变更，让看板/检索等视图刷新
         try:
-            from DITWorkstation.App.session_context import get_data_bus
             get_data_bus().emit_data_changed("assets_changed")
         except Exception as e:
             logger.warning(f"广播 assets_changed 失败: {e}")
@@ -819,7 +819,6 @@ class AssetInfoView(RefreshOnShowView):
         self._batch_worker = None
         from PySide6.QtCore import QTimer
         QTimer.singleShot(3000, lambda: self.batch_progress_frame.setVisible(False))
-        from DITWorkstation.Views.Widgets.error_dialog import show_error
         show_error(
             title="批量读取出错",
             description=error_msg,
@@ -850,7 +849,6 @@ class AssetInfoView(RefreshOnShowView):
         # 广播 assets_changed，让 search_view / shooting_log_view 等知道 EXIF 已更新
         if success > 0:
             try:
-                from DITWorkstation.App.session_context import get_data_bus
                 get_data_bus().emit_data_changed("assets_changed")
             except Exception as e:
                 logger.warning(f"批量 EXIF 完成后广播 assets_changed 失败: {e}")
