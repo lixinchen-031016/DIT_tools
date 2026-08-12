@@ -226,6 +226,9 @@ class DatabaseService:
             "projects": [
                 ("workspace_id", "TEXT"),
             ],
+            "backup_jobs": [
+                ("failed_files_json", "TEXT DEFAULT '[]'"),
+            ],
         }
         conn = self._create_conn()
         try:
@@ -1127,7 +1130,12 @@ class DatabaseService:
                 "copied_bytes": t.copied_bytes,
                 "verified": t.verified,
                 "error_message": t.error_message,
+                "failed_files": list(t.failed_files),
             } for t in job.targets
+        ], ensure_ascii=False)
+        failed_files_json = json.dumps([
+            {"path": t.path, "files": list(t.failed_files)}
+            for t in job.targets if t.failed_files
         ], ensure_ascii=False)
 
         try:
@@ -1135,11 +1143,11 @@ class DatabaseService:
                 conn.execute(
                     """INSERT OR REPLACE INTO backup_jobs
                        (job_id, project_id, source_path, algorithm, total_files, total_bytes,
-                        status, targets_json, created_at, completed_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        status, targets_json, failed_files_json, created_at, completed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (job.job_id, project_id, job.source_path, job.algorithm.value,
                      job.total_files, job.total_bytes, job.status.value, targets_json,
-                     job.created_at.isoformat(),
+                     failed_files_json, job.created_at.isoformat(),
                      job.completed_at.isoformat() if job.completed_at else None)
                 )
                 logger.info(f"持久化备份作业: {job.job_id} (project={project_id})")
@@ -1147,6 +1155,13 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"持久化备份作业失败 {job.job_id}: {e}")
             return False
+
+    def get_backup_job(self, job_id: str) -> Optional[dict]:
+        """获取单个备份作业的原始 dict；不存在返回 None。"""
+        for raw in self.get_backup_jobs():
+            if raw["job_id"] == job_id:
+                return raw
+        return None
 
     def get_backup_jobs(self, project_id: Optional[str] = None) -> List[dict]:
         """获取备份作业列表（原始 dict 形式，由调用方解析）。
@@ -1172,12 +1187,20 @@ class DatabaseService:
                     targets = json.loads(r["targets_json"]) if r["targets_json"] else []
                 except (json.JSONDecodeError, TypeError):
                     targets = []
+                for t in targets:
+                    # 兼容旧数据：未记录 failed_files 时视为空列表
+                    t.setdefault("failed_files", [])
                 completed_at = None
                 if r["completed_at"]:
                     try:
                         completed_at = datetime.fromisoformat(r["completed_at"])
                     except ValueError:
                         pass
+                try:
+                    failed = json.loads(r["failed_files_json"]) if r["failed_files_json"] else []
+                except (json.JSONDecodeError, TypeError):
+                    failed = []
+                failed_by_target = {f["path"]: f.get("files", []) for f in failed}
                 results.append({
                     "job_id": r["job_id"],
                     "project_id": r["project_id"],
@@ -1189,6 +1212,7 @@ class DatabaseService:
                     "targets": targets,
                     "created_at": datetime.fromisoformat(r["created_at"]),
                     "completed_at": completed_at,
+                    "failed_files_by_target": failed_by_target,
                 })
             return results
 

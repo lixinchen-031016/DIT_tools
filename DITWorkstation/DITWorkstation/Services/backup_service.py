@@ -315,6 +315,148 @@ class BackupService:
                 self._executor.shutdown(wait=False)
                 self._executor = None
 
+        return self._finalize_and_persist(job, files, project_id)
+
+    def load_job(self, job_id: str) -> Optional[BackupJob]:
+        """从数据库恢复备份作业（含目标状态与失败文件列表），供断点续传/重试。
+
+        Returns:
+            恢复的 BackupJob；作业不存在或未注入 db_service 时返回 None
+        """
+        if self.db_service is None:
+            return None
+        raw = self.db_service.get_backup_job(job_id)
+        if raw is None:
+            return None
+        try:
+            job = BackupJob(
+                job_id=raw["job_id"],
+                source_path=raw["source_path"],
+                algorithm=ChecksumAlgorithm(raw["algorithm"]),
+                status=BackupStatus(raw["status"]),
+                total_files=raw["total_files"],
+                total_bytes=raw["total_bytes"],
+                created_at=raw["created_at"],
+                completed_at=raw["completed_at"],
+            )
+        except ValueError:
+            job = BackupJob(job_id=raw["job_id"], source_path=raw["source_path"])
+
+        failed_by_target = raw.get("failed_files_by_target", {})
+        job.targets = []
+        for t in raw["targets"]:
+            try:
+                status = CopyStatus(t["status"])
+            except ValueError:
+                status = CopyStatus.FAILED
+            job.targets.append(BackupTarget(
+                path=t["path"],
+                name=t.get("name", ""),
+                status=status,
+                total_files=t.get("total_files", raw["total_files"]),
+                completed_files=t.get("completed_files", 0),
+                total_bytes=t.get("total_bytes", raw["total_bytes"]),
+                copied_bytes=t.get("copied_bytes", 0),
+                verified=t.get("verified", False),
+                error_message=t.get("error_message", ""),
+                failed_files=list(
+                    failed_by_target.get(t["path"], t.get("failed_files", []))
+                ),
+            ))
+        return job
+
+    def retry_failed_files(
+        self,
+        job_id: str,
+        project_id: Optional[str] = None,
+        progress_callback: Optional[Callable[[str, float, str], None]] = None,
+        file_completed_callback: Optional[Callable[[str, CopyTask], None]] = None,
+        verify: Optional[bool] = None
+    ) -> Optional[BackupJob]:
+        """重试备份作业中失败的文件（断点续传语义）。
+
+        从数据库恢复作业，仅对每个目标重新拷贝上次失败（failed_files）的文件；
+        目标中已存在且校验一致的文件自动跳过。重试结果写回原作业记录
+        （INSERT OR REPLACE 保留同一 job_id）。
+
+        Args:
+            job_id: 备份作业 ID
+            project_id: 关联项目 ID（持久化与回写 backup_locations 使用）
+            progress_callback: (target_path, progress, status_msg)
+            file_completed_callback: 单文件完成回调
+            verify: 拷贝后是否验证目标校验和；None 时取 config.verify_after_copy
+
+        Returns:
+            更新后的作业；作业不存在返回 None
+        """
+        job = self.load_job(job_id)
+        if job is None:
+            logger.warning(f"重试失败文件：备份作业不存在 {job_id}")
+            return None
+
+        retry_targets = [t for t in job.targets if t.failed_files]
+        if not retry_targets:
+            logger.info(f"重试失败文件：作业 {job_id} 没有失败文件记录，无需重试")
+            return job
+
+        self._set_cancelled(False)
+        job.status = BackupStatus.RUNNING
+        files = self.scan_source(job.source_path)
+        file_by_rel = {f["relative"]: f for f in files}
+
+        with self._executor_lock:
+            if self._executor:
+                self._executor.shutdown(wait=False, cancel_futures=True)
+            self._executor = ThreadPoolExecutor(max_workers=len(retry_targets))
+
+        futures = {}
+        for target in retry_targets:
+            # 重置目标状态；total_files/total_bytes 保留历史值用于统计
+            target.status = CopyStatus.COPYING
+            failed_files = [file_by_rel[r] for r in target.failed_files if r in file_by_rel]
+            missing = [r for r in target.failed_files if r not in file_by_rel]
+            target.failed_files = []
+            target.error_message = ""
+            if missing:
+                target.error_message = (
+                    f"源目录中缺失 {len(missing)} 个文件: " + "、".join(missing[:10])
+                )
+            if not failed_files:
+                # 失败文件在源目录中全部缺失，无法重试
+                if missing:
+                    target.status = CopyStatus.FAILED
+                continue
+            future = self._executor.submit(
+                self._copy_to_target,
+                Path(job.source_path), failed_files, target, job.algorithm,
+                progress_callback, file_completed_callback, verify
+            )
+            futures[future] = target
+
+        for future in as_completed(futures):
+            target = futures[future]
+            try:
+                future.result()
+            except Exception as e:
+                target.status = CopyStatus.FAILED
+                target.error_message = str(e)
+                logger.error(f"重试目标失败 {target.path}: {e}")
+
+        with self._executor_lock:
+            if self._executor:
+                self._executor.shutdown(wait=False)
+                self._executor = None
+
+        return self._finalize_and_persist(job, files, project_id, operation_event="备份重试")
+
+    def _finalize_and_persist(
+        self,
+        job: BackupJob,
+        files: List[Dict],
+        project_id: Optional[str],
+        operation_event: str = "数据备份"
+    ) -> BackupJob:
+        """汇总作业状态、持久化并回写 asset.backup_locations（execute/retry 共用）。"""
         completed = all(t.status == CopyStatus.COMPLETED for t in job.targets)
         any_failed = any(t.status == CopyStatus.FAILED for t in job.targets)
 
@@ -340,7 +482,7 @@ class BackupService:
                         )
                 # 操作审计：记录备份结果（失败不影响备份本身）
                 self.db_service.record_operation(
-                    "数据备份",
+                    operation_event,
                     f"{job.status.value}：{len(files)} 个文件，"
                     f"{len(job.targets)} 个目标",
                     project_id=project_id,
@@ -369,11 +511,17 @@ class BackupService:
         if verify is None:
             verify = config.verify_after_copy
         target_path = Path(target.path)
-        target_path.mkdir(parents=True, exist_ok=True)
+        try:
+            target_path.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            target.status = CopyStatus.FAILED
+            target.error_message = f"无法创建目标目录: {e}"
+            return
         target.status = CopyStatus.COPYING
 
         file_count = len(files)
-        failed_files = []
+        failed_files = []     # 失败文件的相对路径（完整列表，供重试）
+        failed_errors = {}    # relative -> error message
         for i, file_info in enumerate(files):
             if self._is_cancelled():
                 target.status = CopyStatus.CANCELLED
@@ -383,9 +531,50 @@ class BackupService:
             relative = file_info.get("relative", src_file.name)
             dest_file = target_path / relative
 
-            dest_file.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                dest_file.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                failed_files.append(relative)
+                failed_errors[relative] = f"无法创建目录: {e}"
+                continue
 
             try:
+                # 断点续传：目标已存在且大小一致时，校验一致则跳过拷贝。
+                # 源校验和命中导入/首次备份缓存，几乎免费；目标只需读一次哈希。
+                try:
+                    dest_size = dest_file.stat().st_size
+                except OSError:
+                    dest_size = None
+                if dest_size == file_info["size"]:
+                    try:
+                        src_hash = self.checksum_service.compute_file_checksum(
+                            str(src_file), algorithm,
+                            cancel_check=self._is_cancelled,
+                        )
+                        if self.checksum_service.verify_file(
+                            str(dest_file), src_hash.hash_value, algorithm,
+                            cancel_check=self._is_cancelled,
+                        ):
+                            target.completed_files += 1
+                            target.copied_bytes += file_info["size"]
+                            if file_completed_callback:
+                                task = CopyTask(
+                                    source_path=str(src_file),
+                                    dest_path=str(dest_file),
+                                    file_size=file_info["size"],
+                                    status=CopyStatus.COMPLETED,
+                                    progress=1.0,
+                                    source_checksum=src_hash.hash_value,
+                                    speed_mbps=0.0,
+                                )
+                                file_completed_callback(target.path, task)
+                            continue
+                    except InterruptedError:
+                        target.status = CopyStatus.CANCELLED
+                        return
+                    except Exception as e:
+                        logger.warning(f"断点校验失败，重新拷贝 {src_file.name}: {e}")
+
                 start_time = time.time()
                 # 边拷贝边计算源校验和：单次读盘，替代「先哈希再拷贝」的两次读盘
                 source_checksum = self.checksum_service.copy_file_with_checksum(
@@ -428,9 +617,14 @@ class BackupService:
                     )
                     file_completed_callback(target.path, task)
 
+            except InterruptedError:
+                # 用户取消：不记为失败文件
+                target.status = CopyStatus.CANCELLED
+                return
             except Exception as e:
-                failed_files.append(f"{src_file.name}: {str(e)}")
-                logger.error(f"文件拷贝失败 {src_file.name}: {e}")
+                failed_files.append(relative)
+                failed_errors[relative] = str(e)
+                logger.error(f"文件拷贝失败 {relative}: {e}")
                 # 清理残缺/损坏的目标文件，避免残留半成品影响后续复检
                 try:
                     dest_file.unlink(missing_ok=True)
@@ -440,13 +634,18 @@ class BackupService:
         if self._is_cancelled():
             target.status = CopyStatus.CANCELLED
             return
+        target.failed_files = failed_files
         if failed_files:
             target.status = CopyStatus.FAILED
-            shown = "；".join(failed_files[:20])
+            shown = "；".join(
+                f"{Path(r).name}: {failed_errors.get(r, '')}" for r in failed_files[:20]
+            )
             if len(failed_files) > 20:
                 shown += f"…（共 {len(failed_files)} 个文件失败）"
             target.error_message = shown
-            logger.error(f"备份目标部分失败 {target.path}: {len(failed_files)} 个文件")
+            logger.error(
+                f"备份目标部分失败 {target.path}: {len(failed_files)} 个文件"
+            )
             return
         target.status = CopyStatus.COMPLETED
         target.verified = True

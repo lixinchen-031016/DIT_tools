@@ -97,6 +97,7 @@ class BackupTarget:
     copied_bytes: int = 0
     verified: bool = False
     error_message: str = ""
+    failed_files: List[str] = field(default_factory=list)  # 失败文件相对路径列表（供断点续传/重试）
 
 
 @dataclass

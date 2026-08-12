@@ -5,7 +5,8 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QProgressBar, QComboBox,
     QGroupBox, QTextEdit,
-    QMessageBox, QCheckBox, QScrollArea, QFrame, QSplitter
+    QMessageBox, QCheckBox, QScrollArea, QFrame, QSplitter,
+    QTableWidget, QTableWidgetItem, QHeaderView,
 )
 from PySide6.QtCore import Signal, Slot, Qt
 
@@ -33,10 +34,10 @@ class BackupView(RefreshOnShowView):
     # 独立校验已有备份的进度信号：(current, total, message)
     _verify_progress = Signal(int, int, str)
 
-    def __init__(self):
+    def __init__(self, db_service=None):
         super().__init__()
         # 注入共享 db_service，使备份完成后能持久化 job + 回写 asset.backup_locations
-        self.db_service = get_db_service()
+        self.db_service = db_service or get_db_service()
         self.backup_service = BackupService(db_service=self.db_service)
         # 复用 db_service 与 checksum_service，与备份共享哈希缓存
         self.import_service = MediaImportService(db_service=self.db_service)
@@ -217,6 +218,51 @@ class BackupView(RefreshOnShowView):
         self.log_text = self.status_panel.log_text
         result_layout.addWidget(status_group)
 
+        # 备份历史：断点续传 / 失败重试入口
+        history_group = QGroupBox("备份历史（可断点续传 / 重试失败文件）")
+        history_layout = QVBoxLayout(history_group)
+        self.history_table = QTableWidget(0, 6)
+        self.history_table.setHorizontalHeaderLabels(
+            ["时间", "项目", "源路径", "目标数", "状态", "失败文件"]
+        )
+        self.history_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.history_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.history_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.history_table.setShowGrid(False)
+        self.history_table.verticalHeader().setVisible(False)
+        header = self.history_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.history_table.setMaximumHeight(150)
+        self.history_table.itemSelectionChanged.connect(
+            self._on_history_selection_changed
+        )
+        history_layout.addWidget(self.history_table)
+
+        history_detail = QHBoxLayout()
+        self.history_failed_label = QLabel(
+            "失败文件：选中上方记录后显示（可断点续传 / 重试）"
+        )
+        self.history_failed_label.setWordWrap(True)
+        self.history_failed_label.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+        )
+        history_detail.addWidget(self.history_failed_label, 1)
+        self.retry_btn = QPushButton("↻ 重试失败文件")
+        self.retry_btn.setToolTip(
+            "只重新拷贝选中作业中上次失败的文件到对应目标；"
+            "目标中已存在且校验一致的文件自动跳过（断点续传）"
+        )
+        self.retry_btn.setEnabled(False)
+        self.retry_btn.clicked.connect(self._retry_failed_files)
+        history_detail.addWidget(self.retry_btn)
+        history_layout.addLayout(history_detail)
+        result_layout.addWidget(history_group)
+
         main_splitter.addWidget(result_widget)
         main_splitter.setStretchFactor(0, 3)
         main_splitter.setStretchFactor(1, 2)
@@ -227,8 +273,143 @@ class BackupView(RefreshOnShowView):
         """showEvent 节流后的实际刷新逻辑"""
         try:
             self.selector.refresh()
+            self._load_backup_history()
         except Exception as e:
             self._log(f"刷新工作区/项目列表失败: {e}")
+
+    def _load_backup_history(self):
+        """加载备份作业历史（最近 20 条），供断点续传 / 重试选择。"""
+        try:
+            jobs = self.db_service.get_backup_jobs()
+        except Exception as e:
+            self._log(f"加载备份历史失败: {e}")
+            return
+        self.history_table.setRowCount(0)
+        status_text = {
+            "completed": "✅ 完成",
+            "partial": "⚠️ 部分",
+            "failed": "❌ 失败",
+            "running": "🔄 进行中",
+        }
+        for raw in jobs[:20]:
+            row = self.history_table.rowCount()
+            self.history_table.insertRow(row)
+            failed_total = sum(
+                len(t.get("failed_files", [])) for t in raw["targets"]
+            )
+            values = [
+                raw["created_at"].strftime("%m-%d %H:%M"),
+                raw["project_id"] or "—",
+                raw["source_path"],
+                str(len(raw["targets"])),
+                status_text.get(raw["status"], raw["status"]),
+                str(failed_total),
+            ]
+            for col, text in enumerate(values):
+                item = QTableWidgetItem(str(text))
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                if col == 0:
+                    item.setData(Qt.UserRole, raw["job_id"])
+                self.history_table.setItem(row, col, item)
+
+    def _on_history_selection_changed(self):
+        """选中历史作业 → 显示失败文件列表并启用重试按钮。"""
+        self.retry_btn.setEnabled(False)
+        self.history_failed_label.setText(
+            "失败文件：选中上方记录后显示（可断点续传 / 重试）"
+        )
+        if self.worker and self.worker.isRunning():
+            return
+        rows = self.history_table.selectionModel().selectedRows()
+        if not rows:
+            return
+        row = rows[0].row()
+        job_id_item = self.history_table.item(row, 0)
+        if job_id_item is None:
+            return
+        job_id = job_id_item.data(Qt.UserRole)
+        try:
+            job = self.backup_service.load_job(job_id)
+        except Exception as e:
+            self._log(f"加载备份作业失败 {job_id}: {e}")
+            return
+        if job is None:
+            return
+        failed = [
+            f"{t.name} / {rel}"
+            for t in job.targets
+            for rel in t.failed_files
+        ]
+        if failed:
+            shown = "\n".join(failed[:50])
+            if len(failed) > 50:
+                shown += f"\n…（共 {len(failed)} 个文件）"
+            self.history_failed_label.setText(shown)
+            if job.status.value in ("partial", "failed"):
+                self.retry_btn.setEnabled(True)
+        else:
+            self.history_failed_label.setText("该作业无失败文件记录")
+
+    @safe_slot("重试失败文件失败")
+    def _retry_failed_files(self):
+        """重试选中备份作业的失败文件（断点续传语义）。"""
+        if self.worker and self.worker.isRunning():
+            QMessageBox.warning(self, "提示", "已有后台任务正在运行，请稍候")
+            return
+        rows = self.history_table.selectionModel().selectedRows()
+        if not rows:
+            return
+        row = rows[0].row()
+        job_id_item = self.history_table.item(row, 0)
+        if job_id_item is None:
+            return
+        job_id = job_id_item.data(Qt.UserRole)
+        job = self.backup_service.load_job(job_id)
+        if job is None:
+            QMessageBox.warning(self, "提示", "找不到该备份作业记录")
+            return
+        failed_total = sum(len(t.failed_files) for t in job.targets)
+        detail = "\n".join(
+            f"· {t.name}: {len(t.failed_files)} 个文件"
+            for t in job.targets if t.failed_files
+        )
+        reply = QMessageBox.question(
+            self, "重试失败文件",
+            f"将重新拷贝该作业中失败的 {failed_total} 个文件到对应目标：\n\n"
+            f"{detail}\n\n"
+            "目标中已存在且校验一致的文件会自动跳过（断点续传）。是否继续？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        raw = self.db_service.get_backup_job(job_id)
+        project_id = raw["project_id"] if raw else None
+        self._backup_project_id = project_id
+
+        self.start_btn.setEnabled(False)
+        self.retry_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.progress_bar.setValue(0)
+        self.status_label.setText("正在重试失败文件…")
+        self._log(
+            f"开始重试备份作业 [{job_id}]：{failed_total} 个失败文件"
+            + (f"，关联项目 {project_id}" if project_id else "")
+        )
+
+        self.worker = WorkerThread(
+            self.backup_service.retry_failed_files,
+            job_id,
+            project_id=project_id,
+            verify=self.verify_check.isChecked(),
+            inject_progress=True,
+            inject_file_completed=True,
+        )
+        self.worker.progress.connect(self._on_progress)
+        self.worker.finished.connect(self._on_finished)
+        self.worker.error.connect(self._on_error)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.start()
 
     def _pick_directory(self, title: str, category: str = "default") -> str:
         """统一的目录选择对话框（委托给共享工具函数，处理打包兼容）。"""
@@ -574,6 +755,13 @@ class BackupView(RefreshOnShowView):
             self.status_label.setText("❌ 备份失败")
             self._log(f"备份失败: {job.status.value}")
 
+        # 失败/部分完成时，历史区提供断点续传入口
+        if job.status.value in ("partial", "failed"):
+            self._log(
+                "提示：可在下方「备份历史」选中该作业，点击「重试失败文件」"
+                "只补拷失败的文件"
+            )
+
         for target in job.targets:
             status_icon = "✅" if target.status.value == "completed" else "❌"
             self._log(f"  {status_icon} {target.name}: {target.status.value} "
@@ -642,6 +830,12 @@ class BackupView(RefreshOnShowView):
                         main_window.nav_list.setCurrentRow(get_nav_index("log"))
                 except Exception as e:
                     logger.warning(f"跳转日志视图失败: {e}")
+
+        # 刷新备份历史表（含失败文件与最新状态）
+        try:
+            self._load_backup_history()
+        except Exception as e:
+            self._log(f"刷新备份历史失败: {e}")
 
     @Slot(str)
     def _on_error(self, error: str):
