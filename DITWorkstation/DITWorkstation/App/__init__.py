@@ -78,7 +78,6 @@ class AppConfig:
 
     # 备份配置
     max_parallel_copies: int = 4  # 最大并行拷贝数
-    copy_buffer_size: int = 1024 * 1024 * 8  # 8MB 拷贝缓冲区
     verify_after_copy: bool = True  # 拷贝后验证
 
     # 支持的RAW格式
@@ -109,6 +108,7 @@ class AppConfig:
     import_copy_on_modify: bool = True
     import_default_compute_checksum: bool = True
     import_default_read_metadata: bool = True
+    max_import_workers: int = 4  # 导入时并行处理（元数据/校验和读取）的线程数
 
     @property
     def db_path(self) -> Path:

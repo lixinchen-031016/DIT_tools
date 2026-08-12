@@ -1,5 +1,4 @@
 """JPG筛选后RAW文件提取服务"""
-import shutil
 import threading
 from pathlib import Path
 from typing import List, Optional, Callable, Tuple, Dict
@@ -152,23 +151,18 @@ class RawExtractionService:
                 continue
 
             try:
-                dest = output / raw_path.name
-                if dest.exists():
-                    stem = dest.stem
-                    suffix = dest.suffix
-                    counter = 1
-                    while dest.exists():
-                        dest = output / f"{stem}_{counter}{suffix}"
-                        counter += 1
+                dest = self._get_unique_dest(output, raw_path)
 
-                shutil.copy2(str(raw_path), str(dest))
+                # 边拷贝边计算源校验和：单次读盘，替代「先哈希再拷贝」的两次读盘
+                src_checksum = self.checksum_service.copy_file_with_checksum(
+                    str(raw_path), str(dest), algorithm,
+                    cancel_check=self._is_cancelled,
+                )
 
                 if verify:
-                    src_checksum = self.checksum_service.compute_file_checksum(
-                        str(raw_path), algorithm
-                    )
                     verified = self.checksum_service.verify_file(
-                        str(dest), src_checksum.hash_value, algorithm
+                        str(dest), src_checksum.hash_value, algorithm,
+                        cancel_check=self._is_cancelled,
                     )
                     if not verified:
                         raise IOError(f"校验和验证失败: {raw_path.name}")
@@ -184,6 +178,11 @@ class RawExtractionService:
             except Exception as e:
                 failed += 1
                 logger.error(f"RAW提取失败 {raw_path.name}: {e}")
+                # 清理残缺/损坏的目标文件，避免残留半成品
+                try:
+                    dest.unlink(missing_ok=True)
+                except (OSError, UnboundLocalError):
+                    pass
                 results["details"].append({
                     "jpg": str(jpg_path),
                     "raw": str(raw_path),
@@ -251,10 +250,20 @@ class RawExtractionService:
 
             try:
                 dest = self._get_unique_dest(output, raw_path)
-                shutil.copy2(str(raw_path), str(dest))
+
+                # 边拷贝边计算源校验和：单次读盘，替代「先哈希再拷贝」的两次读盘
+                src_checksum = self.checksum_service.copy_file_with_checksum(
+                    str(raw_path), str(dest), algorithm,
+                    cancel_check=self._is_cancelled,
+                )
 
                 if verify:
-                    self._verify_copy(str(raw_path), str(dest), algorithm)
+                    verified = self.checksum_service.verify_file(
+                        str(dest), src_checksum.hash_value, algorithm,
+                        cancel_check=self._is_cancelled,
+                    )
+                    if not verified:
+                        raise IOError(f"校验和验证失败: {raw_path.name}")
 
                 extracted += 1
                 results["details"].append({
@@ -272,6 +281,10 @@ class RawExtractionService:
                     "status": "failed",
                     "error": str(e)
                 })
+                try:
+                    dest.unlink(missing_ok=True)
+                except (OSError, UnboundLocalError):
+                    pass
 
         results["extracted"] = extracted
         results["not_found"] = not_found
@@ -291,13 +304,6 @@ class RawExtractionService:
             dest = output / f"{stem}_{counter}{suffix}"
             counter += 1
         return dest
-
-    def _verify_copy(self, source_path: str, dest_path: str, algorithm: ChecksumAlgorithm):
-        """验证拷贝完整性"""
-        src_checksum = self.checksum_service.compute_file_checksum(source_path, algorithm)
-        verified = self.checksum_service.verify_file(dest_path, src_checksum.hash_value, algorithm)
-        if not verified:
-            raise IOError(f"校验和验证失败: {source_path}")
 
     def _is_cancelled(self) -> bool:
         """线程安全检查取消状态"""

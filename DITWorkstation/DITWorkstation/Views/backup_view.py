@@ -13,7 +13,10 @@ from typing import Optional
 from DITWorkstation.Models import ChecksumAlgorithm, BackupJob
 from DITWorkstation.Services.backup_service import BackupService
 from DITWorkstation.Services.media_import_service import MediaImportService
-from DITWorkstation.Utils import WorkerThread, format_size, safe_slot, get_db_service, pick_directory, find_overwrite_conflicts, logger
+from DITWorkstation.Utils import (
+    WorkerThread, format_size, safe_slot, get_db_service,
+    pick_directory, pick_save_file, find_overwrite_conflicts, logger,
+)
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.App.navigation import get_nav_index
 from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
@@ -168,8 +171,14 @@ class BackupView(RefreshOnShowView):
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self._cancel_backup)
 
+        self.mhl_btn = QPushButton("📄 导出 MHL 校验清单")
+        self.mhl_btn.setToolTip("把本次备份的源文件哈希列表导出为 ASC MHL XML 文件")
+        self.mhl_btn.setEnabled(False)
+        self.mhl_btn.clicked.connect(self._export_mhl)
+
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.cancel_btn)
+        btn_layout.addWidget(self.mhl_btn)
         btn_layout.addStretch()
         config_layout.addLayout(btn_layout)
 
@@ -378,6 +387,7 @@ class BackupView(RefreshOnShowView):
             self.backup_service.execute_backup,
             self.current_job,
             project_id=project_id,
+            verify=self.verify_check.isChecked(),
             inject_progress=True,
             inject_file_completed=True,
         )
@@ -388,6 +398,24 @@ class BackupView(RefreshOnShowView):
         # 线程结束后自动释放，避免 QThread 对象泄漏
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
+        self.mhl_btn.setEnabled(True)
+
+    @safe_slot("导出 MHL 失败")
+    def _export_mhl(self):
+        """导出当前备份作业的 ASC MHL 校验清单（XML）。"""
+        if not self.current_job:
+            return
+        default_name = f"MHL_{self.current_job.job_id}.xml"
+        path = pick_save_file(
+            self, "导出 MHL 校验清单", default_name,
+            "MHL 文件 (*.xml);;所有文件 (*)"
+        )
+        if not path:
+            return
+        content = self.backup_service.generate_mhl_report(self.current_job)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        self._log(f"✅ MHL 校验清单已导出: {path}")
 
     def _cancel_backup(self):
         self.backup_service.cancel()

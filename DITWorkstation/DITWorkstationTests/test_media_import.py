@@ -532,3 +532,64 @@ class TestMediaImportService:
         # 全部素材
         all_assets = db_service.get_media_assets(project.project_id)
         assert len(all_assets) == 3
+
+    def test_import_duplicate_paths_in_batch(self, import_service, temp_db, tmp_path):
+        """同批重复路径只导入一次（并发占位去重）"""
+        db_service, _ = temp_db
+        project = db_service.create_project("批内去重测试")
+        f = tmp_path / "dup.jpg"
+        f.write_bytes(b"data")
+
+        result = import_service.import_assets(
+            project.project_id, [str(f), str(f)],
+            compute_checksum=False, read_metadata=False,
+        )
+        assert result["imported"] == 1
+        assert result["skipped"] == 1
+        assert len(db_service.get_media_assets(project.project_id)) == 1
+
+    def test_import_parallel_many_files(self, import_service, temp_db, tmp_path):
+        """并行导入：多文件全部入库且校验和已计算"""
+        db_service, _ = temp_db
+        project = db_service.create_project("并行导入测试")
+        files = []
+        for i in range(20):
+            f = tmp_path / f"f_{i:02d}.jpg"
+            f.write_bytes(os.urandom(1024))
+            files.append(str(f))
+
+        result = import_service.import_assets(
+            project.project_id, files,
+            compute_checksum=True, read_metadata=False,
+        )
+        assert result["imported"] == 20
+        assert result["failed"] == 0
+
+        assets = db_service.get_media_assets(project.project_id)
+        assert len(assets) == 20
+        assert all(a.checksum_value for a in assets)
+
+    def test_import_copy_mode_unique_names(self, import_service, temp_db, tmp_path):
+        """复制模式：不同目录下同名文件并发导入应生成唯一文件名"""
+        db_service, _ = temp_db
+        project = db_service.create_project("唯一命名测试")
+        d1 = tmp_path / "d1"
+        d2 = tmp_path / "d2"
+        d1.mkdir()
+        d2.mkdir()
+        f1 = d1 / "same.jpg"
+        f2 = d2 / "same.jpg"
+        f1.write_bytes(b"aaa")
+        f2.write_bytes(b"bbb")
+        ws = tmp_path / "ws"
+
+        result = import_service.import_assets(
+            project.project_id,
+            [str(f1), str(f2)],
+            compute_checksum=False, read_metadata=False,
+            copy_to_workspace=True, workspace_dir=str(ws),
+        )
+        assert result["imported"] == 2
+        names = {a.file_name for a in db_service.get_media_assets(project.project_id)}
+        assert "same.jpg" in names
+        assert len(names) == 2  # 第二个同名文件自动唯一命名

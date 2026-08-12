@@ -4,13 +4,17 @@
 - 缓存目录：config.effective_db_dir / "thumbnails"，命名 {cache_key}_{size}.png
 - 命中缓存同步返回 QPixmap；未命中投递到 QThreadPool 异步生成，完成后发 thumbnail_ready
 - 图片：Pillow Image.thumbnail 解码缩放
-- RAW：尝试 Pillow 读取内嵌 JPEG 预览（多数相机内嵌），失败返回 None 显示占位
-- 视频：shell out 到 ffmpeg 抽第 1 秒帧；ffmpeg 不在 PATH 时返回 None
+- RAW：回退链 Pillow 直接解码 → EXIF 内嵌 JPEG/TIFF 预览（exifread，多数相机内嵌）
+  → 可选 rawpy 全量解码（未安装时自动跳过，安装后自动启用，无需改代码）
+- 视频：回退链 ffmpeg 抽第 1 秒帧 → macOS 系统 QuickLook（qlmanage，无需安装）
+  → PyAV / OpenCV（可选依赖，安装后自动启用）；全部不可用时返回 None 显示占位图
 - QThreadPool 限 4 并发，避免大批量时抢占主线程
 """
 import io
-import subprocess
+import platform
 import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -41,7 +45,9 @@ class ThumbnailService(QObject):
         # 视频抽帧依赖系统 ffmpeg（缺失时视频显示占位，不报错）
         self._ffmpeg_available = shutil.which("ffmpeg") is not None
         if not self._ffmpeg_available:
-            logger.info("未检测到 ffmpeg，视频缩略图将显示占位图（不影响其他功能）")
+            logger.info(
+                "未检测到 ffmpeg，视频缩略图将尝试 macOS QuickLook / PyAV / OpenCV 备选方案"
+            )
 
     def get_thumbnail(self, cache_key: str, file_path: str,
                       asset_type: str, size: int = SIZE_SMALL) -> Optional[QPixmap]:
@@ -71,27 +77,118 @@ class ThumbnailService(QObject):
         ext = p.suffix.lower()
         try:
             if ext in config.image_extensions or ext in config.raw_extensions:
-                # 图片用 Pillow 直接解码；RAW 多数内嵌 JPEG 预览，Pillow 也能读取
                 return self._gen_image(file_path, size)
             elif ext in config.video_extensions:
                 return self._gen_video(file_path, size)
         except Exception as e:
-            logger.warning(f"缩略图生成失败 {file_path}: {e}")
+            logger.debug(f"缩略图生成失败 {file_path}: {e}")
         return None
 
     def _gen_image(self, file_path: str, size: int) -> Optional[bytes]:
-        """用 Pillow 生成图片缩略图（PNG bytes）。"""
+        """生成图片/RAW 缩略图（PNG bytes）。
+
+        回退链：
+        1. Pillow 直接解码（jpg/png/tiff/webp 等）；
+        2. EXIF 内嵌 JPEG/TIFF 预览（exifread，相机 RAW 普遍内嵌）；
+        3. rawpy 全量解码（可选依赖，未安装时自动跳过）。
+        """
         from PIL import Image
-        with Image.open(file_path) as img:
-            img.thumbnail((size, size))
-            buf = io.BytesIO()
-            # 转换模式保证 Qt 可加载
-            if img.mode not in ("RGB", "RGBA"):
-                img = img.convert("RGB")
-            img.save(buf, format="PNG")
-            return buf.getvalue()
+
+        # 1. 直接解码
+        try:
+            with Image.open(file_path) as img:
+                return self._to_png(img, size)
+        except Exception as e:
+            logger.debug(f"Pillow 直接解码失败，尝试内嵌预览 {file_path}: {e}")
+
+        # 2. EXIF 内嵌预览（Sony ARW / Canon CR2 / Nikon NEF 等普遍内嵌）
+        preview = self._extract_embedded_preview(file_path)
+        if preview:
+            try:
+                with Image.open(io.BytesIO(preview)) as img:
+                    return self._to_png(img, size)
+            except Exception as e:
+                logger.debug(f"EXIF 内嵌预览解码失败 {file_path}: {e}")
+
+        # 3. rawpy 全量解码（可选依赖）
+        return self._decode_rawpy(file_path, size)
+
+    @staticmethod
+    def _to_png(img, size: int) -> bytes:
+        """把 PIL Image 缩放并编码为 PNG bytes（模式统一，保证 Qt 可加载）。"""
+        img.thumbnail((size, size))
+        buf = io.BytesIO()
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGB")
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    @staticmethod
+    def _extract_embedded_preview(file_path: str) -> Optional[bytes]:
+        """从 EXIF 提取相机内嵌的 JPEG/TIFF 预览字节（无额外依赖）。
+
+        exifread.process_file 在 extract_thumbnail 开启（默认）时会解析
+        JPEGInterchangeFormat / MakerNote 中的预览，写入 tags 的
+        "JPEGThumbnail"（JPEG）或 "TIFFThumbnail"（未压缩 TIFF）键。
+        """
+        try:
+            import exifread
+
+            with open(file_path, "rb") as fh:
+                tags = exifread.process_file(fh, details=False)
+            for key in ("JPEGThumbnail", "TIFFThumbnail"):
+                val = tags.get(key)
+                if val is None:
+                    continue
+                if hasattr(val, "values"):
+                    val = val.values
+                if isinstance(val, (bytes, bytearray)) and val:
+                    return bytes(val)
+        except Exception as e:
+            logger.debug(f"EXIF 内嵌预览读取失败 {file_path}: {e}")
+        return None
+
+    @staticmethod
+    def _decode_rawpy(file_path: str, size: int) -> Optional[bytes]:
+        """用 rawpy（libraw）全量解码 RAW 为缩略图。
+
+        可选依赖：未安装 rawpy 时静默返回 None，不影响其他路径。
+        安装后自动启用（pip install rawpy），无需改代码。
+        """
+        try:
+            import rawpy
+            from PIL import Image
+        except ImportError:
+            return None
+        try:
+            with rawpy.imread(file_path) as raw:
+                rgb = raw.postprocess(half_size=True, use_camera_wb=True)
+            return ThumbnailService._to_png(Image.fromarray(rgb), size)
+        except Exception as e:
+            logger.debug(f"rawpy 解码失败 {file_path}: {e}")
+            return None
 
     def _gen_video(self, file_path: str, size: int) -> Optional[bytes]:
+        """生成视频缩略图（PNG bytes）。
+
+        回退链（全部失败返回 None，UI 显示占位图）：
+        1. ffmpeg 抽第 1 秒帧（PATH 中可用时）；
+        2. macOS 系统 QuickLook（qlmanage，无第三方依赖）；
+        3. PyAV（可选依赖 av）；
+        4. OpenCV（可选依赖 opencv-python-headless）。
+        """
+        frame = self._ffmpeg_frame(file_path, size)
+        if frame:
+            return frame
+        frame = self._qlmanage_frame(file_path, size)
+        if frame:
+            return frame
+        frame = self._av_frame(file_path, size)
+        if frame:
+            return frame
+        return self._opencv_frame(file_path, size)
+
+    def _ffmpeg_frame(self, file_path: str, size: int) -> Optional[bytes]:
         """用 ffmpeg 抽视频第 1 秒帧并缩放（PNG bytes）。"""
         if not self._ffmpeg_available:
             return None
@@ -107,6 +204,79 @@ class ThumbnailService(QObject):
         except (subprocess.TimeoutExpired, OSError) as e:
             logger.warning(f"ffmpeg 抽帧失败 {file_path}: {e}")
         return None
+
+    @staticmethod
+    def _qlmanage_frame(file_path: str, size: int) -> Optional[bytes]:
+        """用 macOS 系统 QuickLook 生成视频缩略图（qlmanage，无需安装 ffmpeg）。
+
+        qlmanage 输出与源文件同名（<basename>.png）到指定目录，
+        再用 Pillow 缩放到目标尺寸并统一编码为 PNG。
+        """
+        if platform.system() != "Darwin":
+            return None
+        out_dir = tempfile.mkdtemp(prefix="dit_thumb_")
+        try:
+            result = subprocess.run(
+                ["qlmanage", "-t", "-s", str(size), "-o", out_dir, file_path],
+                capture_output=True, timeout=30,
+            )
+            if result.returncode != 0:
+                return None
+            png = Path(out_dir) / (Path(file_path).name + ".png")
+            if not png.exists():
+                return None
+            from PIL import Image
+            with Image.open(png) as img:
+                return ThumbnailService._to_png(img, size)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.debug(f"QuickLook 抽帧失败 {file_path}: {e}")
+            return None
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
+
+    @staticmethod
+    def _av_frame(file_path: str, size: int) -> Optional[bytes]:
+        """用 PyAV（可选依赖 av）解码视频首帧为缩略图。"""
+        try:
+            import av
+        except ImportError:
+            return None
+        try:
+            with av.open(file_path) as container:
+                stream = next(
+                    s for s in container.streams if s.type == "video"
+                )
+                for frame in container.decode(stream):
+                    img = frame.to_image()
+                    break
+                else:
+                    return None
+            return ThumbnailService._to_png(img, size)
+        except Exception as e:
+            logger.debug(f"PyAV 抽帧失败 {file_path}: {e}")
+            return None
+
+    @staticmethod
+    def _opencv_frame(file_path: str, size: int) -> Optional[bytes]:
+        """用 OpenCV（可选依赖 opencv-python-headless）读取视频首帧为缩略图。"""
+        try:
+            import cv2
+        except ImportError:
+            return None
+        try:
+            cap = cv2.VideoCapture(file_path)
+            try:
+                ok, frame = cap.read()
+                if not ok:
+                    return None
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            finally:
+                cap.release()
+            from PIL import Image
+            return ThumbnailService._to_png(Image.fromarray(rgb), size)
+        except Exception as e:
+            logger.debug(f"OpenCV 抽帧失败 {file_path}: {e}")
+            return None
 
 
 class _ThumbnailWorker(QRunnable):

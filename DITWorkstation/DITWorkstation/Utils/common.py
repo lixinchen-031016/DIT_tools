@@ -359,6 +359,8 @@ def find_overwrite_conflicts(
     """扫描目标目录中与源文件同名的文件，返回冲突清单。
 
     用于备份/导入/提取等写操作启动前判断是否会覆盖已有文件。
+    文件名比较不区分大小写（Windows/APFS 默认文件系统不区分大小写，
+    避免 IMG_001.CR2 源文件与 IMG_001.cr2 目标文件被误判为不冲突）。
 
     Args:
         source_files: 源文件对象列表（字符串路径或对象）
@@ -376,7 +378,7 @@ def find_overwrite_conflicts(
         target_path = _Path(target_dir)
         if not target_path.is_dir():
             continue
-        existing = {p.name for p in target_path.iterdir() if p.is_file()}
+        existing = {p.name.lower() for p in target_path.iterdir() if p.is_file()}
         if not existing:
             continue
         clashes = []
@@ -385,7 +387,7 @@ def find_overwrite_conflicts(
                 name = name_getter(src)
             else:
                 name = _Path(str(src)).name
-            if name in existing:
+            if name.lower() in existing:
                 clashes.append(name)
         if clashes:
             conflicts[target_dir] = clashes
@@ -490,6 +492,11 @@ def reset_singletons():
     """
     global _shared_db_service, _shared_checksum_service
     with _singleton_lock:
+        if _shared_db_service is not None:
+            try:
+                _shared_db_service.close_all()
+            except Exception:
+                pass
         _shared_db_service = None
         _shared_checksum_service = None
 

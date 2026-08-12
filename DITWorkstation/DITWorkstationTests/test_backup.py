@@ -139,6 +139,41 @@ class TestBackupService(unittest.TestCase):
         self.assertIn('<hashvalue>', mhl)
         self.assertIn('xxhash64', mhl)
 
+    def test_backup_continues_after_file_error(self):
+        """单文件失败不中断整个目标：其余文件继续拷贝，目标标记 FAILED"""
+        service = BackupService()
+        checksum_svc = service.checksum_service
+        orig = checksum_svc.copy_file_with_checksum
+
+        def fake_copy(src_path, dest_path, algorithm=ChecksumAlgorithm.XXHASH64,
+                      progress_callback=None, cancel_check=None):
+            # 仅 target1 中名为 test_file_1 的源文件模拟损坏
+            if "test_file_1" in str(src_path) and "target1" in str(dest_path):
+                raise IOError("模拟源文件损坏")
+            return orig(src_path, dest_path, algorithm, progress_callback, cancel_check)
+
+        checksum_svc.copy_file_with_checksum = fake_copy
+
+        job = service.create_backup_job(
+            self.source_dir, [self.target1_dir, self.target2_dir]
+        )
+        result = service.execute_backup(job)
+
+        self.assertEqual(result.status, BackupStatus.PARTIAL)
+        failed_target = next(t for t in result.targets if t.status == CopyStatus.FAILED)
+        ok_target = next(t for t in result.targets if t.status == CopyStatus.COMPLETED)
+
+        # 失败目标仍完成其余 5 个文件；正常目标完成全部 6 个
+        self.assertEqual(failed_target.completed_files, 5)
+        self.assertEqual(ok_target.completed_files, 6)
+        self.assertIn("test_file_1", failed_target.error_message)
+
+        # 失败文件不残留半成品
+        self.assertFalse((Path(self.target1_dir) / "test_file_1.dat").exists())
+        # 其余文件已成功拷贝
+        self.assertTrue((Path(self.target1_dir) / "test_file_0.dat").exists())
+        self.assertTrue((Path(self.target1_dir) / "test_file_2.dat").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

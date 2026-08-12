@@ -99,7 +99,8 @@ class BackupService:
         job: BackupJob,
         progress_callback: Optional[Callable[[str, float, str], None]] = None,
         file_completed_callback: Optional[Callable[[str, CopyTask], None]] = None,
-        project_id: Optional[str] = None
+        project_id: Optional[str] = None,
+        verify: Optional[bool] = None
     ) -> BackupJob:
         """
         执行备份作业（并行多目标）
@@ -111,6 +112,7 @@ class BackupService:
             project_id: 关联项目 ID。提供且 db_service 已注入时，
                         备份完成后会持久化 job + 把每个 target_path 回写到
                         匹配 asset 的 backup_locations 字段。
+            verify: 拷贝后是否验证目标校验和；None 时取 config.verify_after_copy
 
         Returns:
             更新后的备份作业
@@ -139,7 +141,7 @@ class BackupService:
             future = self._executor.submit(
                 self._copy_to_target,
                 source, files, target, job.algorithm,
-                progress_callback, file_completed_callback
+                progress_callback, file_completed_callback, verify
             )
             futures[future] = target
 
@@ -192,14 +194,23 @@ class BackupService:
         target: BackupTarget,
         algorithm: ChecksumAlgorithm,
         progress_callback: Optional[Callable],
-        file_completed_callback: Optional[Callable]
+        file_completed_callback: Optional[Callable],
+        verify: Optional[bool] = None
     ):
-        """拷贝文件到单个目标"""
+        """拷贝文件到单个目标。
+
+        单个文件失败不中断整个目标：记录错误后继续拷贝其余文件，
+        结束时目标状态为 FAILED（部分文件成功），由 execute_backup 汇总
+        为 BackupStatus.PARTIAL / FAILED。
+        """
+        if verify is None:
+            verify = config.verify_after_copy
         target_path = Path(target.path)
         target_path.mkdir(parents=True, exist_ok=True)
         target.status = CopyStatus.COPYING
 
         file_count = len(files)
+        failed_files = []
         for i, file_info in enumerate(files):
             if self._is_cancelled():
                 target.status = CopyStatus.CANCELLED
@@ -213,27 +224,25 @@ class BackupService:
 
             try:
                 start_time = time.time()
-                source_checksum = self.checksum_service.compute_file_checksum(
-                    str(src_file), algorithm
-                )
-                checksum_time = time.time()
-
-                self._copy_file_with_progress(
-                    src_file, dest_file,
+                # 边拷贝边计算源校验和：单次读盘，替代「先哈希再拷贝」的两次读盘
+                source_checksum = self.checksum_service.copy_file_with_checksum(
+                    str(src_file), str(dest_file), algorithm,
                     lambda p: self._report_progress(
                         progress_callback, target.path,
                         (i + p) / file_count, f"拷贝: {src_file.name}"
-                    )
+                    ),
+                    cancel_check=self._is_cancelled,
                 )
-                copy_time = time.time()
+                checksum_time = time.time()
 
-                if config.verify_after_copy:
+                if verify:
                     self._report_progress(
                         progress_callback, target.path,
                         (i + 0.9) / file_count, f"验证: {src_file.name}"
                     )
                     verified = self.checksum_service.verify_file(
-                        str(dest_file), source_checksum.hash_value, algorithm
+                        str(dest_file), source_checksum.hash_value, algorithm,
+                        cancel_check=self._is_cancelled,
                     )
                     if not verified:
                         raise IOError(f"校验和验证失败: {src_file.name}")
@@ -241,7 +250,7 @@ class BackupService:
                 target.completed_files += 1
                 target.copied_bytes += file_info["size"]
 
-                elapsed = copy_time - checksum_time
+                elapsed = checksum_time - start_time
                 speed = calculate_speed(elapsed, file_info["size"])
 
                 if file_completed_callback:
@@ -257,38 +266,28 @@ class BackupService:
                     file_completed_callback(target.path, task)
 
             except Exception as e:
-                target.status = CopyStatus.FAILED
-                target.error_message = f"文件 {src_file.name}: {str(e)}"
+                failed_files.append(f"{src_file.name}: {str(e)}")
                 logger.error(f"文件拷贝失败 {src_file.name}: {e}")
-                raise
+                # 清理残缺/损坏的目标文件，避免残留半成品影响后续复检
+                try:
+                    dest_file.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
+        if self._is_cancelled():
+            target.status = CopyStatus.CANCELLED
+            return
+        if failed_files:
+            target.status = CopyStatus.FAILED
+            shown = "；".join(failed_files[:20])
+            if len(failed_files) > 20:
+                shown += f"…（共 {len(failed_files)} 个文件失败）"
+            target.error_message = shown
+            logger.error(f"备份目标部分失败 {target.path}: {len(failed_files)} 个文件")
+            return
         target.status = CopyStatus.COMPLETED
         target.verified = True
         self._report_progress(progress_callback, target.path, 1.0, "完成")
-
-    def _copy_file_with_progress(
-        self,
-        src: Path,
-        dest: Path,
-        progress_callback: Optional[Callable[[float], None]]
-    ):
-        """带进度的文件拷贝"""
-        file_size = src.stat().st_size
-        buffer_size = config.copy_buffer_size
-        copied = 0
-
-        with open(src, "rb") as fsrc:
-            with open(dest, "wb") as fdst:
-                while True:
-                    if self._is_cancelled():
-                        raise InterruptedError("操作已取消")
-                    chunk = fsrc.read(buffer_size)
-                    if not chunk:
-                        break
-                    fdst.write(chunk)
-                    copied += len(chunk)
-                    if progress_callback and file_size > 0:
-                        progress_callback(copied / file_size)
 
     def _report_progress(
         self,

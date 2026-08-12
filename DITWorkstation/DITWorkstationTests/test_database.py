@@ -963,6 +963,104 @@ class TestDatabaseService(unittest.TestCase):
             assets = self.db.get_media_assets(project.project_id)
             self.assertIn("/backup/target", assets[0].backup_locations)
 
+    def test_existing_asset_paths_batch(self):
+        """批量查重：一次查询返回已存在路径集合（含规范化匹配）"""
+        project = self.db.create_project(name="批量查重测试")
+        with tempfile.TemporaryDirectory() as tmp:
+            fp1 = Path(tmp) / "IMG_A.cr2"
+            fp1.write_bytes(b"a")
+            fp2 = Path(tmp) / "IMG_B.cr2"
+            fp2.write_bytes(b"b")
+            self.db.add_media_asset(self._make_asset(project.project_id, str(fp1.resolve())))
+            self.db.add_media_asset(self._make_asset(project.project_id, str(fp2.resolve())))
+
+            new_fp = Path(tmp) / "IMG_C.cr2"
+            new_fp.write_bytes(b"c")
+            # 混入相对路径与 .. 路径，验证规范化
+            messy_fp2 = str(Path(tmp) / "sub" / ".." / "IMG_B.cr2")
+            existing = self.db.existing_asset_paths(
+                project.project_id,
+                [str(fp1), messy_fp2, str(new_fp)]
+            )
+            self.assertIn(str(fp1.resolve()), existing)
+            self.assertIn(str(fp2.resolve()), existing)
+            self.assertNotIn(str(new_fp.resolve()), existing)
+
+    def test_add_backup_location_batch_idempotent(self):
+        """批量回写 backup_locations：重复路径去重、目标幂等"""
+        project = self.db.create_project(name="批量回写测试")
+        paths = []
+        with tempfile.TemporaryDirectory() as tmp:
+            for i in range(3):
+                fp = Path(tmp) / f"IMG_{i}.cr2"
+                fp.write_bytes(b"x")
+                # 生产流程（媒体导入）存的是 normalize_path() 规范化路径，
+                # 这里用 resolve() 后的形式保持一致
+                paths.append(str(fp.resolve()))
+                self.db.add_media_asset(self._make_asset(project.project_id, str(fp.resolve())))
+
+            target = "/backup/drive1"
+            # 首次回写：3 个 asset 更新
+            updated = self.db.add_backup_location_to_assets(
+                [paths[0], paths[0], paths[1], paths[2]], target,
+                project_id=project.project_id
+            )
+            self.assertEqual(updated, 3)
+
+            assets = self.db.search_assets(project_id=project.project_id)
+            for a in assets:
+                self.assertEqual(a.backup_locations, [target])
+
+            # 再次回写：全部幂等跳过
+            updated_again = self.db.add_backup_location_to_assets(
+                paths, target, project_id=project.project_id
+            )
+            self.assertEqual(updated_again, 0)
+
+            # 追加第二个目标
+            target2 = "/backup/drive2"
+            updated2 = self.db.add_backup_location_to_assets(
+                paths, target2, project_id=project.project_id
+            )
+            self.assertEqual(updated2, 3)
+            assets = self.db.search_assets(project_id=project.project_id)
+            for a in assets:
+                self.assertEqual(sorted(a.backup_locations), sorted([target, target2]))
+
+    def test_close_all_then_reuse(self):
+        """连接池关闭后应能自动重建连接，服务继续可用"""
+        project = self.db.create_project(name="连接池复用测试")
+        self.db.close_all()
+        project2 = self.db.create_project(name="连接池复用测试2")
+        self.assertIsNotNone(project2.project_id)
+        self.assertEqual(len(self.db.get_projects()), 2)
+
+    def test_concurrent_thread_access(self):
+        """连接池并发安全：多线程同时读写不报错且数据完整"""
+        import threading as _threading
+        project = self.db.create_project(name="并发访问测试")
+        errors = []
+
+        def worker(idx):
+            try:
+                for j in range(20):
+                    asset = self._make_asset(
+                        project.project_id, f"/tmp/conc_{idx}_{j}.cr2"
+                    )
+                    self.db.add_media_asset(asset)
+                    self.db.search_assets(project_id=project.project_id, keyword="conc")
+            except Exception as e:  # pragma: no cover - 仅记录异常供断言
+                errors.append(e)
+
+        threads = [_threading.Thread(target=worker, args=(i,)) for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(self.db.get_media_assets(project.project_id)), 80)
+
 
 class TestWorkspaceManagement(unittest.TestCase):
     """工作区管理测试 - 验证 Workspace→Project 两级层级"""

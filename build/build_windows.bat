@@ -38,7 +38,14 @@ call .venv\Scripts\activate.bat
 
 echo === [3/5] 安装依赖 ===
 python -m pip install --upgrade pip >nul
-python -m pip install -r requirements.txt >nul
+REM rawpy 为可选依赖（部分平台无预编译 wheel），从主依赖列表单独过滤安装
+findstr /v /b rawpy requirements.txt > requirements-core.txt
+python -m pip install -r requirements-core.txt >nul
+del requirements-core.txt
+python -m pip install "rawpy>=0.21.0" >nul
+if errorlevel 1 (
+    echo 警告：rawpy 安装失败（可选），RAW 缩略图将降级为 EXIF 内嵌预览
+)
 python -m pip install pyinstaller >nul
 
 echo === [4/5] 运行单元测试 ===

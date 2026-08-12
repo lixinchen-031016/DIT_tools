@@ -8,11 +8,13 @@ from PySide6.QtWidgets import (
     QSplitter, QGroupBox, QFormLayout, QScrollArea,
     QMessageBox, QAbstractItemView, QProgressBar, QFrame, QSizePolicy
 )
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal, Slot
+from PySide6.QtGui import QPixmap
 
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import RATING_LABELS
 from DITWorkstation.Services.metadata_service import MetadataService
+from DITWorkstation.Services.thumbnail_service import ThumbnailService, SIZE_LARGE
 from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger, open_in_file_manager
 from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
@@ -149,6 +151,8 @@ class AssetInfoView(RefreshOnShowView):
         super().__init__()
         self.db_service = get_db_service()
         self.metadata_service = MetadataService()
+        self.thumbnail_service = ThumbnailService()
+        self.thumbnail_service.thumbnail_ready.connect(self._on_thumbnail_ready)
         self.current_asset = None
         self._batch_worker = None
         self._assets = []
@@ -295,6 +299,16 @@ class AssetInfoView(RefreshOnShowView):
             f"padding: 8px 0 12px 0;"
         )
         props_layout.addWidget(self.current_file_label)
+
+        # 缩略图预览（异步生成，由 ThumbnailService.thumbnail_ready 回填）
+        self.thumbnail_label = QLabel("🖼 选择素材后显示缩略图")
+        self.thumbnail_label.setAlignment(Qt.AlignCenter)
+        self.thumbnail_label.setMinimumHeight(180)
+        self.thumbnail_label.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; border: 1px dashed {COLOR.BORDER}; "
+            f"border-radius: {RADIUS.INPUT}px; padding: 12px;"
+        )
+        props_layout.addWidget(self.thumbnail_label)
 
         # 单个文件刷新按钮
         single_refresh_row = QHBoxLayout()
@@ -507,6 +521,8 @@ class AssetInfoView(RefreshOnShowView):
             self.refresh_exif_btn.setEnabled(False)
             self._sync_rating_buttons(None)
             self.current_file_label.setText("请选择左侧素材查看详情")
+            self.thumbnail_label.setPixmap(QPixmap())
+            self.thumbnail_label.setText("🖼 选择素材后显示缩略图")
             self._clear_properties()
             return
         asset_id = self.asset_table.item(row, 0).data(Qt.UserRole)
@@ -516,6 +532,7 @@ class AssetInfoView(RefreshOnShowView):
             self._sync_rating_buttons(self.current_asset.rating)
             self.current_file_label.setText(self.current_asset.file_name)
             self._display_properties(self.current_asset)
+            self._request_thumbnail(self.current_asset)
 
     def _on_asset_double_clicked(self, index):
         """双击素材 → 打开所在目录（通过 item 的 UserRole 取 asset_id，排序安全）"""
@@ -607,6 +624,28 @@ class AssetInfoView(RefreshOnShowView):
             logger.warning(f"广播 assets_changed 失败: {e}")
 
     # ===== 属性展示 =====
+    def _request_thumbnail(self, asset):
+        """请求生成/读取素材缩略图（缓存命中同步返回，未命中异步回填）。"""
+        self.thumbnail_label.setPixmap(QPixmap())
+        self.thumbnail_label.setText("生成缩略图中…")
+        pix = self.thumbnail_service.get_thumbnail(
+            asset.asset_id, asset.file_path, asset.asset_type, SIZE_LARGE
+        )
+        if pix is not None:
+            self._apply_thumbnail(asset.asset_id, pix)
+
+    @Slot(str, QPixmap)
+    def _on_thumbnail_ready(self, cache_key, pixmap):
+        """异步缩略图生成完成：仅当与当前选中素材一致时回填。"""
+        if self.current_asset and self.current_asset.asset_id == cache_key:
+            self._apply_thumbnail(cache_key, pixmap)
+
+    def _apply_thumbnail(self, cache_key, pixmap):
+        self.thumbnail_label.setText("")
+        self.thumbnail_label.setPixmap(pixmap.scaled(
+            320, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        ))
+
     def _display_properties(self, asset):
         # 基本信息
         self._set_value("basic", "file_name", asset.file_name)

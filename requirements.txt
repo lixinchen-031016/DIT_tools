@@ -5,6 +5,10 @@ iniconfig==2.3.0
 macholib==1.16.4
 packaging==26.2
 pillow==12.3.0
+# 可选依赖：启用相机 RAW 的全量解码缩略图（替代仅内嵌 JPEG 预览）。
+# 需要与 Python 版本匹配的 wheel（pip install rawpy），或系统安装 libraw 后源码编译；
+# 未安装时应用自动降级为 EXIF 内嵌预览，不影响其他功能。
+rawpy>=0.21.0
 pluggy==1.6.0
 Pygments==2.20.0
 pyinstaller==6.21.0

@@ -138,6 +138,30 @@ class TestRawExtractionService(unittest.TestCase):
         dest_hash = checksum_svc.compute_file_checksum(dest_raw)
         self.assertEqual(src_hash.hash_value, dest_hash.hash_value)
 
+    def test_cancel_mid_extract(self):
+        """提取过程中取消：已完成文件保留，未处理文件跳过"""
+        service = RawExtractionService()
+        checksum_svc = service.checksum_service
+        orig = checksum_svc.copy_file_with_checksum
+
+        def fake_copy(src_path, dest_path, algorithm=None,
+                      progress_callback=None, cancel_check=None):
+            result = orig(src_path, dest_path, algorithm, progress_callback, cancel_check)
+            # 第一个文件完成后即触发取消（须在拷贝之后，避免中途 InterruptedError）
+            service._set_cancelled(True)
+            return result
+
+        checksum_svc.copy_file_with_checksum = fake_copy
+        jpg_files = service.scan_jpg_folder(self.jpg_dir)
+        raw_index = service.scan_raw_folder(self.raw_dir)
+        matches = service.match_raw_files(jpg_files, raw_index)
+
+        result = service.extract_raw_files_streaming(
+            matches, self.output_dir, verify=False
+        )
+        self.assertEqual(result["extracted"], 1)
+        self.assertEqual(result["failed"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from DITWorkstation.Utils.common import (
     format_size, sanitize_filename, get_file_extension,
     get_file_stem, calculate_speed, generate_timestamp, generate_log_message,
-    normalize_path,
+    normalize_path, find_overwrite_conflicts,
 )
 
 
@@ -184,6 +184,33 @@ class TestNormalizePath(unittest.TestCase):
             once = normalize_path(str(fp))
             twice = normalize_path(once)
             self.assertEqual(once, twice)
+
+
+class TestFindOverwriteConflicts(unittest.TestCase):
+    """find_overwrite_conflicts 跨平台冲突检测"""
+
+    def test_case_insensitive_conflict(self):
+        """大小写不同但同名（Windows/APFS 不区分大小写）应判定为冲突"""
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target"
+            target.mkdir()
+            # 目标盘已有小写扩展名文件，源文件为大写扩展名
+            (target / "IMG_001.cr2").write_bytes(b"x")
+            conflicts = find_overwrite_conflicts(
+                ["/src/IMG_001.CR2"], [str(target)]
+            )
+            self.assertEqual(conflicts[str(target)], ["IMG_001.CR2"])
+
+    def test_no_conflict(self):
+        """文件名完全不同的文件不应判定为冲突"""
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target"
+            target.mkdir()
+            (target / "other.CR2").write_bytes(b"x")
+            conflicts = find_overwrite_conflicts(
+                ["/src/IMG_001.CR2"], [str(target)]
+            )
+            self.assertEqual(conflicts, {})
 
 
 if __name__ == "__main__":

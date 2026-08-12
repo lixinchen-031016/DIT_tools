@@ -1,7 +1,9 @@
 """媒体导入服务"""
 import json
 import shutil
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional, Callable, Dict
 from datetime import datetime
@@ -26,6 +28,8 @@ class MediaImportService:
         self.checksum_service = checksum_service or get_checksum_service()
         self.metadata_service = MetadataService()
         self.db_service = db_service or DatabaseService()
+        # 复制模式唯一命名互斥锁：并发导入同目录时避免文件名竞态
+        self._copy_lock = threading.Lock()
 
     def classify_media_type(self, file_path: str) -> AssetType:
         """
@@ -181,75 +185,119 @@ class MediaImportService:
 
         Returns:
             导入结果统计
+
+        性能说明：
+        - 批量查重：一次 IN 查询取回全部已存在路径，替代逐文件 SELECT（N+1 优化）
+        - 并行处理：元数据/校验和读取使用线程池（config.max_import_workers），
+          大卡导入时显著缩短耗时；单文件失败不影响其余文件
         """
         total = len(file_paths)
-        imported = 0
-        skipped = 0
-        failed = 0
-        cancelled = False
-        assets: List[MediaAsset] = []
-        details = []
+        if total == 0:
+            return {"total": 0, "imported": 0, "skipped": 0, "failed": 0,
+                    "cancelled": False, "details": []}
 
         # 查询项目名称，用于在工作区下创建项目子文件夹
         project = self.db_service.get_project(project_id)
         project_name = project.name if project else project_id
 
-        for i, file_path in enumerate(file_paths):
+        # 批量查重：一次查询拿回全部已存在路径（N+1 优化）
+        existing_paths = self.db_service.existing_asset_paths(project_id, file_paths)
+
+        dedup_lock = threading.Lock()
+        assets: List[MediaAsset] = []
+        details: List[Dict] = []
+        order = {fp: i for i, fp in enumerate(file_paths)}
+        imported = skipped = failed = 0
+        cancelled = False
+
+        def _import_one(file_path: str):
+            """处理单个文件；返回 (status, detail_dict, asset_or_None)"""
             if cancel_check and cancel_check():
-                cancelled = True
-                logger.info("导入已用户取消")
-                break
-
-            if progress_callback and total > 0:
-                progress = (i + 1) / total
-                progress_callback("import", progress, f"处理: {Path(file_path).name}")
-
+                return "cancelled", {"path": file_path, "status": "cancelled"}, None
             try:
                 path = Path(file_path)
                 if not path.exists():
-                    skipped += 1
-                    details.append({"path": file_path, "status": "skipped", "reason": "文件不存在"})
-                    continue
+                    return "skipped", {"path": file_path, "status": "skipped",
+                                       "reason": "文件不存在"}, None
+                fp_key = normalize_path(str(path))
+                with dedup_lock:
+                    if fp_key in existing_paths:
+                        return "skipped", {"path": file_path, "status": "skipped",
+                                           "reason": "已存在"}, None
+                    # 先占位，防止同批重复路径并发重复导入；失败时回退
+                    existing_paths.add(fp_key)
+                try:
+                    final_path = str(path)
+                    is_copy = False
+                    original_path = ""
+                    if copy_to_workspace:
+                        if not workspace_dir:
+                            raise ValueError("复制模式需要指定工作区目录")
+                        dest_path = self._copy_to_workspace(path, workspace_dir, project_name)
+                        final_path = str(dest_path)
+                        is_copy = True
+                        original_path = str(path)
 
-                if self.db_service.asset_exists_by_path(project_id, str(path)):
-                    skipped += 1
-                    details.append({"path": file_path, "status": "skipped", "reason": "已存在"})
-                    continue
-
-                final_path = str(path)
-                is_copy = False
-                original_path = ""
-
-                if copy_to_workspace:
-                    if not workspace_dir:
-                        raise ValueError("复制模式需要指定工作区目录")
-                    dest_path = self._copy_to_workspace(path, workspace_dir, project_name)
-                    final_path = str(dest_path)
-                    is_copy = True
-                    original_path = str(path)
-
-                asset = self._create_asset(
-                    project_id=project_id,
-                    file_path=final_path,
-                    compute_checksum=compute_checksum,
-                    is_working_copy=is_copy,
-                    original_path=original_path,
-                    read_metadata=read_metadata,
-                    log_id=log_id,
-                    scene=scene,
-                    shot=shot
-                )
-                assets.append(asset)
-                imported += 1
-                details.append({"path": file_path, "status": "imported", "asset_id": asset.asset_id})
-
+                    asset = self._create_asset(
+                        project_id=project_id,
+                        file_path=final_path,
+                        compute_checksum=compute_checksum,
+                        is_working_copy=is_copy,
+                        original_path=original_path,
+                        read_metadata=read_metadata,
+                        log_id=log_id,
+                        scene=scene,
+                        shot=shot,
+                        cancel_check=cancel_check,
+                    )
+                    return "imported", {"path": file_path, "status": "imported",
+                                        "asset_id": asset.asset_id}, asset
+                except Exception:
+                    with dedup_lock:
+                        existing_paths.discard(fp_key)
+                    raise
             except Exception as e:
-                failed += 1
+                if isinstance(e, InterruptedError) and cancel_check and cancel_check():
+                    return "cancelled", {"path": file_path, "status": "cancelled"}, None
                 logger.error(f"导入失败 {file_path}: {e}")
-                details.append({"path": file_path, "status": "failed", "error": str(e)})
+                return "failed", {"path": file_path, "status": "failed", "error": str(e)}, None
+
+        pool = ThreadPoolExecutor(max_workers=max(1, config.max_import_workers))
+        try:
+            futures = {pool.submit(_import_one, fp): fp for fp in file_paths}
+            processed = 0
+            for future in as_completed(futures):
+                status, detail, asset = future.result()
+                processed += 1
+                details.append(detail)
+                if status == "imported":
+                    imported += 1
+                    assets.append(asset)
+                elif status == "skipped":
+                    skipped += 1
+                elif status == "failed":
+                    failed += 1
+                else:  # cancelled
+                    cancelled = True
+
+                if progress_callback and total > 0:
+                    progress_callback(
+                        "import", processed / total,
+                        f"处理: {Path(detail['path']).name}"
+                    )
+
+                # 用户取消：停止收集剩余结果，已提交未执行的任务由 shutdown 取消
+                if cancelled or (cancel_check and cancel_check()):
+                    cancelled = True
+                    break
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
         if assets:
             self.db_service.add_media_assets_batch(assets)
+
+        # 按输入顺序稳定输出 details（并发完成顺序与输入顺序无关）
+        details.sort(key=lambda d: order.get(d["path"], 0))
 
         result = {
             "total": total,
@@ -273,7 +321,8 @@ class MediaImportService:
         read_metadata: bool = True,
         log_id: Optional[str] = None,
         scene: str = "",
-        shot: str = ""
+        shot: str = "",
+        cancel_check: Optional[Callable[[], bool]] = None
     ) -> MediaAsset:
         """
         创建素材资产对象
@@ -288,6 +337,7 @@ class MediaImportService:
             log_id: 关联的拍摄日志ID
             scene: 场景号
             shot: 镜头号
+            cancel_check: 取消检查回调（透传给校验和计算，返回 True 时中断）
 
         Returns:
             MediaAsset 对象
@@ -299,7 +349,7 @@ class MediaImportService:
         checksum_value = ""
         if compute_checksum:
             checksum = self.checksum_service.compute_file_checksum(
-                file_path, ChecksumAlgorithm.XXHASH64
+                file_path, ChecksumAlgorithm.XXHASH64, cancel_check=cancel_check
             )
             checksum_value = checksum.hash_value
 
@@ -388,20 +438,30 @@ class MediaImportService:
         """
         workspace = Path(workspace_dir)
         # 在工作区下创建项目名子文件夹
-        if project_name:
-            workspace = workspace / project_name
-        workspace.mkdir(parents=True, exist_ok=True)
-
-        dest = workspace / source_path.name
-        if dest.exists():
-            stem = dest.stem
-            suffix = dest.suffix
-            counter = 1
-            while dest.exists():
-                dest = workspace / f"{stem}_{counter}{suffix}"
-                counter += 1
-
-        shutil.copy2(str(source_path), str(dest))
+        with self._copy_lock:
+            # 锁内完成选名，避免并发导入同目录时唯一命名竞态
+            if project_name:
+                workspace = workspace / project_name
+            workspace.mkdir(parents=True, exist_ok=True)
+            dest = workspace / source_path.name
+            if dest.exists():
+                stem = dest.stem
+                suffix = dest.suffix
+                counter = 1
+                while dest.exists():
+                    dest = workspace / f"{stem}_{counter}{suffix}"
+                    counter += 1
+            # 占位：把名字保留到锁内，防止并发线程选到同一目标后互相覆盖
+            dest.touch()
+        try:
+            shutil.copy2(str(source_path), str(dest))
+        except Exception:
+            # 拷贝失败时清理占位/半成品文件
+            try:
+                dest.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
         logger.debug(f"复制到工作区: {source_path} -> {dest}")
         return dest
 

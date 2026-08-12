@@ -43,7 +43,14 @@ source .venv/bin/activate
 
 echo "=== [3/5] 安装依赖 ==="
 python -m pip install --upgrade pip >/dev/null
-python -m pip install -r requirements.txt >/dev/null
+# rawpy 为可选依赖（部分平台无预编译 wheel），从主依赖列表单独过滤安装
+TMP_REQ="${TMPDIR:-/tmp}/dit-requirements-core.txt"
+grep -v '^rawpy' requirements.txt > "$TMP_REQ"
+python -m pip install -r "$TMP_REQ" >/dev/null
+rm -f "$TMP_REQ"
+if ! python -m pip install "rawpy>=0.21.0" >/dev/null; then
+    echo "警告：rawpy 安装失败（可选），RAW 缩略图将降级为 EXIF 内嵌预览"
+fi
 python -m pip install pyinstaller >/dev/null
 
 echo "=== [4/5] 运行单元测试 ==="

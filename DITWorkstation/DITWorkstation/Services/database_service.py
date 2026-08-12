@@ -1,5 +1,6 @@
 """拍摄日志与项目管理服务 - SQLite持久化"""
 import sqlite3
+import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -11,15 +12,24 @@ from DITWorkstation.Models import Project, ShootingLog, MediaAsset, Workspace
 from DITWorkstation.Utils import logger, normalize_path
 
 
+def _chunked(seq, size):
+    """把序列切分为固定大小的块（SQLite 变量上限 999，保守取 500）。"""
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+
 class DatabaseService:
     """数据库服务 - SQLite持久化"""
 
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = db_path or config.db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # 线程级连接池：每个线程复用同一连接，避免高频操作反复建连 + 重复设置 PRAGMA
+        self._conns: dict = {}
+        self._conns_lock = threading.Lock()
         self._init_db()
 
-    def _get_conn(self) -> sqlite3.Connection:
+    def _create_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
@@ -31,18 +41,34 @@ class DatabaseService:
         conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
+    def _get_conn(self) -> sqlite3.Connection:
+        """获取当前线程的复用连接（连接池）。"""
+        tid = threading.get_ident()
+        with self._conns_lock:
+            conn = self._conns.get(tid)
+            if conn is None:
+                conn = self._create_conn()
+                self._conns[tid] = conn
+            return conn
+
     @contextmanager
     def _connection(self):
-        """连接上下文管理器：自动关闭连接，不自动提交。"""
+        """连接上下文管理器：复用连接，不自动提交。
+
+        复用连接时不能 close；退出时回滚悬挂事务，避免异常路径遗留写锁。
+        """
         conn = self._get_conn()
         try:
             yield conn
         finally:
-            conn.close()
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
 
     @contextmanager
     def _transaction(self):
-        """事务上下文管理器：自动提交/回滚 + 关闭连接。"""
+        """事务上下文管理器：自动提交/回滚（复用连接，不关闭）。"""
         conn = self._get_conn()
         try:
             yield conn
@@ -50,12 +76,10 @@ class DatabaseService:
         except Exception:
             conn.rollback()
             raise
-        finally:
-            conn.close()
 
     def _init_db(self):
         """初始化数据库表"""
-        conn = self._get_conn()
+        conn = self._create_conn()
         try:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS workspaces (
@@ -160,6 +184,17 @@ class DatabaseService:
             conn.close()
         self._migrate_db()
 
+    def close_all(self):
+        """关闭连接池中所有连接（测试/退出时调用）。"""
+        with self._conns_lock:
+            conns = list(self._conns.values())
+            self._conns.clear()
+        for conn in conns:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+
     def _migrate_db(self):
         """数据库迁移：为旧表补齐新增字段"""
         migrations = {
@@ -179,7 +214,7 @@ class DatabaseService:
                 ("workspace_id", "TEXT"),
             ],
         }
-        conn = self._get_conn()
+        conn = self._create_conn()
         try:
             for table, columns in migrations.items():
                 existing = {row["name"] for row in
@@ -711,6 +746,34 @@ class DatabaseService:
             ).fetchone()
             return row[0] > 0
 
+    def existing_asset_paths(self, project_id: str, file_paths: List[str]) -> set:
+        """批量查重：返回 file_paths 中已存在于该项目的规范化路径集合。
+
+        一次 IN 查询取回全部已存在路径，替代逐文件 SELECT 的 N+1 查询，
+        适合大卡导入（数千文件）场景。
+
+        Args:
+            project_id: 项目 ID
+            file_paths: 待检查的原始文件路径列表
+
+        Returns:
+            已存在的规范化路径集合（与入库存储形式一致）
+        """
+        if not file_paths:
+            return set()
+        keys = {normalize_path(fp) for fp in file_paths}
+        existing = set()
+        with self._connection() as conn:
+            for chunk in _chunked(sorted(keys), 500):
+                placeholders = ",".join("?" * len(chunk))
+                rows = conn.execute(
+                    f"SELECT file_path FROM media_assets "
+                    f"WHERE project_id = ? AND file_path IN ({placeholders})",
+                    (project_id, *chunk)
+                ).fetchall()
+                existing.update(r["file_path"] for r in rows)
+        return existing
+
     def get_asset_log_id_by_path(self, file_path: str) -> Optional[str]:
         """按文件路径全局查询素材关联的 log_id（不限 project_id）。
 
@@ -1021,6 +1084,9 @@ class DatabaseService:
         匹配规则：asset.file_path 等于 file_paths 中任一即视为同一文件。
         若 asset 已有该 target_path，则跳过（幂等）。
 
+        性能：一次 IN 查询批量取回全部匹配 asset，再逐条 UPDATE，
+        替代原实现逐文件 SELECT 的 N+1 查询。
+
         Args:
             file_paths: 备份源文件路径列表
             target_path: 备份目标路径
@@ -1032,29 +1098,29 @@ class DatabaseService:
             return 0
 
         try:
+            keys = list(dict.fromkeys(normalize_path(fp) for fp in file_paths))
             with self._transaction() as conn:
-                updated = 0
-                for fp in file_paths:
-                    # asset.file_path 在导入时存的是 normalize_path() 规范化路径，
-                    # 查询键同样规范化，避免符号链接环境（如 macOS /var -> /private/var）
-                    # 下因路径表示不一致而匹配失败。
-                    fp_key = normalize_path(fp)
+                # 批量取回已存在 asset（首个匹配优先，语义与原实现一致）
+                rows_by_path = {}
+                for chunk in _chunked(keys, 500):
+                    placeholders = ",".join("?" * len(chunk))
+                    sql = (
+                        "SELECT asset_id, file_path, backup_locations FROM media_assets "
+                        f"WHERE file_path IN ({placeholders})"
+                    )
                     if project_id:
-                        row = conn.execute(
-                            "SELECT asset_id, backup_locations FROM media_assets "
-                            "WHERE project_id = ? AND file_path = ?",
-                            (project_id, fp_key)
-                        ).fetchone()
+                        sql += " AND project_id = ?"
+                        params = (*chunk, project_id)
                     else:
-                        row = conn.execute(
-                            "SELECT asset_id, backup_locations FROM media_assets "
-                            "WHERE file_path = ?",
-                            (fp_key,)
-                        ).fetchone()
+                        params = chunk
+                    for r in conn.execute(sql, params).fetchall():
+                        rows_by_path.setdefault(r["file_path"], r)
 
+                updated = 0
+                for fp in keys:
+                    row = rows_by_path.get(fp)
                     if not row:
                         continue
-
                     existing = row["backup_locations"] or ""
                     locations = [l for l in existing.split("|") if l] if existing else []
                     if target_path in locations:

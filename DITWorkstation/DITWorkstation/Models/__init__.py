@@ -67,6 +67,7 @@ class FileChecksum:
     algorithm: ChecksumAlgorithm
     hash_value: str
     file_size: int
+    mtime_ns: int = 0  # 缓存有效性依据：文件修改时间（纳秒）
     computed_at: datetime = field(default_factory=datetime.now)
 
 
