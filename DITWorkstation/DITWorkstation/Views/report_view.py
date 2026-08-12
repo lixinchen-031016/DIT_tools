@@ -2,7 +2,7 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QGroupBox, QComboBox, QMessageBox,
-    QTextEdit, QLineEdit, QFormLayout, QSplitter
+    QTextEdit, QLineEdit, QFormLayout
 )
 from PySide6.QtCore import Slot, Qt
 
@@ -40,8 +40,8 @@ class ReportView(RefreshOnShowView):
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
-        main_splitter = QSplitter(Qt.Vertical)
-        main_splitter.setChildrenCollapsible(False)
+        # 上下两段：上段配置区，下段生成日志（不使用可拖动分割条，
+        # 空间不足时由整个视图的外层滚动条滚动）
         config_widget = QWidget()
         config_layout = QVBoxLayout(config_widget)
         config_layout.setContentsMargins(0, 0, 0, 0)
@@ -106,7 +106,7 @@ class ReportView(RefreshOnShowView):
         config_layout.addWidget(self.status_label)
 
         config_layout.addStretch()
-        main_splitter.addWidget(config_widget)
+        layout.addWidget(config_widget)
 
         # 报告预览/日志
         log_group = QGroupBox("生成日志")
@@ -120,12 +120,8 @@ class ReportView(RefreshOnShowView):
         result_layout.setContentsMargins(0, 0, 0, 0)
         result_layout.setSpacing(8)
         result_layout.addWidget(log_group)
-        main_splitter.addWidget(result_widget)
-
-        main_splitter.setStretchFactor(0, 2)
-        main_splitter.setStretchFactor(1, 3)
-        main_splitter.setMinimumHeight(400)
-        layout.addWidget(main_splitter, 1)
+        result_widget.setMinimumHeight(220)
+        layout.addWidget(result_widget, 1)
 
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""

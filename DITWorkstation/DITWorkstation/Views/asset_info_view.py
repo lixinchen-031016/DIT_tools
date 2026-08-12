@@ -5,7 +5,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView,
-    QSplitter, QGroupBox, QFormLayout, QScrollArea,
+    QGroupBox, QFormLayout, QScrollArea,
     QMessageBox, QAbstractItemView, QProgressBar, QFrame, QSizePolicy,
     QLineEdit, QTextEdit,
 )
@@ -170,8 +170,8 @@ class AssetInfoView(RefreshOnShowView):
         layout.setSpacing(16)
 
         self._setup_header(layout)
-        splitter = self._setup_splitter()
-        layout.addWidget(splitter, 1)
+        content = self._setup_content()
+        layout.addWidget(content, 1)
 
         # === 底部批量操作进度条 ===
         self.batch_progress_frame = QFrame()
@@ -242,14 +242,21 @@ class AssetInfoView(RefreshOnShowView):
 
         layout.addLayout(header)
 
-    def _setup_splitter(self):
-        # === 主体：左右分栏 ===
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self._setup_left_panel())
-        splitter.addWidget(self._setup_right_panel())
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 3)
-        return splitter
+    def _setup_content(self):
+        # === 主体：左右排列（不使用可拖动分割条，空间不足时整体滚动）===
+        content = QWidget()
+        content_layout = QHBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(12)
+
+        left = self._setup_left_panel()
+        left.setMinimumWidth(300)
+        right = self._setup_right_panel()
+        right.setMinimumWidth(260)
+        # 左右两侧按 1:1 分配宽度
+        content_layout.addWidget(left, 1)
+        content_layout.addWidget(right, 1)
+        return content
 
     def _setup_left_panel(self):
         # --- 左侧：工作区/项目选择 + 素材列表 ---
@@ -262,6 +269,7 @@ class AssetInfoView(RefreshOnShowView):
         self.selector = WorkspaceProjectSelector(
             project_widget="combo",
             show_new_project=True,
+            buttons_below=True,
             db_service=self.db_service,
         )
         left_layout.addWidget(self.selector)

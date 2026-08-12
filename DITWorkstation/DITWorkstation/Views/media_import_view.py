@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QProgressBar, QGroupBox,
     QTextEdit, QCheckBox, QTableWidget,
     QTableWidgetItem, QHeaderView, QMessageBox,
-    QSplitter, QComboBox, QDateTimeEdit, QMenu, QApplication
+    QComboBox, QDateTimeEdit, QMenu, QApplication
 )
 from PySide6.QtCore import Qt, Slot, QDateTime, Signal
 from PySide6.QtGui import QPixmap
@@ -67,9 +67,9 @@ class MediaImportView(RefreshOnShowView):
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
-        main_splitter = QSplitter(Qt.Horizontal)
-
+        # 左侧：工作区/项目选择（固定宽度，不参与拖动）
         left_panel = QWidget()
+        left_panel.setFixedWidth(280)
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(8)
@@ -82,11 +82,14 @@ class MediaImportView(RefreshOnShowView):
             db_service=self.db_service,
         )
         left_layout.addWidget(self.selector)
+        left_layout.addStretch()
 
-        main_splitter.addWidget(left_panel)
-
-        right_splitter = QSplitter(Qt.Vertical)
-        right_splitter.setChildrenCollapsible(False)
+        # 右侧内容：各区块垂直堆叠、按内容自适应高度，
+        # 空间不足时由整个视图的外层滚动条滚动
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(16)
 
         source_group = QGroupBox("导入源")
         source_layout = QVBoxLayout(source_group)
@@ -168,9 +171,10 @@ class MediaImportView(RefreshOnShowView):
 
         source_layout.addLayout(time_row)
 
-        right_splitter.addWidget(source_group)
+        right_layout.addWidget(source_group)
 
         files_group = QGroupBox("待导入文件")
+        files_group.setMinimumHeight(200)
         files_layout = QVBoxLayout(files_group)
 
         # 选择工具行：全选 / 全不选 / 反选 + 已选计数
@@ -194,10 +198,6 @@ class MediaImportView(RefreshOnShowView):
         select_row.addWidget(self.selected_label)
         files_layout.addLayout(select_row)
 
-        # 表格 + 缩略图预览 左右分栏
-        files_splitter = QSplitter(Qt.Horizontal)
-        files_splitter.setChildrenCollapsible(False)
-
         self.files_table = make_table(
             ["导入", "文件名", "类型", "大小", "修改时间", "路径"],
             sortable=True,
@@ -212,7 +212,6 @@ class MediaImportView(RefreshOnShowView):
         # 右键菜单：打开目录 / 复制路径
         self.files_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.files_table.customContextMenuRequested.connect(self._on_files_context_menu)
-        files_splitter.addWidget(self.files_table)
         attach_empty_state(self.files_table, "📁", "暂无待导入文件", "点击上方「浏览…」选择存储卡目录")
 
         # 缩略图预览面板：选中行时显示对应素材缩略图
@@ -239,16 +238,19 @@ class MediaImportView(RefreshOnShowView):
         self.preview_info.setWordWrap(True)
         self.preview_info.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
         preview_layout.addWidget(self.preview_info)
-        files_splitter.addWidget(preview_panel)
-        files_splitter.setStretchFactor(0, 1)
-        files_splitter.setStretchFactor(1, 0)
-        files_layout.addWidget(files_splitter, 1)
+
+        # 表格 + 缩略图预览 左右排列（预览面板固定宽度）
+        files_row = QHBoxLayout()
+        files_row.setSpacing(8)
+        files_row.addWidget(self.files_table, 1)
+        files_row.addWidget(preview_panel)
+        files_layout.addLayout(files_row, 1)
 
         self.files_label = QLabel("")
         self.files_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
         files_layout.addWidget(self.files_label)
 
-        right_splitter.addWidget(files_group)
+        right_layout.addWidget(files_group, 1)
 
         # 下段容器：选项 + 按钮 + 执行状态
         bottom_widget = QWidget()
@@ -330,17 +332,14 @@ class MediaImportView(RefreshOnShowView):
         self.log_text = self.status_panel.log_text
         bottom_layout.addWidget(status_group)
 
-        right_splitter.addWidget(bottom_widget)
-        right_splitter.setStretchFactor(0, 1)
-        right_splitter.setStretchFactor(1, 4)
-        right_splitter.setStretchFactor(2, 2)
-        right_splitter.setMinimumHeight(500)
+        right_layout.addWidget(bottom_widget)
 
-        main_splitter.addWidget(right_splitter)
-        main_splitter.setStretchFactor(0, 1)
-        main_splitter.setStretchFactor(1, 4)
-
-        layout.addWidget(main_splitter, 1)
+        # 顶部水平布局：左选择器 + 右内容
+        content_row = QHBoxLayout()
+        content_row.setSpacing(16)
+        content_row.addWidget(left_panel)
+        content_row.addWidget(right_panel, 1)
+        layout.addLayout(content_row, 1)
 
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""

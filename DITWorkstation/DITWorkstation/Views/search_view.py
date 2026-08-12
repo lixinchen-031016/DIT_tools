@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QGroupBox, QFormLayout, QTableWidget,
     QTableWidgetItem, QHeaderView, QComboBox, QDateEdit,
-    QCheckBox, QSplitter, QDialog, QMessageBox
+    QCheckBox, QDialog, QMessageBox
 )
 from PySide6.QtCore import QDate, Qt
 
@@ -134,9 +134,8 @@ class SearchView(RefreshOnShowView):
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
-        # 上下两段可拖动分割
-        main_splitter = QSplitter(Qt.Vertical)
-        main_splitter.setChildrenCollapsible(False)
+        # 上下两段：上段搜索条件，下段结果（不使用可拖动分割条，
+        # 空间不足时由整个视图的外层滚动条滚动）
         config_widget = QWidget()
         config_layout = QVBoxLayout(config_widget)
         config_layout.setContentsMargins(0, 0, 0, 0)
@@ -246,7 +245,7 @@ class SearchView(RefreshOnShowView):
         btn_layout.addWidget(self.result_label)
         config_layout.addLayout(btn_layout)
         config_layout.addStretch()
-        main_splitter.addWidget(config_widget)
+        layout.addWidget(config_widget)
 
         # 下段：结果区
         result_widget = QWidget()
@@ -276,11 +275,8 @@ class SearchView(RefreshOnShowView):
         # 点击提示条触发重搜
         self.stale_banner.mousePressEvent = lambda _e: self._search()
         result_layout.addWidget(self.stale_banner)
-        main_splitter.addWidget(result_widget)
-        main_splitter.setStretchFactor(0, 2)
-        main_splitter.setStretchFactor(1, 3)
-        main_splitter.setMinimumHeight(400)
-        layout.addWidget(main_splitter, 1)
+        result_widget.setMinimumHeight(280)
+        layout.addWidget(result_widget, 1)
 
         # 监听全局数据总线，数据变更时显示过期提示
         try:

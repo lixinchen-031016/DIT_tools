@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QProgressBar, QComboBox,
     QGroupBox, QTextEdit,
-    QMessageBox, QCheckBox, QScrollArea, QFrame, QSplitter,
+    QMessageBox, QCheckBox, QScrollArea, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView,
 )
 from PySide6.QtCore import Signal, Slot, Qt
@@ -65,11 +65,8 @@ class BackupView(RefreshOnShowView):
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
-        # 上下两段可拖动分割：上段配置区，下段执行状态区
-        main_splitter = QSplitter(Qt.Vertical)
-        main_splitter.setChildrenCollapsible(False)
-
-        # 上段容器：配置区
+        # 上下两段：上段配置区，下段执行状态区（不使用可拖动分割条，
+        # 空间不足时由整个视图的外层滚动条滚动）
         config_widget = QWidget()
         config_layout = QVBoxLayout(config_widget)
         config_layout.setContentsMargins(0, 0, 0, 0)
@@ -198,7 +195,7 @@ class BackupView(RefreshOnShowView):
         config_layout.addLayout(btn_layout)
 
         config_layout.addStretch()
-        main_splitter.addWidget(config_widget)
+        layout.addWidget(config_widget)
 
         # 下段容器：执行状态区
         result_widget = QWidget()
@@ -263,11 +260,8 @@ class BackupView(RefreshOnShowView):
         history_layout.addLayout(history_detail)
         result_layout.addWidget(history_group)
 
-        main_splitter.addWidget(result_widget)
-        main_splitter.setStretchFactor(0, 3)
-        main_splitter.setStretchFactor(1, 2)
-        main_splitter.setMinimumHeight(400)
-        layout.addWidget(main_splitter, 1)
+        result_widget.setMinimumHeight(300)
+        layout.addWidget(result_widget, 1)
 
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""

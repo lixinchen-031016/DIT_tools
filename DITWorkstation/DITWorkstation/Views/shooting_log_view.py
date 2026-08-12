@@ -5,9 +5,8 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QGroupBox, QFormLayout, QTableWidget,
     QTableWidgetItem, QHeaderView, QMessageBox,
-    QTextEdit, QSplitter,
+    QTextEdit,
     QDialog, QDialogButtonBox, QAbstractItemView, QTabWidget,
-    QScrollArea, QFrame
 )
 from PySide6.QtCore import Qt, Slot, QTimer
 
@@ -41,8 +40,8 @@ class ShootingLogView(RefreshOnShowView):
 
         self._setup_selector(layout)
 
-        right_splitter = self._setup_right_splitter()
-        layout.addWidget(right_splitter, 3)
+        right_panel = self._setup_right_panel()
+        layout.addWidget(right_panel, 3)
 
     def _setup_selector(self, layout):
         # 左侧：工作区 + 项目两级选择控件（封装下拉/列表/新建对话框/全局信号同步）
@@ -58,32 +57,34 @@ class ShootingLogView(RefreshOnShowView):
         # （工作区/项目下拉与全局信号同步已由 WorkspaceProjectSelector 内部处理）
         self.selector.project_changed.connect(self._on_project_changed)
 
-    def _setup_right_splitter(self):
-        # 右侧：上下 Splitter（上：日志管理，下：关联素材）
-        right_splitter = QSplitter(Qt.Vertical)
+    def _setup_right_panel(self):
+        # 右侧：上下排列（上：日志管理，下：关联素材），不使用可拖动分割条，
+        # 空间不足时由整个视图的外层滚动条滚动
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(12)
 
         # 上半部分：日志管理
         top_widget = QWidget()
-        right_panel = QVBoxLayout(top_widget)
-        right_panel.setContentsMargins(0, 0, 0, 0)
+        top_layout = QVBoxLayout(top_widget)
+        top_layout.setContentsMargins(0, 0, 0, 0)
 
-        self._setup_header(right_panel)
-        right_panel.addWidget(self._setup_form_group())
-        right_panel.addWidget(self._setup_log_group(), 1)
+        self._setup_header(top_layout)
+        top_layout.addWidget(self._setup_form_group())
+        top_layout.addWidget(self._setup_log_group(), 1)
 
-        right_splitter.addWidget(top_widget)
+        right_layout.addWidget(top_widget, 2)
 
         # 下半部分：标签页（关联素材 / 项目素材）
         bottom_widget = QWidget()
         bottom_layout = QVBoxLayout(bottom_widget)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.addWidget(self._setup_bottom_tabs())
-        right_splitter.addWidget(bottom_widget)
+        bottom_widget.setMinimumHeight(240)
+        right_layout.addWidget(bottom_widget, 3)
 
-        right_splitter.setStretchFactor(0, 2)
-        right_splitter.setStretchFactor(1, 3)
-
-        return right_splitter
+        return right_panel
 
     def _setup_header(self, layout):
         title = QLabel("拍摄日志")
@@ -108,13 +109,8 @@ class ShootingLogView(RefreshOnShowView):
 
         self._build_form_buttons(form_layout)
 
-        # 表单区套 QScrollArea，矮窗口下表单可滚动而不被挤压
-        form_scroll = QScrollArea()
-        form_scroll.setWidgetResizable(True)
-        form_scroll.setFrameShape(QFrame.NoFrame)
-        form_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-        form_scroll.setWidget(form_group)
-        return form_scroll
+        # 直接返回表单控件，不套滚动区，完整显示所有字段
+        return form_group
 
     def _build_form_basic_fields(self, form_layout):
         info_row1 = QHBoxLayout()
@@ -229,6 +225,9 @@ class ShootingLogView(RefreshOnShowView):
         del_log_btn.setToolTip("删除选中的拍摄日志")
         del_log_btn.clicked.connect(self._delete_log)
         log_layout.addWidget(del_log_btn)
+
+        # 拍摄日志列表伸长为原长度的 2 倍（基于最小内容高度计算，随字体缩放自适应）
+        log_group.setMinimumHeight(2 * log_group.minimumSizeHint().height())
 
         return log_group
 

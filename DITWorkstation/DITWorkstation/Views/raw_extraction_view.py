@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QProgressBar, QGroupBox,
     QFormLayout, QCheckBox, QTableWidget,
-    QTableWidgetItem, QHeaderView, QMessageBox, QSplitter
+    QTableWidgetItem, QHeaderView, QMessageBox
 )
 from PySide6.QtCore import Qt, Slot, Signal
 
@@ -51,8 +51,6 @@ class RawExtractionView(RefreshOnShowView):
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
-        main_splitter = QSplitter(Qt.Vertical)
-        main_splitter.setChildrenCollapsible(False)
         config_widget = QWidget()
         config_layout = QVBoxLayout(config_widget)
         config_layout.setContentsMargins(0, 0, 0, 0)
@@ -152,7 +150,7 @@ class RawExtractionView(RefreshOnShowView):
         config_layout.addLayout(btn_layout)
 
         config_layout.addStretch()
-        main_splitter.addWidget(config_widget)
+        layout.addWidget(config_widget)
 
         # 匹配结果表格
         result_group = QGroupBox("匹配结果")
@@ -181,11 +179,8 @@ class RawExtractionView(RefreshOnShowView):
         self.progress_bar = self.status_panel.progress_bar
         self.status_label = self.status_panel.status_label
 
-        main_splitter.addWidget(result_widget)
-        main_splitter.setStretchFactor(0, 2)
-        main_splitter.setStretchFactor(1, 3)
-        main_splitter.setMinimumHeight(400)
-        layout.addWidget(main_splitter, 1)
+        result_widget.setMinimumHeight(260)
+        layout.addWidget(result_widget, 1)
 
     def _select_folder(self, edit: QLineEdit, title: str, category: str = "default"):
         path = pick_directory(self, title, category=category)

@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QGroupBox, QFormLayout,
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
-    QSpinBox, QComboBox, QProgressBar, QSplitter
+    QSpinBox, QComboBox, QProgressBar
 )
 from PySide6.QtCore import Slot, Signal, Qt
 from pathlib import Path
@@ -49,10 +49,8 @@ class RenameView(QWidget):
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
-        # 上下两段可拖动分割：上段配置区，下段结果区
-        main_splitter = QSplitter(Qt.Vertical)
-        main_splitter.setChildrenCollapsible(False)
-
+        # 上下两段：上段配置区，下段结果区（不使用可拖动分割条，
+        # 空间不足时由整个视图的外层滚动条滚动）
         config_widget = QWidget()
         config_layout = QVBoxLayout(config_widget)
         config_layout.setContentsMargins(0, 0, 0, 0)
@@ -143,7 +141,7 @@ class RenameView(QWidget):
         btn_layout.addStretch()
         config_layout.addLayout(btn_layout)
         config_layout.addStretch()
-        main_splitter.addWidget(config_widget)
+        layout.addWidget(config_widget)
 
         # 下段：结果区
         result_widget = QWidget()
@@ -170,11 +168,8 @@ class RenameView(QWidget):
         self.progress_bar.setVisible(False)
         self.status_label.setVisible(False)
 
-        main_splitter.addWidget(result_widget)
-        main_splitter.setStretchFactor(0, 2)
-        main_splitter.setStretchFactor(1, 3)
-        main_splitter.setMinimumHeight(400)
-        layout.addWidget(main_splitter, 1)
+        result_widget.setMinimumHeight(260)
+        layout.addWidget(result_widget, 1)
 
     @safe_slot("选择文件夹失败")
     def _select_folder(self):

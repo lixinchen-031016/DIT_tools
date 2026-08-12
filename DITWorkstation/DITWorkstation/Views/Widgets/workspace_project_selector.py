@@ -9,7 +9,7 @@
 from typing import Optional
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QComboBox, QInputDialog, QMessageBox
 )
 from PySide6.QtCore import Signal, Slot
@@ -55,6 +55,7 @@ class WorkspaceProjectSelector(QWidget):
                  show_delete_project: bool = False,
                  none_label: str = "（未选择项目）",
                  broadcast_none: bool = True,
+                 buttons_below: bool = False,
                  db_service=None):
         """
         Args:
@@ -65,6 +66,8 @@ class WorkspaceProjectSelector(QWidget):
             none_label: None 项的显示文本（如"不关联项目""全部项目"）
             broadcast_none: 选中 None 项时是否广播 set_current_project(None)。
                 False 适用于"不关联/全部"语义（备份/RAW提取/检索），避免清空全局项目。
+            buttons_below: 仅 combo 模式有效。True 时把「新建工作区/新建项目」按钮
+                放在对应下拉框下方（两行布局），防止窄宽度下按钮与下拉框重叠。
             db_service: 数据库服务（为 None 时用全局单例）
         """
         super().__init__(parent)
@@ -75,6 +78,7 @@ class WorkspaceProjectSelector(QWidget):
         self._show_delete_project = show_delete_project
         self._none_label = none_label
         self._broadcast_none = broadcast_none
+        self._buttons_below = buttons_below
         # 内部标志：避免全局信号回环触发再次广播
         self._suppress_broadcast = False
 
@@ -83,9 +87,64 @@ class WorkspaceProjectSelector(QWidget):
 
     def _setup_ui(self):
         if self._project_widget_type == "combo":
-            self._setup_horizontal_layout()
+            if self._buttons_below:
+                self._setup_buttons_below_layout()
+            else:
+                self._setup_horizontal_layout()
         else:
             self._setup_vertical_layout()
+
+    def _setup_buttons_below_layout(self):
+        """两行布局：工作区/项目下拉在第一行，新建按钮在第二行对应下拉下方，
+        防止窄宽度下按钮与下拉框重叠。"""
+        layout = QGridLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(4)
+
+        # 第一行：工作区 + 项目 下拉框
+        layout.addWidget(QLabel("工作区:"), 0, 0)
+        self.workspace_combo = QComboBox()
+        self.workspace_combo.setMinimumWidth(180)
+        self.workspace_combo.addItem("（全部工作区）", None)
+        self.workspace_combo.currentIndexChanged.connect(self._on_workspace_changed)
+        layout.addWidget(self.workspace_combo, 0, 1)
+        layout.setColumnStretch(1, 1)
+
+        layout.addWidget(QLabel("项目:"), 0, 2)
+        self.project_combo = QComboBox()
+        self.project_combo.setMinimumWidth(260)
+        self.project_combo.addItem(self._none_label, None)
+        self.project_combo.currentIndexChanged.connect(self._on_project_combo_changed)
+        layout.addWidget(self.project_combo, 0, 3)
+        layout.setColumnStretch(3, 1)
+
+        # 第二行：新建按钮放在对应下拉框下面
+        ws_btn_row = QHBoxLayout()
+        new_ws_btn = QPushButton("+ 新建工作区")
+        new_ws_btn.clicked.connect(self._create_workspace)
+        ws_btn_row.addWidget(new_ws_btn)
+        if self._show_edit_workspace:
+            self._edit_ws_btn = QPushButton("编辑")
+            self._edit_ws_btn.clicked.connect(self._edit_workspace)
+            self._edit_ws_btn.setEnabled(False)
+            ws_btn_row.addWidget(self._edit_ws_btn)
+        ws_btn_row.addStretch()
+        layout.addLayout(ws_btn_row, 1, 1)
+
+        proj_btn_row = QHBoxLayout()
+        if self._show_new_project:
+            self.new_proj_btn = QPushButton("+ 新建项目")
+            self.new_proj_btn.clicked.connect(self._create_project)
+            self.new_proj_btn.setEnabled(False)
+            proj_btn_row.addWidget(self.new_proj_btn)
+        if self._show_delete_project:
+            self.del_proj_btn = QPushButton("删除")
+            self.del_proj_btn.clicked.connect(self._delete_project)
+            self.del_proj_btn.setEnabled(False)
+            proj_btn_row.addWidget(self.del_proj_btn)
+        proj_btn_row.addStretch()
+        layout.addLayout(proj_btn_row, 1, 3)
 
     def _setup_vertical_layout(self):
         """垂直布局：工作区下拉 + 按钮 + 项目下拉 + 新建/删除项目按钮"""
