@@ -52,6 +52,11 @@ class AppConfig:
     db_dir: Path = field(default_factory=_resolve_data_dir)
     db_name: str = "dit_workstation.db"
 
+    # 设置文件目录：固定位置（默认用户数据目录），与数据库目录解耦。
+    # 否则更换数据库目录后，settings.json 写入新目录，下次启动时应用在
+    # 默认目录里读不到新配置，导致「修改数据库存放点」不生效。
+    settings_dir: Path = field(default_factory=_resolve_data_dir)
+
     @property
     def effective_db_dir(self) -> Path:
         """
@@ -61,6 +66,15 @@ class AppConfig:
         ~/Library/Application Support/，则回退到 ~/.ditworkstation。
         """
         return self._writable_dir_or_fallback(self.db_dir)
+
+    @property
+    def effective_settings_dir(self) -> Path:
+        """
+        返回实际可写的设置文件目录（与数据库目录解耦）。
+
+        默认使用用户数据目录，不可写时与数据库目录走同一套回退逻辑。
+        """
+        return self._writable_dir_or_fallback(self.settings_dir)
 
     @staticmethod
     def _writable_dir_or_fallback(target: Path) -> Path:

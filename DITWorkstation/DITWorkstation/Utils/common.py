@@ -157,9 +157,12 @@ _MAX_RECENT = 10
 
 
 def _get_settings_path() -> Path:
-    """返回 settings.json 路径（与 DB 同目录）"""
-    return Path(config.effective_db_dir) / "settings.json"
+    """返回 settings.json 路径（固定目录，与数据库目录解耦）。
 
+    设置必须保存在独立于数据库目录的固定位置：用户更换数据库存放点后，
+    应用在下次启动时才能从原位置读到新的 db_dir 配置并生效。
+    """
+    return Path(config.effective_settings_dir) / "settings.json"
 
 def _load_settings() -> dict:
     """加载 settings.json"""
@@ -551,13 +554,7 @@ class Logger:
         """
         log_dir = Path(log_dir)
         # 移除旧的文件句柄（保留控制台句柄）
-        for handler in list(self.logger.handlers):
-            if isinstance(handler, RotatingFileHandler):
-                try:
-                    handler.close()
-                except Exception:
-                    pass
-                self.logger.removeHandler(handler)
+        self.close_file_handler()
         try:
             log_dir.mkdir(parents=True, exist_ok=True)
             file_handler = RotatingFileHandler(
@@ -572,6 +569,21 @@ class Logger:
             self.logger.addHandler(file_handler)
         except (PermissionError, OSError) as e:
             self.logger.warning(f"无法创建日志文件（仅控制台输出）: {e}")
+
+    def close_file_handler(self):
+        """关闭文件句柄（保留控制台句柄）。
+
+        Windows 下被句柄占用的文件无法删除（WinError 32），
+        删除日志文件前需先关闭句柄。
+        """
+        for handler in list(self.logger.handlers):
+            if isinstance(handler, RotatingFileHandler):
+                try:
+                    handler.close()
+                except Exception:
+                    pass
+                self.logger.removeHandler(handler)
+
     def info(self, message: str):
         self.logger.info(message)
 
@@ -610,11 +622,14 @@ def log_files_summary() -> tuple:
 def delete_log_files() -> int:
     """删除日志目录下的日志文件（含轮转文件），返回删除的文件数。
 
+    先关闭文件句柄再删除（Windows 下被占用的文件无法删除），
     删除后重新打开文件句柄，让后续日志写入全新文件。
     """
     log_dir = Path(config.log_dir)
     if not log_dir.is_dir():
         return 0
+    # 先关闭旧句柄，避免 Windows 上删除被进程占用的日志文件失败
+    logger.close_file_handler()
     removed = 0
     for p in log_dir.glob("dit_workstation.log*"):
         try:
@@ -624,8 +639,8 @@ def delete_log_files() -> int:
             logger.warning(f"删除日志文件失败 {p}: {e}")
     if removed:
         logger.info(f"已删除 {removed} 个日志文件")
-        # 重新打开文件句柄，创建全新的日志文件
-        logger.set_log_dir(log_dir)
+    # 重新打开文件句柄，创建全新的日志文件
+    logger.set_log_dir(log_dir)
     return removed
 
 

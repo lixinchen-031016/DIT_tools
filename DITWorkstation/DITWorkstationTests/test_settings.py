@@ -73,6 +73,30 @@ def test_path_settings_roundtrip_as_path_objects(tmp_path, monkeypatch):
     assert isinstance(_config.thumbnail_cache_dir, Path)
 
 
+def test_db_dir_change_survives_restart(tmp_path, monkeypatch):
+    """更换数据库目录后，重启（重新读取配置）应仍使用新目录。"""
+    from DITWorkstation.App import config as _config
+    for field in ("db_dir", "settings_dir"):
+        monkeypatch.setattr(_config, field, getattr(_config, field))
+
+    default_dir = tmp_path / "default"
+    new_db_dir = tmp_path / "new_db"
+    _config.db_dir = default_dir
+    _config.settings_dir = tmp_path / "settings"
+
+    # 模拟设置对话框：保存新的数据库目录
+    common.save_app_settings(db_dir=str(new_db_dir))
+
+    # 模拟重启：config 回到默认数据库目录，再从 settings.json 恢复
+    _config.db_dir = default_dir
+    common.apply_saved_config()
+
+    assert _config.db_dir == new_db_dir
+    # 设置文件必须位于与数据库目录无关的固定位置
+    assert common._get_settings_path().parent == _config.effective_settings_dir
+    assert not (new_db_dir / "settings.json").exists()
+
+
 def test_log_files_summary_and_delete(tmp_path, monkeypatch):
     """日志文件统计与删除功能（重设到临时日志目录）"""
     from DITWorkstation.App import config
