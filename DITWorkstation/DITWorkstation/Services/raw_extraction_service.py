@@ -6,7 +6,7 @@ from typing import List, Optional, Callable, Tuple, Dict
 from DITWorkstation.App import config
 from DITWorkstation.Models import ChecksumAlgorithm
 from DITWorkstation.Services.checksum_service import ChecksumService
-from DITWorkstation.Utils import logger, get_checksum_service
+from DITWorkstation.Utils import logger, get_checksum_service, normalize_name_key
 
 
 class RawExtractionService:
@@ -58,9 +58,9 @@ class RawExtractionService:
         raw_index = {}
         for ext in config.raw_extensions:
             for f in folder.rglob(f"*{ext}"):
-                raw_index[f.stem.lower()] = f
+                raw_index[normalize_name_key(f.stem)] = f
             for f in folder.rglob(f"*{ext.upper()}"):
-                raw_index[f.stem.lower()] = f
+                raw_index[normalize_name_key(f.stem)] = f
 
         logger.info(f"扫描RAW文件夹完成: {raw_folder}, 建立索引 {len(raw_index)} 个文件")
         return raw_index
@@ -82,7 +82,7 @@ class RawExtractionService:
         """
         matches = []
         for jpg in jpg_files:
-            stem = jpg.stem.lower()
+            stem = normalize_name_key(jpg.stem)
             raw_path = raw_index.get(stem)
             matches.append((jpg, raw_path))
 

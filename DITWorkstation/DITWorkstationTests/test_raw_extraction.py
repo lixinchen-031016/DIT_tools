@@ -78,6 +78,35 @@ class TestRawExtractionService(unittest.TestCase):
         matched_count = sum(1 for _, raw in matches if raw is not None)
         self.assertEqual(matched_count, 5)
 
+    def test_match_raw_files_unicode_normalization(self):
+        """跨系统 Unicode（NFD/NFC）文件名差异不应导致匹配失败。
+
+        macOS 文件系统以 NFD 存储文件名、Windows/Linux 以 NFC 存储；
+        同一素材在两系统间的文件名表示不同，匹配必须归一化后比较。
+        """
+        import unicodedata
+        from pathlib import Path as _Path
+        jpg_dir = _Path(self.temp_dir) / "jpg_unicode"
+        raw_dir = _Path(self.temp_dir) / "raw_unicode"
+        jpg_dir.mkdir()
+        raw_dir.mkdir()
+        # 用 NFC 形式写入；APFS 读取时返回 NFD，等价于跨系统迁移后的场景
+        jpg = jpg_dir / ("café.JPG")
+        jpg.write_bytes(b"x")
+        raw = raw_dir / ("café.CR2")
+        raw.write_bytes(b"x")
+
+        jpgs = self.service.scan_jpg_folder(str(jpg_dir))
+        raw_index = self.service.scan_raw_folder(str(raw_dir))
+        matches = self.service.match_raw_files(jpgs, raw_index)
+
+        self.assertEqual(len(matches), 1)
+        self.assertIsNotNone(matches[0][1])
+        # 无论文件系统返回 NFD 还是 NFC，均应命中同一 RAW 文件
+        self.assertEqual(
+            unicodedata.normalize("NFC", matches[0][1].name),
+            unicodedata.normalize("NFC", raw.name),
+        )
     def test_extract_raw_files(self):
         """TR-5.1: 选择JPG文件夹后正确提取对应RAW"""
         result = self.service.extract_raw_files(

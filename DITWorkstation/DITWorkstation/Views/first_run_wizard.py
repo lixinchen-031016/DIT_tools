@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import sys
 from typing import Optional
 
 from PySide6.QtWidgets import (
@@ -57,11 +58,21 @@ _WELCOME_TEXT = (
     "你随时可以跳过本向导，后续可在「项目概览」看板查看下一步建议。"
 )
 
-_WORKSPACE_HINT = (
-    "工作区是项目的父级容器，对应一个物理目录。\n"
-    "示例：工作区「2026 春季广告片」对应目录 /Volumes/Work/2026SpringAd。\n"
-    "该工作区下的所有项目素材可默认复制到此目录下。"
-)
+def _workspace_hint() -> str:
+    """按平台生成工作区示例路径（Windows 盘符 / macOS 挂载点）。"""
+    example = (
+        r"D:\Work\2026SpringAd"
+        if sys.platform == "win32"
+        else "/Volumes/Work/2026SpringAd"
+    )
+    return (
+        "工作区是项目的父级容器，对应一个物理目录。\n"
+        f"示例：工作区「2026 春季广告片」对应目录 {example}。\n"
+        "该工作区下的所有项目素材可默认复制到此目录下。"
+    )
+
+
+_WORKSPACE_HINT = _workspace_hint()
 
 _PROJECT_HINT = (
     "为本次拍摄任务创建一个项目，例如「镜头组A」。\n"

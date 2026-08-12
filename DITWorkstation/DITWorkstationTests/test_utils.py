@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unicodedata
 import shutil
 from pathlib import Path
 
@@ -11,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from DITWorkstation.Utils.common import (
     format_size, sanitize_filename, get_file_extension,
     get_file_stem, calculate_speed, generate_timestamp, generate_log_message,
-    normalize_path, find_overwrite_conflicts,
+    normalize_path, normalize_name_key, find_overwrite_conflicts,
     add_recent_path, clear_recent_paths, count_recent_paths,
 )
 from DITWorkstation.App import config
@@ -59,6 +60,48 @@ class TestSanitizeFilename(unittest.TestCase):
 
     def test_multiple_illegal(self):
         self.assertEqual(sanitize_filename("a:b:c"), "a_b_c")
+
+    def test_windows_reserved_device_names(self):
+        """Windows 保留设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）应被规避"""
+        for name in ("CON", "con", "CON.cr2", "NUL.txt", "COM1.jpg",
+                     "COM9.CR2", "LPT1.tar", "LPT9.dng", "PRN", "AUX.mov"):
+            result = sanitize_filename(name)
+            self.assertTrue(result.startswith("_"), f"{name} -> {result}")
+
+    def test_not_reserved_similar_names(self):
+        """普通文件名不受保留名规则影响"""
+        self.assertEqual(sanitize_filename("console.cr2"), "console.cr2")
+        self.assertEqual(sanitize_filename("company.mp4"), "company.mp4")
+        self.assertEqual(sanitize_filename("com1x.cr2"), "com1x.cr2")
+
+    def test_trailing_dot_and_space_stripped(self):
+        """Windows 不允许文件名结尾为点或空格"""
+        self.assertEqual(sanitize_filename("IMG_001."), "IMG_001")
+        self.assertEqual(sanitize_filename("IMG_001. "), "IMG_001")
+        self.assertEqual(sanitize_filename("folder "), "folder")
+
+    def test_nfc_normalization(self):
+        """macOS NFD 形式的文件名应归一化为 NFC"""
+        nfc = "café.cr2"
+        nfd = unicodedata.normalize("NFD", nfc)
+        self.assertNotEqual(nfc, nfd)
+        self.assertEqual(sanitize_filename(nfd), nfc)
+
+
+class TestNormalizeNameKey(unittest.TestCase):
+    """normalize_name_key 跨系统文件名比较键"""
+
+    def test_unicode_forms_equal(self):
+        """NFD 与 NFC 两种表示应得到相同比较键"""
+        nfc = "café.cr2"
+        nfd = unicodedata.normalize("NFD", nfc)
+        self.assertEqual(normalize_name_key(nfc), normalize_name_key(nfd))
+
+    def test_case_insensitive(self):
+        """比较键不区分大小写"""
+        self.assertEqual(
+            normalize_name_key("IMG_001.CR2"), normalize_name_key("img_001.cr2")
+        )
 
 
 class TestFileExtension(unittest.TestCase):
@@ -188,6 +231,21 @@ class TestNormalizePath(unittest.TestCase):
             twice = normalize_path(once)
             self.assertEqual(once, twice)
 
+    def test_unicode_forms_produce_same_key(self):
+        """NFD/NFC 两种表示应归一化为同一 DB 路径键（跨系统兼容）"""
+        with tempfile.TemporaryDirectory() as tmp:
+            # 以 NFC 形式创建真实文件；macOS APFS 读取路径时会返回 NFD
+            fp = Path(tmp) / "café.cr2"
+            fp.write_bytes(b"x")
+            nfc_path = normalize_path(str(fp))
+            nfd_path = normalize_path(
+                str(Path(tmp) / unicodedata.normalize("NFD", "café.cr2"))
+            )
+            self.assertEqual(nfc_path, nfd_path)
+            self.assertEqual(
+                unicodedata.normalize("NFC", nfc_path), nfc_path
+            )
+
 
 class TestFindOverwriteConflicts(unittest.TestCase):
     """find_overwrite_conflicts 跨平台冲突检测"""
@@ -214,6 +272,18 @@ class TestFindOverwriteConflicts(unittest.TestCase):
                 ["/src/IMG_001.CR2"], [str(target)]
             )
             self.assertEqual(conflicts, {})
+
+    def test_unicode_forms_conflict(self):
+        """NFD/NFC 不同表示的同名文件应判定为冲突（跨系统）"""
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target"
+            target.mkdir()
+            (target / "café.cr2").write_bytes(b"x")
+            nfd_name = unicodedata.normalize("NFD", "café.CR2")
+            conflicts = find_overwrite_conflicts(
+                [f"/src/{nfd_name}"], [str(target)]
+            )
+            self.assertEqual(conflicts[str(target)], [nfd_name])
 
 
 class TestRecentPaths(unittest.TestCase):
@@ -246,6 +316,48 @@ class TestRecentPaths(unittest.TestCase):
         cleared = clear_recent_paths("all")
         self.assertGreaterEqual(cleared, 2)
         self.assertEqual(count_recent_paths(), 0)
+
+
+class TestMediainfoLibPaths(unittest.TestCase):
+    """MetadataService._get_mediainfo_lib_paths 打包态动态库查找路径"""
+
+    @staticmethod
+    def _with_meipass(path):
+        from DITWorkstation.Services.metadata_service import MetadataService
+        import sys as _sys
+        orig = getattr(_sys, "_MEIPASS", None)
+        _sys._MEIPASS = path
+        try:
+            return MetadataService._get_mediainfo_lib_paths()
+        finally:
+            if orig is None:
+                del _sys._MEIPASS
+            else:
+                _sys._MEIPASS = orig
+
+    def test_bundled_lib_path_prepended(self):
+        """打包态应优先包含 _MEIPASS 下的随包动态库"""
+        paths = self._with_meipass("/fake/bundle")
+        if sys.platform == "win32":
+            self.assertEqual(paths[0], "/fake/bundle/MediaInfo.dll")
+        elif sys.platform == "darwin":
+            self.assertEqual(paths[0], "/fake/bundle/libmediainfo.0.dylib")
+        else:
+            self.assertEqual(paths[0], "/fake/bundle/libmediainfo.so.0")
+
+    def test_dev_mode_has_no_bundle_path(self):
+        """开发态（无 _MEIPASS）不应包含打包目录"""
+        from DITWorkstation.Services.metadata_service import MetadataService
+        import sys as _sys
+        orig = getattr(_sys, "_MEIPASS", None)
+        if orig is not None:
+            del _sys._MEIPASS
+        try:
+            paths = MetadataService._get_mediainfo_lib_paths()
+        finally:
+            if orig is not None:
+                _sys._MEIPASS = orig
+        self.assertFalse(any("_MEIPASS" in p for p in paths))
 
 
 if __name__ == "__main__":

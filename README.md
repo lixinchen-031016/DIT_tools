@@ -101,7 +101,7 @@ DIT 工作站围绕 9 大功能模块构建完整的数据管理闭环：
 - 导航索引采用单一事实源 `NAV_ITEMS`，避免按钮跳转到错误视图
 
 ### 存储卡自动识别 💾
-- 轮询系统挂载点（macOS `/Volumes`、Windows 盘符、Linux `/media` 等）检测新插入的存储卡
+- 轮询系统挂载点（macOS `/Volumes`、Windows 盘符）检测新插入的存储卡
 - 识别标准：顶层含 `DCIM`/`AVCHD`/`PRIVATE` 等相机目录，或至少 3 个媒体文件
 - 检测到后自动跳转到「媒体导入」并预填源目录、开始扫描（可在「设置」中关闭）
 
@@ -223,8 +223,8 @@ DIT_tools/
 
 ### 环境要求
 
-- Python 3.13+
-- macOS / Windows / Linux
+- Python 3.11+（推荐 3.13）
+- macOS / Windows
 - macOS 视频元数据读取需额外安装 MediaInfo（`brew install mediainfo`）
 - Windows 视频元数据读取需从 https://mediaarea.net/en/MediaInfo 下载安装 MediaInfo
 
@@ -238,7 +238,7 @@ cd /path/to/DIT_tools
 python3 -m venv .venv
 
 # 3. 激活虚拟环境
-source .venv/bin/activate        # macOS/Linux
+source .venv/bin/activate        # macOS
 # .venv\Scripts\activate         # Windows
 
 # 4. 安装依赖
@@ -297,8 +297,8 @@ cd /path/to/DIT_tools
 bash build/build_macos.sh
 ```
 
-- **产物**：`dist/DITWorkstation.app`（单文件应用包，约 45MB，arm64 架构）+ `dist/DITWorkstation.dmg`
-- **要求**：macOS 主机、Python 3.11+、MediaInfo（`brew install mediainfo`）
+- **产物**：`dist/DITWorkstation.app`（单文件应用包，约 45MB，arm64 架构）+ `dist/DITWorkstation.dmg`（脚本自动生成）
+- **要求**：macOS 主机、Python 3.11+、MediaInfo（`brew install mediainfo`，可选；打包态优先使用随包分发的动态库）
 - **签名**：adhoc 签名（Hardened Runtime），分发时需 Apple Developer ID 正式签名才能通过 Gatekeeper
 - **数据目录**：`~/Library/Application Support/DITWorkstation/`
 
@@ -309,9 +309,12 @@ cd \path\to\DIT_tools
 build\build_windows.bat
 ```
 
-- **产物**：`dist/DITWorkstation\DITWorkstation.exe`
-- **要求**：Windows 主机、Python 3.11+ 加入 PATH、MediaInfo（从官网下载）
+- **产物**：`dist\DITWorkstation.exe`（单文件模式）
+- **要求**：Windows 主机、Python 3.11+（`python` 或 `py` 启动器均可）、MediaInfo（从官网下载，可选；打包态优先使用随包分发的 MediaInfo.dll）
 - **数据目录**：`%APPDATA%\DITWorkstation\`
+- **长路径**：已内嵌 `longPathAware` manifest，支持超过 260 字符的路径
+  （媒体卡深层目录 + 多级备份目录）；若个别机器仍报路径过长，请以管理员
+  执行 `reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f`
 
 > 详细打包说明参见 `build/` 目录下的脚本与 `build/DITWorkstation.spec` 配置。
 

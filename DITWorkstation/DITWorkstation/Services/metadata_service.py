@@ -194,11 +194,27 @@ class MetadataService:
         """
         按操作系统返回 MediaInfo 动态库的常见安装路径。
 
+        打包态（PyInstaller）：spec 会把动态库随包分发到 sys._MEIPASS
+        根目录，这里优先尝试。Windows 官方 MediaInfo.dll 为自包含单文件，
+        目标机无需再装 MediaInfo；macOS 的 Homebrew dylib 依赖 libzen 等
+        附属库，若目标机缺少依赖仍需系统安装完整 MediaInfo。
         macOS:   Homebrew 安装的 libmediainfo dylib
         Windows: MediaInfo 官方安装包的 MediaInfo.dll（含 32/64 位 Program Files）
         Linux:   包管理器安装的 libmediainfo.so
         """
         paths: List[str] = []
+        bundle_dir = getattr(sys, "_MEIPASS", None)
+        if bundle_dir:
+            bundle = Path(bundle_dir)
+            if sys.platform == "win32":
+                paths.append(str(bundle / "MediaInfo.dll"))
+            elif sys.platform == "darwin":
+                paths.extend([
+                    str(bundle / "libmediainfo.0.dylib"),
+                    str(bundle / "libmediainfo.dylib"),
+                ])
+            else:
+                paths.append(str(bundle / "libmediainfo.so.0"))
         if sys.platform == "darwin":
             paths.extend([
                 "/opt/homebrew/lib/libmediainfo.0.dylib",   # Apple Silicon Homebrew

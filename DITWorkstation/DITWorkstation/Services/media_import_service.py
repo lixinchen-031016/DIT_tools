@@ -1,6 +1,8 @@
 """媒体导入服务"""
 import json
+import os
 import shutil
+import stat
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -466,6 +468,10 @@ class MediaImportService:
             dest.touch()
         try:
             shutil.copy2(str(source_path), str(dest))
+            # Windows：copy2 会连同源文件的只读属性一起复制，存储卡/相机
+            # 文件常带只读位，导致工作区副本后续重命名/删除失败；清掉它
+            if os.name == "nt":
+                os.chmod(dest, stat.S_IREAD | stat.S_IWRITE)
         except Exception:
             # 拷贝失败时清理占位/半成品文件
             try:

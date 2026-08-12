@@ -13,7 +13,9 @@ from PySide6.QtCore import Qt, Slot, QTimer
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import Project, ShootingLog, MediaAsset
 from DITWorkstation.Services.metadata_service import MetadataService
-from DITWorkstation.Utils import format_size, get_db_service, safe_slot, open_in_file_manager
+from DITWorkstation.Utils import (
+    format_size, get_db_service, safe_slot, open_in_file_manager, normalize_name_key,
+)
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 from DITWorkstation.Views.Widgets.table_factory import make_table
@@ -829,8 +831,8 @@ class _AssetLinkDialog(QDialog):
 
     def _do_filter(self):
         """定时器触发后执行真正的过滤"""
-        text = self.search_edit.text().lower()
-        filtered = [a for a in self._assets if text in a.file_name.lower()]
+        text = normalize_name_key(self.search_edit.text())
+        filtered = [a for a in self._assets if text in normalize_name_key(a.file_name)]
         self._populate(filtered)
 
     def _populate(self, assets):

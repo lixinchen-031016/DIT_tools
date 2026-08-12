@@ -10,7 +10,9 @@ from PySide6.QtCore import Qt, Slot, Signal
 from DITWorkstation.Services.raw_extraction_service import RawExtractionService
 from DITWorkstation.Services.media_import_service import MediaImportService
 from DITWorkstation.Utils.workers import SimpleWorkerThread
-from DITWorkstation.Utils import get_db_service, logger, pick_directory, find_overwrite_conflicts
+from DITWorkstation.Utils import (
+    get_db_service, logger, pick_directory, find_overwrite_conflicts, normalize_name_key,
+)
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
@@ -384,7 +386,7 @@ class RawExtractionView(RefreshOnShowView):
                 # 通过公开方法查 JPG 关联的 log_id（不再穿透到 _get_conn 私有方法）
                 from pathlib import Path as _P
                 log_id = self.db_service.get_asset_log_id_by_path(jpg_path)
-                stem_to_log_id[_P(jpg_path).stem.lower()] = log_id
+                stem_to_log_id[normalize_name_key(_P(jpg_path).stem)] = log_id
             except Exception as e:
                 logger.debug(f"查 JPG log_id 失败 {jpg_path}: {e}")
 
@@ -401,7 +403,7 @@ class RawExtractionView(RefreshOnShowView):
         from pathlib import Path as _P
         file_log_pairs = []
         for fp in output_files:
-            stem = _P(fp).stem.lower()
+            stem = normalize_name_key(_P(fp).stem)
             log_id = stem_to_log_id.get(stem)
             file_log_pairs.append((fp, log_id))
 

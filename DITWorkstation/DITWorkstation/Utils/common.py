@@ -5,6 +5,7 @@ import logging
 import functools
 import threading
 import traceback
+import unicodedata
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -36,10 +37,43 @@ def generate_log_message(message: str) -> str:
     return f"[{timestamp}] {message}"
 
 
+def normalize_name_key(name: str) -> str:
+    """把文件名/路径片段归一化为可比较的键。
+
+    - Unicode 统一为 NFC（macOS HFS+/APFS 以 NFD 存储文件名，
+      Windows/Linux 使用 NFC；跨系统对比前必须先归一化，否则
+      「café.cr2」的两种表示会被误判为不同文件）
+    - 统一转为小写（Windows/APFS 默认不区分大小写，且与
+      raw_extraction / find_overwrite_conflicts 现有的大小写不敏感
+      语义保持一致）
+    """
+    return unicodedata.normalize("NFC", name).lower()
+
+
 def sanitize_filename(filename: str) -> str:
-    """清理文件名，移除非法字符"""
+    """清理文件名，移除非法字符（Windows 文件名规则，兼容各系统）。
+
+    - 替换非法字符 \\ / : * ? " < > |
+    - 统一为 NFC 归一化形式（macOS 文件系统以 NFD 存储，归档/跨系统
+      分发前归一化避免乱码与重复）
+    - 去除 Windows 不允许的结尾点与空格（"file. " / "file "）
+    - 规避 Windows 保留设备名（CON / PRN / AUX / NUL / COM1-9 / LPT1-9），
+      命中时前缀 _ 避免生成无法创建的文件
+    """
     illegal_chars = r'[\\/:*?"<>|]'
-    return re.sub(illegal_chars, '_', filename)
+    name = unicodedata.normalize("NFC", filename)
+    name = re.sub(illegal_chars, '_', name).rstrip(' .')
+    if not name:
+        return "_"
+    stem = name.split(".", 1)[0].upper()
+    reserved = {
+        "CON", "PRN", "AUX", "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }
+    if stem in reserved:
+        return f"_{name}"
+    return name
 
 
 def ensure_directory(path: str) -> bool:
@@ -76,10 +110,13 @@ def normalize_path(file_path: str) -> str:
     if not file_path:
         return file_path
     try:
-        return str(Path(file_path).resolve())
+        resolved = str(Path(file_path).resolve())
     except (OSError, ValueError):
         # resolve 失败（如文件已不存在、符号链接断裂），回退到原始字符串
-        return file_path
+        resolved = file_path
+    # 统一为 NFC：macOS APFS 返回的文件名是 NFD，Windows/Linux 是 NFC，
+    # 不归一化会导致同一文件的 DB 键跨系统不一致（查重/RAW 继承失效）
+    return unicodedata.normalize("NFC", resolved)
 
 
 def get_file_stem(file_path: str) -> str:
@@ -432,7 +469,9 @@ def open_in_file_manager(path: str) -> bool:
         elif sys.platform == "win32":
             # explorer /select,<file> 可同时打开目录并选中文件
             if target.is_file():
-                subprocess.Popen(["explorer", "/select,", str(target)])
+                # 逗号需与路径同参数（/select,C:\path），Windows 资源管理器
+                # 按参数拼接，拆开会丢失选择文件行为
+                subprocess.Popen(["explorer", f"/select,{target}"])
             else:
                 subprocess.Popen(["explorer", dir_path])
         else:
@@ -470,7 +509,9 @@ def find_overwrite_conflicts(
         target_path = _Path(target_dir)
         if not target_path.is_dir():
             continue
-        existing = {p.name.lower() for p in target_path.iterdir() if p.is_file()}
+        existing = {
+            normalize_name_key(p.name) for p in target_path.iterdir() if p.is_file()
+        }
         if not existing:
             continue
         clashes = []
@@ -479,7 +520,7 @@ def find_overwrite_conflicts(
                 name = name_getter(src)
             else:
                 name = _Path(str(src)).name
-            if name.lower() in existing:
+            if normalize_name_key(name) in existing:
                 clashes.append(name)
         if clashes:
             conflicts[target_dir] = clashes

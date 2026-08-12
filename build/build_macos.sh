@@ -12,12 +12,13 @@
 #
 # 产物：
 #   dist/DITWorkstation.app
+#   dist/DITWorkstation.dmg（可选，hdiutil 可用时自动生成）
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-echo "=== [1/5] 检查环境 ==="
+echo "=== [1/6] 检查环境 ==="
 if [[ "$(uname)" != "Darwin" ]]; then
     echo "错误：此脚本仅在 macOS 上运行"
     exit 1
@@ -25,7 +26,12 @@ fi
 
 PYTHON="${PYTHON:-python3}"
 if ! command -v "$PYTHON" >/dev/null 2>&1; then
-    echo "错误：找不到 python3，请先安装 Python 3"
+    echo "错误：找不到 $PYTHON，请先安装 Python 3 并加入 PATH"
+    exit 1
+fi
+# Python 版本预检（与 README 要求一致：3.11+）
+if ! "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
+    echo "错误：需要 Python 3.11+，当前版本：$("$PYTHON" --version 2>&1)"
     exit 1
 fi
 
@@ -34,16 +40,17 @@ if ! command -v mediainfo >/dev/null 2>&1; then
     echo "      请运行：brew install mediainfo"
 fi
 
-echo "=== [2/5] 创建/复用 venv ==="
+echo "=== [2/6] 创建/复用 venv ==="
 if [[ ! -d ".venv" ]]; then
     "$PYTHON" -m venv .venv
 fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
-echo "=== [3/5] 安装依赖 ==="
+echo "=== [3/6] 安装依赖 ==="
 python -m pip install --upgrade pip >/dev/null
 # rawpy 为可选依赖（部分平台无预编译 wheel），从主依赖列表单独过滤安装
+# 注意：requirements.txt 已固定 pyinstaller==6.21.0，无需单独安装
 TMP_REQ="${TMPDIR:-/tmp}/dit-requirements-core.txt"
 grep -v '^rawpy' requirements.txt > "$TMP_REQ"
 python -m pip install -r "$TMP_REQ" >/dev/null
@@ -51,16 +58,28 @@ rm -f "$TMP_REQ"
 if ! python -m pip install "rawpy>=0.21.0" >/dev/null; then
     echo "警告：rawpy 安装失败（可选），RAW 缩略图将降级为 EXIF 内嵌预览"
 fi
-python -m pip install pyinstaller >/dev/null
 
-echo "=== [4/5] 运行单元测试 ==="
+echo "=== [4/6] 运行单元测试 ==="
 cd DITWorkstation
 python -m pytest DITWorkstationTests/ -q
 cd "$PROJECT_ROOT"
 
-echo "=== [5/5] 执行 PyInstaller 打包 ==="
-rm -rf build/dist dist 2>/dev/null || true
+echo "=== [5/6] 执行 PyInstaller 打包 ==="
+# 清理旧的 PyInstaller 工作目录与产物（工作目录是 build/DITWorkstation，不是 build/dist）
+rm -rf build/DITWorkstation dist 2>/dev/null || true
 pyinstaller build/DITWorkstation.spec --noconfirm --clean
+
+echo "=== [6/6] 生成 DMG（可选） ==="
+if command -v hdiutil >/dev/null 2>&1 && [[ -d "dist/DITWorkstation.app" ]]; then
+    if hdiutil create -volname "DIT工作站" -srcfolder "dist/DITWorkstation.app" \
+        -ov -format UDZO "dist/DITWorkstation.dmg" >/dev/null; then
+        echo "DMG 产物: $(pwd)/dist/DITWorkstation.dmg"
+    else
+        echo "警告：DMG 生成失败，不影响 .app 产物"
+    fi
+else
+    echo "跳过 DMG 生成（hdiutil 不可用或 .app 缺失）"
+fi
 
 echo ""
 echo "=== 打包完成 ==="
