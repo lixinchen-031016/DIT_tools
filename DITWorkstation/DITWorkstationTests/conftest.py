@@ -14,9 +14,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# session_context 模块在导入时实例化 EventBus(QObject)，需要 QCoreApplication 先存在
-from PySide6.QtCore import QCoreApplication
-_app = QCoreApplication.instance() or QCoreApplication(sys.argv)
+# session_context 模块在导入时实例化 EventBus(QObject)，需要 QApplication 先存在。
+# 使用 offscreen 平台避免无头/沙箱环境下连接窗口服务器或剪贴板导致崩溃。
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtWidgets import QApplication
+_app = QApplication.instance() or QApplication(sys.argv)
 
 from DITWorkstation.Services.database_service import DatabaseService
 from DITWorkstation.Models import Project, ShootingLog, MediaAsset, Workspace

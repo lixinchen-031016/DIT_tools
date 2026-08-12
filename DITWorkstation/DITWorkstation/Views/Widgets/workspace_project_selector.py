@@ -216,13 +216,18 @@ class WorkspaceProjectSelector(QWidget):
             self.workspace_combo.addItem(label, ws.workspace_id)
             if prev_id and ws.workspace_id == prev_id:
                 target_index = i
+        # 未设置全局工作区且只有一个工作区时自动选中，
+        # 避免停在「全部工作区」导致「新建项目」按钮不可用（用户无法创建项目）。
+        if prev_id is None and len(workspaces) == 1:
+            target_index = 1
         self.workspace_combo.setCurrentIndex(target_index)
         self.workspace_combo.blockSignals(False)
-        # 同步编辑按钮与新建项目按钮启用状态
+        # 同步编辑按钮与新建项目按钮启用状态：
+        # 编辑需选中具体工作区；新建项目只要有工作区即可（未选中时会自动解析/弹选择）。
         if self._show_edit_workspace:
             self._edit_ws_btn.setEnabled(target_index > 0)
         if self._show_new_project:
-            self.new_proj_btn.setEnabled(target_index > 0)
+            self.new_proj_btn.setEnabled(len(workspaces) > 0)
 
     def _load_projects(self):
         """加载项目下拉，按当前选中工作区过滤"""
@@ -267,7 +272,7 @@ class WorkspaceProjectSelector(QWidget):
         if self._show_edit_workspace:
             self._edit_ws_btn.setEnabled(ws_id is not None)
         if self._show_new_project:
-            self.new_proj_btn.setEnabled(ws_id is not None)
+            self.new_proj_btn.setEnabled(self.workspace_combo.count() > 1)
         # 通知宿主视图
         self.workspace_changed.emit(ws_id)
 
@@ -329,7 +334,7 @@ class WorkspaceProjectSelector(QWidget):
         if self._show_edit_workspace:
             self._edit_ws_btn.setEnabled(workspace_id is not None)
         if self._show_new_project:
-            self.new_proj_btn.setEnabled(workspace_id is not None)
+            self.new_proj_btn.setEnabled(self.workspace_combo.count() > 1)
 
     @Slot(object)
     def _on_global_project_changed(self, project_id):
@@ -367,6 +372,9 @@ class WorkspaceProjectSelector(QWidget):
         # 新建后自动设为当前工作区，广播变更
         set_current_workspace(ws.workspace_id)
         get_data_bus().emit_data_changed("workspaces_changed")
+        # 直接重载下拉，避免视图不可见时依赖全局信号回环才刷新
+        self._load_workspaces()
+        self._load_projects()
 
     @safe_slot("编辑工作区失败")
     def _edit_workspace(self):
@@ -390,11 +398,20 @@ class WorkspaceProjectSelector(QWidget):
 
     @safe_slot("新建项目失败")
     def _create_project(self):
-        """打开新建项目对话框（需选中具体工作区）"""
-        ws_id = self.workspace_combo.currentData()
-        if not ws_id:
-            QMessageBox.warning(self, "提示", "请先选择一个工作区")
+        """打开新建项目对话框（自动确定目标工作区）"""
+        ws_id = self._resolve_project_workspace()
+        if ws_id is None:
             return
+        # 下拉停在「全部工作区」时切到目标工作区，保证新建后列表过滤一致
+        if self.workspace_combo.currentData() != ws_id:
+            self._suppress_broadcast = True
+            self.workspace_combo.blockSignals(True)
+            for i in range(self.workspace_combo.count()):
+                if self.workspace_combo.itemData(i) == ws_id:
+                    self.workspace_combo.setCurrentIndex(i)
+                    break
+            self.workspace_combo.blockSignals(False)
+            self._suppress_broadcast = False
         name, ok = QInputDialog.getText(self, "新建项目", "项目名称:")
         if not (ok and name):
             return
@@ -403,6 +420,39 @@ class WorkspaceProjectSelector(QWidget):
         self._load_projects()
         set_current_project(project.project_id)
         get_data_bus().emit_data_changed("projects_changed")
+
+    def _resolve_project_workspace(self) -> Optional[str]:
+        """确定新建项目应归属的工作区 ID；无法确定时返回 None。
+
+        优先当前下拉选中项；停在「全部工作区」时：
+        - 唯一工作区：直接采用；
+        - 多个工作区：弹出选择对话框；
+        - 没有工作区：提示先新建工作区。
+        """
+        ws_id = self.workspace_combo.currentData()
+        if ws_id:
+            return ws_id
+        try:
+            workspaces = self._db_service.get_workspaces()
+        except Exception:
+            workspaces = []
+        if len(workspaces) == 1:
+            return workspaces[0].workspace_id
+        if len(workspaces) > 1:
+            labels = [
+                f"{w.name}  [{w.path}]" if w.path else w.name
+                for w in workspaces
+            ]
+            choice, ok = QInputDialog.getItem(
+                self, "选择工作区", "请选择新建项目所属的工作区：", labels, 0, False
+            )
+            if not ok:
+                return None
+            return workspaces[labels.index(choice)].workspace_id
+        QMessageBox.information(
+            self, "提示", "请先新建工作区，再新建项目（工作区是项目的容器）。"
+        )
+        return None
 
     @safe_slot("删除项目失败")
     def _delete_project(self):
