@@ -5,7 +5,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from DITWorkstation.App import config
 from DITWorkstation.Models import Project, ShootingLog, MediaAsset, Workspace
@@ -801,6 +801,43 @@ class DatabaseService:
                 (project_id, checksum_value)
             ).fetchone()
             return row[0] > 0
+
+    def find_duplicate_assets(self) -> List[Dict]:
+        """跨项目按校验和聚合，找出重复入库的素材。
+
+        同一文件被导入多个项目、或同卡多次导入时会留下相同 checksum_value
+        的多条记录。此方法按 (checksum_value, checksum_algorithm) 分组，
+        仅返回出现次数 > 1 的组，供用户人工判定是否清理。
+
+        Returns:
+            [{"checksum_value", "algorithm", "count", "assets": [MediaAsset]}]
+            按出现次数降序排列。
+        """
+        with self._connection() as conn:
+            rows = conn.execute(
+                """SELECT checksum_value, checksum_algorithm, COUNT(*) AS c
+                   FROM media_assets
+                   WHERE checksum_value != ''
+                   GROUP BY checksum_value, checksum_algorithm
+                   HAVING COUNT(*) > 1
+                   ORDER BY COUNT(*) DESC"""
+            ).fetchall()
+
+            results = []
+            for r in rows:
+                asset_rows = conn.execute(
+                    """SELECT * FROM media_assets
+                       WHERE checksum_value = ? AND checksum_algorithm = ?
+                       ORDER BY project_id, date_imported""",
+                    (r["checksum_value"], r["checksum_algorithm"])
+                ).fetchall()
+                results.append({
+                    "checksum_value": r["checksum_value"],
+                    "algorithm": r["checksum_algorithm"],
+                    "count": r["c"],
+                    "assets": [self._row_to_asset(a) for a in asset_rows],
+                })
+            return results
 
     def update_asset_path(self, asset_id: str, new_path: str, new_name: str = None) -> bool:
         """更新素材路径"""

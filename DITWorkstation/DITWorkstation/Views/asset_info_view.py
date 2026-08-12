@@ -15,7 +15,10 @@ from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import RATING_LABELS
 from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Services.thumbnail_service import ThumbnailService, SIZE_LARGE
-from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger, open_in_file_manager
+from DITWorkstation.Utils import (
+    format_size, get_db_service, safe_slot, logger,
+    open_in_file_manager, pick_save_file,
+)
 from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 from DITWorkstation.Views.Widgets.error_dialog import show_error
@@ -218,6 +221,23 @@ class AssetInfoView(RefreshOnShowView):
         self.batch_exif_btn.clicked.connect(self._batch_refresh_exif)
         self.batch_exif_btn.setEnabled(False)
         header.addWidget(self.batch_exif_btn)
+
+        # 导出素材清单 CSV
+        self.export_csv_btn = QPushButton("📤 导出素材清单 CSV")
+        self.export_csv_btn.setToolTip("把当前项目的全部素材元数据导出为 CSV（Excel 可直接打开）")
+        self.export_csv_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR.BG_CARD};
+                color: {COLOR.TEXT_PRIMARY};
+                border: 1px solid {COLOR.BORDER};
+                border-radius: {RADIUS.BUTTON}px;
+                padding: 8px 16px;
+                font-size: {FONT_SIZE.BASE}px;
+            }}
+            QPushButton:hover {{ background-color: {COLOR.BORDER_LIGHT}; }}
+        """)
+        self.export_csv_btn.clicked.connect(self._export_csv)
+        header.addWidget(self.export_csv_btn)
 
         layout.addLayout(header)
 
@@ -479,6 +499,27 @@ class AssetInfoView(RefreshOnShowView):
     def _on_project_changed(self, _project_id):
         """项目切换（由共享控件广播）→ 刷新素材列表"""
         self._load_assets()
+
+    @safe_slot("导出素材清单失败")
+    def _export_csv(self):
+        """把当前项目的全部素材元数据导出为 CSV。"""
+        if not self._assets:
+            QMessageBox.information(self, "提示", "当前项目没有可导出的素材")
+            return
+        from datetime import datetime
+        from DITWorkstation.Services.report_service import ReportService
+
+        default_name = f"素材清单_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        path = pick_save_file(
+            self, "导出素材清单 CSV", default_name, "CSV 文件 (*.csv);;所有文件 (*)"
+        )
+        if not path:
+            return
+        ReportService().export_assets_csv(self._assets, path)
+        QMessageBox.information(
+            self, "导出完成",
+            f"已导出 {len(self._assets)} 条素材记录：\n{path}"
+        )
 
     def _load_assets(self):
         project_id = self.selector.get_current_project_id()

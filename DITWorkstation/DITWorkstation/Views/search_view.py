@@ -3,17 +3,102 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QGroupBox, QFormLayout, QTableWidget,
     QTableWidgetItem, QHeaderView, QComboBox, QDateEdit,
-    QCheckBox, QSplitter
+    QCheckBox, QSplitter, QDialog, QMessageBox
 )
 from PySide6.QtCore import QDate, Qt
 
-from DITWorkstation.Utils import format_size, get_db_service, safe_slot, logger, open_in_file_manager
+from DITWorkstation.Utils import (
+    format_size, get_db_service, safe_slot, logger,
+    open_in_file_manager, pick_save_file,
+)
 from DITWorkstation.Models import RATING_LABELS, AssetRating
 from DITWorkstation.App.session_context import get_data_bus, get_current_workspace_id
 from DITWorkstation.Views.Widgets import RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 from DITWorkstation.Views.Widgets.table_factory import make_table
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS
+
+
+class DuplicateResultsDialog(QDialog):
+    """跨项目重复素材结果对话框"""
+
+    def __init__(self, duplicates, db_service, parent=None):
+        super().__init__(parent)
+        self.db_service = db_service
+        self.duplicates = duplicates
+        self.setWindowTitle("🔁 跨项目重复素材")
+        self.resize(960, 520)
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        total_groups = len(self.duplicates)
+        total_assets = sum(d["count"] for d in self.duplicates)
+        summary = QLabel(
+            f"共发现 {total_groups} 组重复（{total_assets} 条素材）。"
+            "同一校验和出现在多个项目/多次导入，双击行可打开文件所在目录，"
+            "请人工判定是否清理重复记录。"
+        )
+        summary.setWordWrap(True)
+        summary.setStyleSheet(f"color: {COLOR.TEXT_PRIMARY};")
+        layout.addWidget(summary)
+
+        self.table = make_table(
+            ["项目", "文件名", "类型", "大小", "场景", "镜头", "评级", "校验和"],
+            sortable=True,
+        )
+        self.table.doubleClicked.connect(self._on_double_clicked)
+        layout.addWidget(self.table)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        close_btn = QPushButton("关闭")
+        close_btn.setFixedWidth(100)
+        close_btn.clicked.connect(self.accept)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+        project_cache = {}
+        for d in self.duplicates:
+            for a in d["assets"]:
+                if a.project_id not in project_cache:
+                    p = self.db_service.get_project(a.project_id)
+                    project_cache[a.project_id] = p.name if p else a.project_id
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                name_item = QTableWidgetItem(a.file_name)
+                name_item.setData(Qt.UserRole, a.asset_id)
+                self.table.setItem(row, 0, QTableWidgetItem(project_cache[a.project_id]))
+                self.table.setItem(row, 1, name_item)
+                self.table.setItem(row, 2, QTableWidgetItem(a.file_type))
+                self.table.setItem(row, 3, QTableWidgetItem(format_size(a.file_size)))
+                self.table.setItem(row, 4, QTableWidgetItem(a.scene))
+                self.table.setItem(row, 5, QTableWidgetItem(a.shot))
+                self.table.setItem(
+                    row, 6,
+                    QTableWidgetItem(
+                        RATING_LABELS.get(a.rating, RATING_LABELS[AssetRating.NONE.value])
+                    ),
+                )
+                self.table.setItem(row, 7, QTableWidgetItem(a.checksum_value))
+
+    def _on_double_clicked(self, index):
+        if not index.isValid():
+            return
+        name_item = self.table.item(index.row(), 1)
+        if name_item is None:
+            return
+        asset_id = name_item.data(Qt.UserRole)
+        asset = self.db_service.get_media_asset(asset_id) if asset_id else None
+        if asset is None:
+            return
+        if not asset.file_path or not open_in_file_manager(asset.file_path):
+            QMessageBox.warning(
+                self, "打开失败",
+                f"无法打开文件所在目录：\n{asset.file_path or '（路径为空）'}"
+            )
 
 
 class SearchView(RefreshOnShowView):
@@ -139,8 +224,16 @@ class SearchView(RefreshOnShowView):
         self.search_btn.clicked.connect(self._search)
         reset_btn = QPushButton("重置")
         reset_btn.clicked.connect(self._reset)
+        export_btn = QPushButton("📤 导出 CSV")
+        export_btn.setToolTip("把当前搜索结果导出为 CSV 素材清单（Excel 可直接打开）")
+        export_btn.clicked.connect(self._export_csv)
+        dup_btn = QPushButton("🔁 跨项目查重")
+        dup_btn.setToolTip("按校验和聚合跨项目重复入库的素材")
+        dup_btn.clicked.connect(self._find_duplicates)
         btn_layout.addWidget(self.search_btn)
         btn_layout.addWidget(reset_btn)
+        btn_layout.addWidget(export_btn)
+        btn_layout.addWidget(dup_btn)
         btn_layout.addStretch()
         self.result_label = QLabel("")
         self.result_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY};")
@@ -384,6 +477,37 @@ class SearchView(RefreshOnShowView):
             self.result_table.setItem(i, 8, QTableWidgetItem(
                 asset.date_imported.strftime("%Y-%m-%d %H:%M")
             ))
+
+    @safe_slot("导出 CSV 失败")
+    def _export_csv(self):
+        """把当前搜索结果导出为 CSV 素材清单。"""
+        if not self._results:
+            QMessageBox.information(self, "提示", "请先搜索，再将结果导出为 CSV")
+            return
+        from datetime import datetime
+        from DITWorkstation.Services.report_service import ReportService
+
+        default_name = f"素材清单_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        path = pick_save_file(
+            self, "导出素材清单 CSV", default_name, "CSV 文件 (*.csv);;所有文件 (*)"
+        )
+        if not path:
+            return
+        ReportService().export_assets_csv(self._results, path)
+        QMessageBox.information(
+            self, "导出完成",
+            f"已导出 {len(self._results)} 条素材记录：\n{path}"
+        )
+
+    @safe_slot("跨项目查重失败")
+    def _find_duplicates(self):
+        """跨项目按校验和查重，结果在独立对话框展示。"""
+        duplicates = self.db_service.find_duplicate_assets()
+        if not duplicates:
+            QMessageBox.information(self, "跨项目查重", "未发现重复入库的素材 ✅")
+            return
+        dialog = DuplicateResultsDialog(duplicates, self.db_service, parent=self)
+        dialog.exec()
 
     def _reset(self):
         self.keyword_edit.clear()

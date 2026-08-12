@@ -1,14 +1,22 @@
 """项目概览看板视图 - 聚合展示当前项目进度，提供 SOP 下一步引导"""
+import zipfile
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QGridLayout, QFrame, QGraphicsDropShadowEffect
+    QGridLayout, QFrame, QGraphicsDropShadowEffect, QMessageBox, QProgressBar
 )
-from PySide6.QtCore import Slot
+from PySide6.QtCore import Signal, Slot
 from PySide6.QtGui import QColor
 
-from DITWorkstation.Utils import get_db_service, format_size, logger
+from DITWorkstation.Utils import (
+    get_db_service, format_size, logger, safe_slot,
+    pick_save_file, pick_open_file, pick_directory, WorkerThread,
+)
 from DITWorkstation.App.navigation import get_nav_index
-from DITWorkstation.App.session_context import get_data_bus
+from DITWorkstation.App.session_context import (
+    get_data_bus, get_current_workspace_id, set_current_project,
+)
+from DITWorkstation.Services.archive_service import ArchiveService
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS
 
@@ -73,10 +81,16 @@ class ProjectDashboardView(RefreshOnShowView):
     监听全局 current_project_id，自动切换展示。
     """
 
+    # 归档/恢复进度信号：(current, total, message)
+    _archive_progress = Signal(int, int, str)
+
     def __init__(self):
         super().__init__()
         self.db_service = get_db_service()
+        self.archive_service = ArchiveService(db_service=self.db_service)
+        self.worker = None
         self._setup_ui()
+        self._archive_progress.connect(self._on_task_progress)
         # 监听选择控件的项目切换，刷新统计卡片
         self.selector.project_changed.connect(self._on_project_changed_from_selector)
         # 监听数据变更广播（素材/日志/备份变更后刷新卡片）
@@ -180,6 +194,48 @@ class ProjectDashboardView(RefreshOnShowView):
         )
         self.sop_hint.setWordWrap(True)
         layout.addWidget(self.sop_hint)
+
+        # 项目管理（归档 / 恢复）
+        manage_label = QLabel("🗜 项目管理")
+        manage_label.setStyleSheet(
+            f"font-size: {FONT_SIZE.LG}px; font-weight: 600; color: {COLOR.TEXT_PRIMARY}; margin-top: 8px;"
+        )
+        layout.addWidget(manage_label)
+
+        manage_layout = QHBoxLayout()
+        manage_layout.setSpacing(8)
+        self.btn_archive = QPushButton("🗜 归档当前项目…")
+        self.btn_archive.setToolTip(
+            "把当前项目（信息 + 日志 + 素材元数据，可选素材文件）打包为 zip"
+        )
+        self.btn_archive.clicked.connect(self._archive_project)
+
+        self.btn_restore = QPushButton("↩ 恢复项目…")
+        self.btn_restore.setToolTip("从归档 zip 恢复项目到当前工作区（可选还原素材文件）")
+        self.btn_restore.clicked.connect(self._restore_project)
+
+        for btn in (self.btn_archive, self.btn_restore):
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {COLOR.BG_CARD};
+                    color: {COLOR.TEXT_PRIMARY};
+                    border: 1px solid {COLOR.BORDER};
+                    padding: 10px 16px;
+                    border-radius: {RADIUS.BUTTON}px;
+                    font-size: {FONT_SIZE.BASE}px;
+                }}
+                QPushButton:hover {{ background-color: {COLOR.BORDER_LIGHT}; }}
+                QPushButton:disabled {{ color: {COLOR.DISABLED}; }}
+            """)
+            manage_layout.addWidget(btn)
+        manage_layout.addStretch()
+        layout.addLayout(manage_layout)
+
+        # 任务进度（归档/恢复时显示）
+        self.task_progress = QProgressBar()
+        self.task_progress.setRange(0, 1000)
+        self.task_progress.setVisible(False)
+        layout.addWidget(self.task_progress)
 
         layout.addStretch()
 
@@ -311,3 +367,150 @@ class ProjectDashboardView(RefreshOnShowView):
                 logger.warning(f"_jump_to 找不到 nav_list，view_index={view_index}")
         except Exception as e:
             logger.error(f"_jump_to 跳转失败 view_index={view_index}: {e}", exc_info=True)
+
+    # ===== 项目管理：归档 / 恢复 =====
+
+    @safe_slot("归档项目失败")
+    def _archive_project(self):
+        project_id = self.selector.get_current_project_id()
+        if not project_id:
+            QMessageBox.warning(self, "提示", "请先选择要归档的项目")
+            return
+        if self.worker and self.worker.isRunning():
+            QMessageBox.warning(self, "提示", "已有任务正在运行，请稍候")
+            return
+
+        include_files = QMessageBox.question(
+            self, "归档项目",
+            "是否把素材文件一并打包进归档？\n\n"
+            "· 是：归档包自包含（体积大，适合长期保存/交接）\n"
+            "· 否：仅归档项目信息与素材元数据（体积小）",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+        ) == QMessageBox.Yes
+
+        from datetime import datetime
+        default_name = f"项目归档_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        path = pick_save_file(
+            self, "保存项目归档", default_name, "ZIP 归档 (*.zip);;所有文件 (*)"
+        )
+        if not path:
+            return
+
+        self._set_task_running(True, f"归档项目（{'含' if include_files else '不含'}素材文件）…")
+        self.worker = WorkerThread(
+            self.archive_service.archive_project,
+            project_id,
+            path,
+            include_files=include_files,
+            progress_callback=lambda cur, tot, msg: self._archive_progress.emit(cur, tot, msg),
+        )
+        self.worker.finished.connect(self._on_archive_finished)
+        self.worker.error.connect(self._on_task_error)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.start()
+
+    @Slot(object)
+    def _on_archive_finished(self, result):
+        self._set_task_running(False)
+        self.worker = None
+        QMessageBox.information(
+            self, "归档完成", f"项目已归档到：\n{result}\n\n可随时通过「恢复项目」还原。"
+        )
+
+    @safe_slot("恢复项目失败")
+    def _restore_project(self):
+        if self.worker and self.worker.isRunning():
+            QMessageBox.warning(self, "提示", "已有任务正在运行，请稍候")
+            return
+
+        path = pick_open_file(
+            self, "选择项目归档包", "", "ZIP 归档 (*.zip);;所有文件 (*)"
+        )
+        if not path:
+            return
+
+        has_files = False
+        try:
+            with zipfile.ZipFile(path) as zf:
+                has_files = any(
+                    n.startswith("files/") and not n.endswith("/")
+                    for n in zf.namelist()
+                )
+        except zipfile.BadZipFile:
+            QMessageBox.warning(self, "提示", "所选文件不是有效的 zip 归档包")
+            return
+
+        workspace_id = get_current_workspace_id()
+        restore_files = False
+        files_dest = None
+        if has_files:
+            reply = QMessageBox.question(
+                self, "还原素材文件",
+                "归档包内包含素材文件，是否一并还原到项目工作目录？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+            )
+            if reply == QMessageBox.Yes:
+                files_dest = pick_directory(self, "选择素材文件还原目录", category="archive_restore")
+                if files_dest:
+                    restore_files = True
+
+        self._set_task_running(True, "恢复项目…")
+        self.worker = WorkerThread(
+            self.archive_service.restore_project,
+            path,
+            workspace_id=workspace_id,
+            restore_files=restore_files,
+            files_dest=files_dest,
+            verify=restore_files,
+            progress_callback=lambda cur, tot, msg: self._archive_progress.emit(cur, tot, msg),
+        )
+        self.worker.finished.connect(self._on_restore_finished)
+        self.worker.error.connect(self._on_task_error)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.start()
+
+    @Slot(object)
+    def _on_restore_finished(self, result):
+        self._set_task_running(False)
+        self.worker = None
+        project = result["project"]
+        lines = [
+            f"已恢复项目：{project.name}",
+            f"素材记录：{result['restored_assets']} 条",
+            f"拍摄日志：{result['restored_logs']} 条",
+        ]
+        if result["restored_files"]:
+            lines.append(f"还原素材文件：{result['restored_files']} 个")
+        if result["missing_files"]:
+            lines.append(f"⚠ 归档中缺失文件：{result['missing_files']} 个")
+        if result["mismatches"]:
+            lines.append(f"❌ 校验和不一致：{len(result['mismatches'])} 个")
+        QMessageBox.information(self, "恢复完成", "\n".join(lines))
+
+        # 切换到恢复的项目并刷新
+        set_current_project(project.project_id)
+        self.selector.refresh()
+        self._refresh()
+        try:
+            get_data_bus().emit_data_changed("projects_changed")
+        except Exception as e:
+            logger.warning(f"恢复后广播 projects_changed 失败: {e}")
+
+    def _set_task_running(self, running: bool, message: str = ""):
+        self.btn_archive.setEnabled(not running)
+        self.btn_restore.setEnabled(not running)
+        self.task_progress.setVisible(running)
+        self.task_progress.setValue(0)
+
+    @Slot(int, int, str)
+    def _on_task_progress(self, current: int, total: int, message: str):
+        if total > 0:
+            self.task_progress.setValue(int(current / total * 1000))
+        self.sop_hint.setText(message)
+
+    @Slot(str)
+    def _on_task_error(self, error: str):
+        self._set_task_running(False)
+        self.worker = None
+        self.sop_hint.setText("❌ 任务失败")
+        QMessageBox.critical(self, "任务失败", error)

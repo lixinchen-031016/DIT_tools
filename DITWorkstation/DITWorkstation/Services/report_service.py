@@ -310,3 +310,56 @@ class ReportService:
     def _format_size(self, size_bytes: int) -> str:
         """格式化文件大小"""
         return format_size(size_bytes)
+
+    def export_assets_csv(self, assets: List[MediaAsset], output_path: str) -> str:
+        """把素材元数据导出为 CSV 表格。
+
+        使用 utf-8-sig（带 BOM）编码，Excel 在 Windows/macOS 上均可直接
+        打开且中文不乱码；供编辑、转码交接或外部目录系统导入使用。
+
+        Args:
+            assets: 要导出的素材列表
+            output_path: 输出 .csv 路径
+
+        Returns:
+            实际写入的路径
+        """
+        import csv
+
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        headers = [
+            "文件名", "文件路径", "类型", "素材类型", "大小(字节)",
+            "场景", "镜头", "镜次", "评级",
+            "拍摄时间", "相机品牌", "相机型号", "镜头型号", "焦距",
+            "分辨率", "时长(秒)", "校验和算法", "校验和",
+            "备份位置", "原始路径", "关联日志ID", "是否工作副本", "导入时间",
+        ]
+
+        def _dt(value) -> str:
+            return value.isoformat() if value else ""
+
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            for a in assets:
+                writer.writerow([
+                    a.file_name, a.file_path, a.file_type, a.asset_type,
+                    a.file_size,
+                    a.scene, a.shot, a.take,
+                    RATING_LABELS.get(a.rating, RATING_LABELS[AssetRating.NONE.value]),
+                    _dt(a.date_taken), a.camera_make, a.camera_model, a.lens_model,
+                    a.focal_length,
+                    f"{a.width}x{a.height}" if a.width and a.height else "",
+                    f"{a.duration_seconds:.3f}".rstrip("0").rstrip(".")
+                    if a.duration_seconds else "",
+                    a.checksum_algorithm, a.checksum_value,
+                    " | ".join(a.backup_locations), a.original_path,
+                    a.log_id or "",
+                    "是" if a.is_working_copy else "否",
+                    _dt(a.date_imported),
+                ])
+
+        logger.info(f"素材 CSV 导出成功: {path}（{len(assets)} 条）")
+        return str(path)

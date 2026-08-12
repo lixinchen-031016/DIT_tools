@@ -1,11 +1,13 @@
 """数据备份页面 - 安全拷贝与多重备份"""
+import shutil
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QProgressBar, QComboBox,
     QGroupBox, QTextEdit,
     QMessageBox, QCheckBox, QScrollArea, QFrame, QSplitter
 )
-from PySide6.QtCore import Slot, Qt
+from PySide6.QtCore import Signal, Slot, Qt
 
 from pathlib import Path
 from typing import Optional
@@ -28,6 +30,9 @@ from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QS
 class BackupView(RefreshOnShowView):
     """数据备份视图"""
 
+    # 独立校验已有备份的进度信号：(current, total, message)
+    _verify_progress = Signal(int, int, str)
+
     def __init__(self):
         super().__init__()
         # 注入共享 db_service，使备份完成后能持久化 job + 回写 asset.backup_locations
@@ -42,6 +47,7 @@ class BackupView(RefreshOnShowView):
         # 备份目标路径列表（内联删除按钮式，替代 QListWidget）
         self._target_paths: list[str] = []
         self._setup_ui()
+        self._verify_progress.connect(self._on_verify_progress)
         # 项目切换由共享控件处理（broadcast_none=False 保留"不关联"语义）
 
     def _setup_ui(self):
@@ -176,9 +182,17 @@ class BackupView(RefreshOnShowView):
         self.mhl_btn.setEnabled(False)
         self.mhl_btn.clicked.connect(self._export_mhl)
 
+        self.verify_backup_btn = QPushButton("🔍 校验已有备份")
+        self.verify_backup_btn.setToolTip(
+            "对已关联项目素材的 backup_locations 做完整性校验："
+            "检查备份文件是否存在，并与入库时的校验和比对，检测位错误/丢失"
+        )
+        self.verify_backup_btn.clicked.connect(self._verify_existing_backup)
+
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.cancel_btn)
         btn_layout.addWidget(self.mhl_btn)
+        btn_layout.addWidget(self.verify_backup_btn)
         btn_layout.addStretch()
         config_layout.addLayout(btn_layout)
 
@@ -290,6 +304,19 @@ class BackupView(RefreshOnShowView):
             path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
             row_layout.addWidget(path_label, 1)
 
+            # 显示该目标的磁盘剩余空间（预检提示）
+            try:
+                usage = shutil.disk_usage(path)
+                space_text = f"剩余 {format_size(usage.free)}"
+            except Exception:
+                space_text = "剩余 —"
+            space_label = QLabel(space_text)
+            space_label.setToolTip("备份前会校验目标剩余空间是否足够")
+            space_label.setStyleSheet(
+                f"color: {COLOR.TEXT_SECONDARY}; background: transparent; font-size: {FONT_SIZE.SM}px;"
+            )
+            row_layout.addWidget(space_label)
+
             del_btn = QPushButton("✕")
             del_btn.setFixedSize(24, 24)
             del_btn.setToolTip("移除此目标")
@@ -376,6 +403,34 @@ class BackupView(RefreshOnShowView):
                   f"{self.current_job.total_files} 个文件"
                   + (f"，关联项目 {project_id}" if project_id else ""))
 
+        # 磁盘空间预检：任一目标剩余空间不足则拒绝启动
+        space_results = self.backup_service.check_target_space(
+            targets, self.current_job.total_bytes
+        )
+        for r in space_results:
+            state = "充足" if r["sufficient"] else "不足"
+            self._log(
+                f"  空间预检 {r['path']}: 需要 {format_size(r['needed'])}，"
+                f"剩余 {format_size(r['free'])}（{state}）"
+            )
+        insufficient = [r for r in space_results if not r["sufficient"]]
+        if insufficient:
+            detail_lines = []
+            for r in insufficient:
+                error_note = f"（{r['error']}）" if r.get("error") else ""
+                detail_lines.append(
+                    f"  · {r['path']}: 需要 {format_size(r['needed'])}，"
+                    f"剩余 {format_size(r['free'])} {error_note}"
+                )
+            QMessageBox.warning(
+                self, "目标磁盘空间不足",
+                f"以下 {len(insufficient)} 个备份目标剩余空间不足，已取消备份：\n\n"
+                + "\n".join(detail_lines)
+                + "\n\n请更换目标磁盘或清理空间后重试。"
+            )
+            self._log("备份已取消：目标磁盘空间不足")
+            return
+
         # 启动后台线程
         self.start_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
@@ -399,6 +454,69 @@ class BackupView(RefreshOnShowView):
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
         self.mhl_btn.setEnabled(True)
+
+    @safe_slot("校验已有备份失败")
+    def _verify_existing_backup(self):
+        """独立校验已关联项目素材的备份完整性（存在性 + 校验和比对）。"""
+        project_id = self.selector.get_current_project_id()
+        if not project_id:
+            QMessageBox.warning(
+                self, "提示",
+                "请先在「关联项目」中选择要校验的项目。\n"
+                "仅当备份时关联了项目，素材的备份位置才会被记录。"
+            )
+            return
+        if self.worker and self.worker.isRunning():
+            QMessageBox.warning(self, "提示", "已有后台任务正在运行，请稍候")
+            return
+
+        self.start_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.verify_backup_btn.setEnabled(False)
+        self.progress_bar.setValue(0)
+        self.status_label.setText("正在校验已有备份…")
+        self._log(f"开始校验项目备份完整性: {project_id}")
+
+        self.worker = WorkerThread(
+            self.backup_service.verify_backup,
+            project_id,
+            cancel_check=self.backup_service.is_cancelled,
+            progress_callback=lambda cur, tot, msg: self._verify_progress.emit(cur, tot, msg),
+        )
+        self.worker.finished.connect(self._on_verify_finished)
+        self.worker.error.connect(self._on_error)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.start()
+
+    @Slot(int, int, str)
+    def _on_verify_progress(self, current: int, total: int, message: str):
+        if total > 0:
+            self.progress_bar.setValue(int(current / total * 1000))
+        self.status_label.setText(message)
+
+    @Slot(object)
+    def _on_verify_finished(self, stats):
+        self.start_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+        self.verify_backup_btn.setEnabled(True)
+        self.progress_bar.setValue(1000)
+        self.worker = None
+        self.status_label.setText("✅ 备份校验完成")
+        self._log(
+            f"备份校验完成: 检查 {stats['checked']}，一致 {stats['matched']}，"
+            f"不一致 {stats['mismatch']}，缺失 {stats['missing']}"
+        )
+
+        parts = [
+            f"共检查 {stats['checked']} 个备份文件",
+            f"✅ 校验和一致：{stats['matched']}",
+            f"❌ 校验和不一致：{stats['mismatch']}",
+            f"🕳 文件缺失：{stats['missing']}",
+            f"ℹ️ 无校验和（仅检查存在）：{stats['unhashable']}",
+        ]
+        if stats["errors"]:
+            parts.append(f"⚠️ 其他异常：{len(stats['errors'])} 条")
+        QMessageBox.information(self, "备份校验结果", "\n".join(parts))
 
     @safe_slot("导出 MHL 失败")
     def _export_mhl(self):
@@ -529,6 +647,7 @@ class BackupView(RefreshOnShowView):
     def _on_error(self, error: str):
         self.start_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
+        self.verify_backup_btn.setEnabled(True)
         self.status_label.setText(f"❌ 错误: {error}")
         self._log(f"错误: {error}")
         self.worker = None

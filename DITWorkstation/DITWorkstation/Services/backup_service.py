@@ -1,4 +1,5 @@
 """安全拷贝与多重备份服务"""
+import shutil
 import time
 import uuid
 import threading
@@ -93,6 +94,161 @@ class BackupService:
         )
         job.__dict__['_files_cache'] = files
         return job
+
+    def check_target_space(
+        self,
+        target_paths: List[str],
+        total_bytes: int
+    ) -> List[Dict]:
+        """备份前检查各目标磁盘剩余空间是否足够。
+
+        Args:
+            target_paths: 备份目标目录列表
+            total_bytes: 需要的空间（源文件总大小）
+
+        Returns:
+            每个目标一项：{"path", "free", "needed", "sufficient", "error"}
+            - sufficient: free >= needed
+            - error: 目录不可达/磁盘查询失败时非空
+        """
+        results = []
+        for tp in target_paths:
+            try:
+                usage = shutil.disk_usage(tp)
+            except Exception as e:
+                results.append({
+                    "path": tp, "free": 0, "needed": total_bytes,
+                    "sufficient": False, "error": str(e),
+                })
+                continue
+            results.append({
+                "path": tp, "free": usage.free, "needed": total_bytes,
+                "sufficient": usage.free >= total_bytes, "error": "",
+            })
+        return results
+
+    def verify_backup(
+        self,
+        project_id: str,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None
+    ) -> Dict:
+        """独立校验项目已有备份的完整性。
+
+        遍历项目素材的 backup_locations，借助备份作业记录推导每个目标
+        目录下的文件相对路径，逐一检查文件存在性；素材已有校验和时再
+        比对哈希，检测备份盘上的位错误或文件丢失。
+
+        Args:
+            project_id: 目标项目
+            progress_callback: (current, total, message)
+            cancel_check: 返回 True 时中止校验
+
+        Returns:
+            {"checked", "matched", "missing", "mismatch", "unhashable",
+             "errors": [str]}
+        """
+        if self.db_service is None:
+            raise ValueError("verify_backup 需要注入 db_service")
+
+        self._set_cancelled(False)
+
+        assets = [
+            a for a in self.db_service.get_media_assets(project_id)
+            if a.backup_locations
+        ]
+        jobs = self.db_service.get_backup_jobs(project_id)
+
+        # 目标目录 -> 备份作业源根 映射，用于推导目标文件相对路径
+        loc_to_source = {}
+        for j in jobs:
+            for t in j["targets"]:
+                loc_to_source.setdefault(t["path"], j["source_path"])
+
+        stats = {
+            "checked": 0, "matched": 0, "missing": 0,
+            "mismatch": 0, "unhashable": 0, "errors": [],
+        }
+        total = len(assets)
+        for i, asset in enumerate(assets):
+            if cancel_check and cancel_check():
+                break
+            if progress_callback:
+                progress_callback(i, total, f"校验: {asset.file_name}")
+
+            for loc in asset.backup_locations:
+                dest = self._backup_dest_for_asset(asset, loc, loc_to_source)
+                stats["checked"] += 1
+                if dest is None:
+                    stats["missing"] += 1
+                    continue
+
+                dest_path = Path(dest)
+                if not dest_path.exists():
+                    stats["missing"] += 1
+                    continue
+                if not asset.checksum_value:
+                    stats["unhashable"] += 1
+                    continue
+
+                try:
+                    algo = ChecksumAlgorithm(asset.checksum_algorithm)
+                except ValueError:
+                    algo = ChecksumAlgorithm.XXHASH64
+                try:
+                    cached = self.checksum_service.compute_file_checksum(
+                        str(dest_path), algo, cancel_check=cancel_check
+                    )
+                except InterruptedError:
+                    break
+                except Exception as e:
+                    stats["errors"].append(f"{asset.file_name}: {e}")
+                    continue
+
+                if cached.hash_value == asset.checksum_value:
+                    stats["matched"] += 1
+                else:
+                    stats["mismatch"] += 1
+
+        if progress_callback:
+            progress_callback(total, total, "完成")
+        return stats
+
+    def is_cancelled(self) -> bool:
+        """线程安全查询取消状态（供独立校验等任务复用取消机制）。"""
+        return self._is_cancelled()
+
+    def _backup_dest_for_asset(
+        self,
+        asset,
+        loc: str,
+        loc_to_source: Dict
+    ) -> Optional[str]:
+        """推导素材在某个备份目标目录下的目标文件路径。
+
+        优先通过备份作业的源根计算相对路径；源根不可用或素材不在其下时，
+        在目标目录内按文件名递归查找兜底。
+        """
+        src_root = loc_to_source.get(loc)
+        if src_root:
+            try:
+                # 统一解析两侧路径（macOS /var → /private/var），避免表示形式
+                # 不一致导致 relative_to 失败
+                try:
+                    root = Path(src_root).resolve()
+                except OSError:
+                    root = Path(src_root)
+                rel = Path(asset.file_path).relative_to(root)
+                return str(Path(loc) / rel)
+            except ValueError:
+                pass
+        try:
+            found = next(Path(loc).rglob(Path(asset.file_name).name), None)
+            if found:
+                return str(found)
+        except OSError:
+            pass
+        return None
 
     def execute_backup(
         self,

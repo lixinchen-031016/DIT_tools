@@ -4,12 +4,14 @@ import sys
 import tempfile
 import shutil
 import unittest
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from DITWorkstation.Services.backup_service import BackupService
-from DITWorkstation.Models import ChecksumAlgorithm, BackupStatus, CopyStatus
+from DITWorkstation.Models import ChecksumAlgorithm, BackupStatus, CopyStatus, MediaAsset
+from DITWorkstation.Utils import normalize_path
 
 
 class TestBackupService(unittest.TestCase):
@@ -173,6 +175,174 @@ class TestBackupService(unittest.TestCase):
         # 其余文件已成功拷贝
         self.assertTrue((Path(self.target1_dir) / "test_file_0.dat").exists())
         self.assertTrue((Path(self.target1_dir) / "test_file_2.dat").exists())
+
+
+# ===== 备份前空间预检 =====
+
+def test_check_target_space_sufficient(tmp_dir):
+    """目标剩余空间足够时标记 sufficient=True"""
+    service = BackupService()
+    target = tmp_dir / "target"
+    target.mkdir()
+    results = service.check_target_space([str(target)], total_bytes=1024)
+    assert len(results) == 1
+    assert results[0]["sufficient"] is True
+    assert results[0]["free"] > 0
+    assert results[0]["error"] == ""
+
+
+def test_check_target_space_insufficient(tmp_dir):
+    """所需空间超过剩余空间时标记 sufficient=False"""
+    service = BackupService()
+    target = tmp_dir / "target"
+    target.mkdir()
+    huge = 10 ** 30  # 远超任何磁盘容量
+    results = service.check_target_space([str(target)], total_bytes=huge)
+    assert len(results) == 1
+    assert results[0]["sufficient"] is False
+    assert results[0]["needed"] == huge
+
+
+def test_check_target_space_missing_dir(tmp_dir):
+    """目标目录不可达时标记 sufficient=False 且带 error"""
+    service = BackupService()
+    missing = tmp_dir / "not_exist"
+    results = service.check_target_space([str(missing)], total_bytes=1024)
+    assert len(results) == 1
+    assert results[0]["sufficient"] is False
+    assert results[0]["error"]
+
+
+# ===== 备份完整性独立再校验 =====
+
+def _make_src_files(src_dir, count=3):
+    """在 src 目录创建 count 个随机媒体文件，返回文件信息列表"""
+    import os
+    src_dir.mkdir(parents=True, exist_ok=True)
+    files = []
+    for i in range(count):
+        p = src_dir / f"IMG_{i:03d}.jpg"
+        p.write_bytes(b"\xff\xd8\xff\xe0" + os.urandom(1024))
+        files.append({
+            "path": str(p),
+            "size": p.stat().st_size,
+            "name": p.name,
+            "relative": p.name,
+        })
+    return files
+
+
+def test_verify_backup_all_matched(db_service, tmp_dir):
+    """校验已有备份：全部文件存在且校验和一致 -> matched=总数"""
+    from DITWorkstation.Services.checksum_service import ChecksumService
+
+    src = tmp_dir / "source"
+    tgt = tmp_dir / "target"
+    files = _make_src_files(src)
+    project = db_service.create_project(name="校验项目")
+
+    checksum_svc = ChecksumService()
+    for f in files:
+        cached = checksum_svc.compute_file_checksum(f["path"])
+        db_service.add_media_asset(MediaAsset(
+            asset_id=str(uuid.uuid4())[:8],
+            project_id=project.project_id,
+            file_path=normalize_path(f["path"]),
+            file_name=f["name"],
+            file_size=f["size"],
+            file_type=".jpg",
+            asset_type="image",
+            checksum_algorithm=cached.algorithm.value,
+            checksum_value=cached.hash_value,
+        ))
+
+    service = BackupService(db_service=db_service)
+    job = service.create_backup_job(str(src), [str(tgt)])
+    service.execute_backup(job, project_id=project.project_id)
+
+    stats = service.verify_backup(project.project_id)
+    assert stats["checked"] == 3
+    assert stats["matched"] == 3
+    assert stats["missing"] == 0
+    assert stats["mismatch"] == 0
+
+
+def test_verify_backup_detects_mismatch(db_service, tmp_dir):
+    """校验已有备份：目标文件被篡改 -> mismatch 检出"""
+    from DITWorkstation.Services.checksum_service import ChecksumService
+
+    src = tmp_dir / "source"
+    tgt = tmp_dir / "target"
+    files = _make_src_files(src)
+    project = db_service.create_project(name="篡改项目")
+
+    checksum_svc = ChecksumService()
+    for f in files:
+        cached = checksum_svc.compute_file_checksum(f["path"])
+        db_service.add_media_asset(MediaAsset(
+            asset_id=str(uuid.uuid4())[:8],
+            project_id=project.project_id,
+            file_path=normalize_path(f["path"]),
+            file_name=f["name"],
+            file_size=f["size"],
+            file_type=".jpg",
+            asset_type="image",
+            checksum_algorithm=cached.algorithm.value,
+            checksum_value=cached.hash_value,
+        ))
+
+    service = BackupService(db_service=db_service)
+    job = service.create_backup_job(str(src), [str(tgt)])
+    service.execute_backup(job, project_id=project.project_id)
+
+    # 篡改 target 中的第一个文件
+    corrupted = next(tgt.rglob("*.jpg"))
+    corrupted.write_bytes(b"corrupted" * 100)
+
+    stats = service.verify_backup(project.project_id)
+    assert stats["mismatch"] == 1
+    assert stats["matched"] == 2
+
+
+def test_verify_backup_detects_missing(db_service, tmp_dir):
+    """校验已有备份：目标文件被删除 -> missing 检出"""
+    src = tmp_dir / "source"
+    tgt = tmp_dir / "target"
+    files = _make_src_files(src)
+    project = db_service.create_project(name="缺失项目")
+
+    for f in files:
+        db_service.add_media_asset(MediaAsset(
+            asset_id=str(uuid.uuid4())[:8],
+            project_id=project.project_id,
+            file_path=normalize_path(f["path"]),
+            file_name=f["name"],
+            file_size=f["size"],
+            file_type=".jpg",
+            asset_type="image",
+            checksum_algorithm="xxhash64",
+            checksum_value="deadbeef",
+        ))
+
+    service = BackupService(db_service=db_service)
+    job = service.create_backup_job(str(src), [str(tgt)])
+    service.execute_backup(job, project_id=project.project_id)
+
+    # 删除 target 中的第一个文件
+    victim = next(tgt.rglob("*.jpg"))
+    victim.unlink()
+
+    stats = service.verify_backup(project.project_id)
+    assert stats["missing"] == 1
+    assert stats["checked"] == 3
+
+
+def test_verify_backup_requires_db():
+    """未注入 db_service 时抛出 ValueError"""
+    import pytest
+    service = BackupService(db_service=None)
+    with pytest.raises(ValueError):
+        service.verify_backup("p1")
 
 
 if __name__ == "__main__":

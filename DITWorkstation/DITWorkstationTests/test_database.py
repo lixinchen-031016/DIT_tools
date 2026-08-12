@@ -1223,6 +1223,56 @@ class TestWorkspaceManagement(unittest.TestCase):
         default_ws_list = [w for w in db3.get_workspaces() if w.workspace_id == "default"]
         self.assertEqual(len(default_ws_list), 1)
 
+    def test_find_duplicate_assets_cross_project(self):
+        """跨项目查重：相同校验和的素材跨项目聚合，无重复时不返回"""
+        p1 = self.db.create_project(name="项目A")
+        p2 = self.db.create_project(name="项目B")
+
+        def _asset(project_id, name, checksum):
+            return MediaAsset(
+                asset_id=str(uuid.uuid4())[:8],
+                project_id=project_id,
+                file_path=f"/path/{name}",
+                file_name=name,
+                file_size=1024,
+                file_type=".jpg",
+                asset_type="image",
+                checksum_algorithm="xxhash64",
+                checksum_value=checksum,
+            )
+
+        # 同一校验和跨两个项目出现（重复）
+        self.db.add_media_asset(_asset(p1.project_id, "A_001.jpg", "dup1"))
+        self.db.add_media_asset(_asset(p2.project_id, "B_001.jpg", "dup1"))
+        # 另一校验和仅出现一次（非重复）
+        self.db.add_media_asset(_asset(p1.project_id, "A_002.jpg", "unique"))
+        # 空校验和不参与查重
+        self.db.add_media_asset(_asset(p2.project_id, "B_002.jpg", ""))
+
+        duplicates = self.db.find_duplicate_assets()
+        self.assertEqual(len(duplicates), 1)
+        group = duplicates[0]
+        self.assertEqual(group["checksum_value"], "dup1")
+        self.assertEqual(group["count"], 2)
+        self.assertEqual(len(group["assets"]), 2)
+        self.assertEqual(
+            {a.project_id for a in group["assets"]},
+            {p1.project_id, p2.project_id},
+        )
+
+    def test_find_duplicate_assets_none(self):
+        """无重复校验和时返回空列表"""
+        p1 = self.db.create_project(name="项目C")
+        self.db.add_media_asset(MediaAsset(
+            asset_id=str(uuid.uuid4())[:8],
+            project_id=p1.project_id,
+            file_path="/path/x.jpg",
+            file_name="x.jpg",
+            checksum_algorithm="xxhash64",
+            checksum_value="only",
+        ))
+        self.assertEqual(self.db.find_duplicate_assets(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

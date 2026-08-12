@@ -319,6 +319,28 @@ def pick_save_file(
     return path
 
 
+def pick_open_file(
+    parent=None,
+    title: str = "选择文件",
+    start_path: str = "",
+    filter_str: str = "",
+) -> str:
+    """统一的打开文件对话框（打包后兼容，对应 pick_directory/pick_save_file）。
+
+    frozen 环境下使用非原生对话框，避免 Windows 打包后 COM/manifest
+    问题导致返回空字符串。
+
+    Returns: 选中的文件完整路径，未选择或取消返回空字符串。
+    """
+    import sys
+    from PySide6.QtWidgets import QFileDialog
+    options = QFileDialog.Option.DontUseNativeDialog if getattr(sys, 'frozen', False) else QFileDialog.Option(0)
+    path, _ = QFileDialog.getOpenFileName(
+        parent, title, start_path, filter_str, "", options
+    )
+    return path or ""
+
+
 def open_in_file_manager(path: str) -> bool:
     """跨平台在系统文件管理器中打开路径（目录或文件所在目录）。
 
