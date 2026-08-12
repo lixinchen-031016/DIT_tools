@@ -280,6 +280,8 @@ class TestDatabaseService(unittest.TestCase):
         """TR: _migrate_db 应为旧表补齐新字段并保持可用"""
         # 模拟旧表（缺少新增字段）
         conn = sqlite3.connect(str(self.db.db_path))
+        # 新迁移机制按 PRAGMA user_version 门控；模拟"旧版本数据库"需把版本重置为 0
+        conn.execute("PRAGMA user_version = 0")
         conn.execute("DROP TABLE media_assets")
         conn.execute("""
             CREATE TABLE media_assets (

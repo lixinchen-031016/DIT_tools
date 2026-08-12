@@ -457,6 +457,7 @@ class AssetInfoView(RefreshOnShowView):
         self.tags_edit.setPlaceholderText("多个标签用逗号分隔，如：日戏,主镜头,精修")
         self.tags_edit.setToolTip("自定义标签，可在「素材检索」中按标签筛选")
         self.tags_edit.setEnabled(False)
+        self._refresh_tags_completer()
         form.addRow("标签:", self.tags_edit)
 
         self.notes_edit = QTextEdit()
@@ -486,6 +487,19 @@ class AssetInfoView(RefreshOnShowView):
         form.addRow("", save_row)
 
         props_layout.addWidget(group)
+
+    def _refresh_tags_completer(self):
+        """用数据库已有标签为输入框提供自动补全。"""
+        from PySide6.QtWidgets import QCompleter
+        try:
+            tags = self.db_service.get_all_tags()
+        except Exception as e:
+            logger.warning(f"加载标签补全失败: {e}")
+            tags = []
+        completer = QCompleter(tags, self)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        self.tags_edit.setCompleter(completer)
 
     def _setup_props_groups(self, props_layout):
         # 各分组（使用统一的 _create_group 方法）

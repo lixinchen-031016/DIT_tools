@@ -151,6 +151,16 @@ class TestThumbnailService(unittest.TestCase):
         data = self.service._qlmanage_frame(str(Path(self.temp_dir) / "nope.mp4"), 64)
         self.assertIsNone(data)
 
+    def test_set_cache_dir_repoints_and_creates(self):
+        """重设缓存目录后新缩略图写入新目录"""
+        new_cache = Path(self.temp_dir) / "new_cache"
+        self.service.set_cache_dir(new_cache)
+        self.assertEqual(self.service.cache_dir, new_cache)
+        self.assertTrue(new_cache.is_dir())
+        # 原缓存目录不受影响（旧文件保留）
+        old_cache = Path(self.temp_dir) / "appdata" / "thumbnails"
+        self.assertNotEqual(self.service.cache_dir, old_cache)
+
 
 if __name__ == "__main__":
     unittest.main()

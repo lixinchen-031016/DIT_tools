@@ -6,11 +6,13 @@ from PySide6.QtWidgets import (
     QCheckBox, QDialog, QMessageBox
 )
 from PySide6.QtCore import QDate, Qt
+from PySide6.QtWidgets import QCompleter
 
 from DITWorkstation.Utils import (
     format_size, get_db_service, safe_slot, logger,
     open_in_file_manager, pick_save_file,
 )
+from DITWorkstation.App import config
 from DITWorkstation.Models import RATING_LABELS, AssetRating
 from DITWorkstation.App.session_context import get_data_bus, get_current_workspace_id
 from DITWorkstation.Views.Widgets import RefreshOnShowView
@@ -110,6 +112,9 @@ class SearchView(RefreshOnShowView):
         # 全局日志缓存：跨项目搜索时也能显示日志标签而非裸 UUID
         self._log_cache = {}
         self._results = []
+        self._current_filters = {}
+        self._total = 0
+        self._page = 0
         self._setup_ui()
         self.project_combo.currentIndexChanged.connect(self._on_project_changed)
         self._load_projects()
@@ -196,6 +201,7 @@ class SearchView(RefreshOnShowView):
         self.tag_edit.setPlaceholderText("标签关键字")
         self.tag_edit.setToolTip("按自定义标签筛选（素材信息视图中设置的标签）")
         self.tag_edit.returnPressed.connect(self._search)
+        self._refresh_tag_completer()
         row3.addWidget(QLabel("标签:"))
         row3.addWidget(self.tag_edit)
         row3.addStretch()
@@ -265,6 +271,23 @@ class SearchView(RefreshOnShowView):
         result_layout.addWidget(self.result_table)
         attach_empty_state(self.result_table, "🔍", "暂无搜索结果", "设置搜索条件后点击「搜索」按钮")
 
+        # 分页控制条：大结果集分页展示，避免一次性渲染过多行导致卡顿
+        page_layout = QHBoxLayout()
+        self.prev_page_btn = QPushButton("◀ 上一页")
+        self.prev_page_btn.clicked.connect(lambda: self._search(go_to_page=self._page - 1))
+        self.next_page_btn = QPushButton("下一页 ▶")
+        self.next_page_btn.clicked.connect(lambda: self._search(go_to_page=self._page + 1))
+        self.page_label = QLabel("")
+        self.page_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        page_layout.addWidget(self.prev_page_btn)
+        page_layout.addWidget(self.page_label)
+        page_layout.addWidget(self.next_page_btn)
+        page_layout.addStretch()
+        self.page_bar = QWidget()
+        self.page_bar.setLayout(page_layout)
+        self.page_bar.setVisible(False)
+        result_layout.addWidget(self.page_bar)
+
         # 数据过期提示条（其他视图改了数据后，提示用户当前结果可能过期）
         self.stale_banner = QLabel("")
         self.stale_banner.setVisible(False)
@@ -315,6 +338,7 @@ class SearchView(RefreshOnShowView):
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
         self._load_projects()
+        self._refresh_tag_completer()
 
     def _on_project_changed(self, index: int):
         self._refresh_log_combo()
@@ -325,6 +349,11 @@ class SearchView(RefreshOnShowView):
         self.result_table.setRowCount(0)
         sync_empty_state(self.result_table)
         self.result_label.setText("")
+        self.page_bar.setVisible(False)
+        self._results = []
+        self._current_filters = {}
+        self._total = 0
+        self._page = 0
 
     def _on_global_project_changed(self, project_id):
         """全局项目切换 -> 同步下拉选中项，保持检索上下文与其他视图一致。
@@ -389,11 +418,15 @@ class SearchView(RefreshOnShowView):
         if log:
             self._log_cache[log_id] = log
 
-    # 搜索结果上限：避免一次性加载过多导致 UI 卡顿
-    _SEARCH_LIMIT = 2000
-
     @safe_slot("搜索失败")
-    def _search(self):
+    def _search(self, go_to_page: int = 0):
+        """执行搜索并加载指定页（默认从第一页开始）。"""
+        self._current_filters = self._collect_filters()
+        self._total = self.db_service.count_assets(**self._current_filters)
+        self._page = go_to_page
+        self._load_page()
+
+    def _collect_filters(self) -> dict:
         project_id = self.project_combo.currentData()
         scene = self.scene_edit.text() or None
         shot = self.shot_edit.text() or None
@@ -412,8 +445,7 @@ class SearchView(RefreshOnShowView):
             date_from = self.date_from.date().toString("yyyy-MM-dd")
             date_to = self.date_to.date().toString("yyyy-MM-dd") + " 23:59:59"
 
-        # 多取一条用于判断是否截断
-        results = self.db_service.search_assets(
+        return dict(
             project_id=project_id,
             scene=scene,
             shot=shot,
@@ -424,27 +456,39 @@ class SearchView(RefreshOnShowView):
             log_id=log_id,
             rating=rating,
             tag=tag,
-            limit=self._SEARCH_LIMIT + 1
         )
 
-        truncated = len(results) > self._SEARCH_LIMIT
-        if truncated:
-            results = results[:self._SEARCH_LIMIT]
+    def _load_page(self):
+        """按当前页加载一页结果并刷新表格/分页控件。"""
+        page_size = getattr(config, "search_page_size", 500)
+        page_size = max(1, int(page_size))
+        total_pages = max(1, (self._total + page_size - 1) // page_size)
+        self._page = max(0, min(self._page, total_pages - 1))
 
-        self._display_results(results, truncated)
+        results = self.db_service.search_assets(
+            **self._current_filters,
+            limit=page_size,
+            offset=self._page * page_size,
+        )
+        self._display_results(results, self._total, self._page, total_pages)
 
-    def _display_results(self, results, truncated: bool = False):
+    def _display_results(self, results, total: int = 0, page: int = 0, total_pages: int = 1):
         self._results = results
         self.result_table.setRowCount(len(results))
         sync_empty_state(self.result_table)
-        if truncated:
-            self.result_label.setText(
-                f"找到 {len(results)}+ 条结果（已截断，请缩小搜索条件以查看全部）"
-            )
-            self.result_label.setStyleSheet(f"color: {COLOR.WARNING}; font-weight: 600;")
-        else:
-            self.result_label.setText(f"找到 {len(results)} 条结果")
+        if total > 0:
+            self.result_label.setText(f"共 {total} 条结果")
             self.result_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY};")
+        else:
+            self.result_label.setText("共 0 条结果")
+            self.result_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY};")
+
+        # 分页控件状态
+        self.page_bar.setVisible(total > 0 and total_pages > 1)
+        self.page_label.setText(f"第 {page + 1} / {total_pages} 页")
+        self.prev_page_btn.setEnabled(page > 0)
+        self.next_page_btn.setEnabled(page < total_pages - 1)
+
         # 新搜索完成后隐藏过期提示
         self.stale_banner.setVisible(False)
 
@@ -484,7 +528,7 @@ class SearchView(RefreshOnShowView):
 
     @safe_slot("导出 CSV 失败")
     def _export_csv(self):
-        """把当前搜索结果导出为 CSV 素材清单。"""
+        """把全部搜索结果（不分页）导出为 CSV 素材清单。"""
         if not self._results:
             QMessageBox.information(self, "提示", "请先搜索，再将结果导出为 CSV")
             return
@@ -497,11 +541,24 @@ class SearchView(RefreshOnShowView):
         )
         if not path:
             return
-        ReportService().export_assets_csv(self._results, path)
+        all_results = self.db_service.search_assets(**self._current_filters)
+        ReportService().export_assets_csv(all_results, path)
         QMessageBox.information(
             self, "导出完成",
-            f"已导出 {len(self._results)} 条素材记录：\n{path}"
+            f"已导出 {len(all_results)} 条素材记录：\n{path}"
         )
+
+    def _refresh_tag_completer(self):
+        """从数据库加载全部标签用于输入自动补全。"""
+        try:
+            tags = self.db_service.get_all_tags()
+        except Exception as e:
+            logger.warning(f"加载标签补全失败: {e}")
+            tags = []
+        completer = QCompleter(tags, self)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        self.tag_edit.setCompleter(completer)
 
     @safe_slot("跨项目查重失败")
     def _find_duplicates(self):
@@ -525,6 +582,11 @@ class SearchView(RefreshOnShowView):
         self.result_table.setRowCount(0)
         sync_empty_state(self.result_table)
         self.result_label.setText("")
+        self.page_bar.setVisible(False)
+        self._results = []
+        self._current_filters = {}
+        self._total = 0
+        self._page = 0
 
     def _on_result_double_clicked(self, index):
         """双击检索结果 → 打开所在目录（通过 UserRole 取 asset_id，排序安全）"""

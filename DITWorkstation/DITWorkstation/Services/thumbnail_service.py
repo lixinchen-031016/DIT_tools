@@ -37,7 +37,7 @@ class ThumbnailService(QObject):
 
     def __init__(self):
         super().__init__()
-        self._cache_dir = config.effective_db_dir / "thumbnails"
+        self._cache_dir = config.effective_thumbnail_dir
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         # 复用全局 QThreadPool，限制并发避免大批量导入时抢占资源
         self._pool = QThreadPool.globalInstance()
@@ -73,6 +73,13 @@ class ThumbnailService(QObject):
     def cache_dir(self) -> Path:
         """缩略图缓存目录。"""
         return self._cache_dir
+
+    def set_cache_dir(self, path: Path):
+        """重设缩略图缓存目录（运行期生效，旧缓存保留待清理）。"""
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+        self._cache_dir = path
+        logger.info(f"缩略图缓存目录已更新: {path}")
 
     def cache_size(self) -> int:
         """返回缩略图缓存占用总字节数。"""

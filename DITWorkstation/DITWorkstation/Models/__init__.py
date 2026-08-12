@@ -190,6 +190,18 @@ class Project:
 
 
 @dataclass
+class ProjectTemplate:
+    """项目模板：快速创建新项目时预填的名称/描述/工作目录等字段"""
+    template_id: str
+    name: str
+    description: str = ""
+    base_path: str = ""  # 应用模板时作为新项目的默认工作目录
+    notes: str = ""  # 使用说明/备注
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
 class ShootingLog:
     """拍摄日志"""
     log_id: str

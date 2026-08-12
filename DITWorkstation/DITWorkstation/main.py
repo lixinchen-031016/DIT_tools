@@ -15,7 +15,7 @@ from PySide6.QtGui import QFont, QFontDatabase, QIcon, QPainter, QPixmap, QColor
 
 from DITWorkstation.App import config
 from DITWorkstation.App.navigation import get_nav_index
-from DITWorkstation.Utils import logger
+from DITWorkstation.Utils import logger, apply_saved_config
 from DITWorkstation.Views.main_window import (
     MainWindow, set_current_project, set_current_workspace
 )
@@ -114,6 +114,9 @@ def main():
     """应用主入口"""
     # 确保必要目录存在
     config.ensure_dirs()
+
+    # 恢复上次保存的应用设置（备份默认验证、存储卡自动识别等）
+    apply_saved_config()
 
     # 高DPI支持
     QApplication.setHighDpiScaleFactorRoundingPolicy(

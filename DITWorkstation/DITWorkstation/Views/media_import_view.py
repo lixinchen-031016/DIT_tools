@@ -416,6 +416,19 @@ class MediaImportView(RefreshOnShowView):
         if path:
             self.source_edit.setText(path)
 
+    def set_source_folder(self, path: str, auto_scan: bool = True):
+        """由外部（如存储卡自动识别）设置导入源目录。
+
+        Args:
+            path: 源目录路径
+            auto_scan: 设置后是否立即触发扫描
+        """
+        if not path:
+            return
+        self.source_edit.setText(path)
+        if auto_scan:
+            self._scan_folder()
+
     def _on_copy_check_toggled(self, checked: bool):
         """复制到工作区复选框切换时，更新目标路径提示"""
         self._update_copy_dest_label()

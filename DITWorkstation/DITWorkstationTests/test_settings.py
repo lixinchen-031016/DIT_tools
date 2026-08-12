@@ -1,0 +1,98 @@
+"""应用设置持久化测试"""
+from pathlib import Path
+
+from DITWorkstation.Utils import common
+
+
+def _patch_settings_path(monkeypatch, tmp_path):
+    target = tmp_path / "settings.json"
+    monkeypatch.setattr(common, "_get_settings_path", lambda: target)
+    return target
+
+
+def test_save_load_app_settings_roundtrip(tmp_path, monkeypatch):
+    _patch_settings_path(monkeypatch, tmp_path)
+    common.save_app_settings(verify_after_copy=False, auto_detect_volume=False)
+    cfg = common.load_app_settings()
+    assert cfg["verify_after_copy"] is False
+    assert cfg["auto_detect_volume"] is False
+
+
+def test_save_app_settings_merges_not_overwrites(tmp_path, monkeypatch):
+    _patch_settings_path(monkeypatch, tmp_path)
+    common.save_app_settings(verify_after_copy=False)
+    common.save_app_settings(auto_detect_volume=True)
+    cfg = common.load_app_settings()
+    assert cfg == {"verify_after_copy": False, "auto_detect_volume": True}
+
+
+def test_load_app_settings_missing_file_returns_empty(tmp_path, monkeypatch):
+    _patch_settings_path(monkeypatch, tmp_path)
+    assert common.load_app_settings() == {}
+
+
+def test_save_settings_does_not_clobber_recent_paths(tmp_path, monkeypatch):
+    target = _patch_settings_path(monkeypatch, tmp_path)
+    common.add_recent_path("/tmp/source", category="import_source")
+    common.save_app_settings(verify_after_copy=False)
+    import json
+    raw = json.loads(target.read_text(encoding="utf-8"))
+    assert "recent_directories_import_source" in raw
+    assert raw["app_config"]["verify_after_copy"] is False
+
+
+def test_apply_saved_config_sets_known_fields(tmp_path, monkeypatch):
+    _patch_settings_path(monkeypatch, tmp_path)
+    common.save_app_settings(verify_after_copy=False, auto_detect_volume=False, unknown_key=1)
+    common.apply_saved_config()
+    from DITWorkstation.App import config
+    assert config.verify_after_copy is False
+    assert config.auto_detect_volume is False
+    assert not hasattr(config, "unknown_key")
+
+
+def test_path_settings_roundtrip_as_path_objects(tmp_path, monkeypatch):
+    """路径类配置以字符串持久化，启动时恢复为 Path 对象"""
+    _patch_settings_path(monkeypatch, tmp_path)
+    target = tmp_path / "app_data"
+    # 先注册原值以便测试后恢复，避免污染全局 config 影响其他测试
+    from DITWorkstation.App import config as _config
+    for field in ("db_dir", "report_dir", "log_dir", "thumbnail_cache_dir"):
+        monkeypatch.setattr(_config, field, getattr(_config, field))
+    common.save_app_settings(
+        db_dir=str(target),
+        report_dir=str(tmp_path / "reports"),
+        log_dir=str(tmp_path / "logs"),
+        thumbnail_cache_dir=str(tmp_path / "thumbs"),
+    )
+    common.apply_saved_config()
+    assert _config.db_dir == target
+    assert _config.report_dir == tmp_path / "reports"
+    assert _config.log_dir == tmp_path / "logs"
+    assert _config.thumbnail_cache_dir == tmp_path / "thumbs"
+    assert isinstance(_config.thumbnail_cache_dir, Path)
+
+
+def test_log_files_summary_and_delete(tmp_path, monkeypatch):
+    """日志文件统计与删除功能（重设到临时日志目录）"""
+    from DITWorkstation.App import config
+    log_dir = tmp_path / "logs"
+    monkeypatch.setattr(config, "log_dir", log_dir)
+    common.logger.set_log_dir(log_dir)
+    # 触发一次写入，产生日志文件
+    common.logger.info("测试日志写入")
+    count, size = common.log_files_summary()
+    assert count >= 1
+    assert size > 0
+    removed = common.delete_log_files()
+    assert removed == count
+    count_after, size_after = common.log_files_summary()
+    # 删除后重新打开句柄会生成 1 个空的新日志文件
+    assert count_after <= 1
+    assert size_after == 0
+
+
+def test_log_files_summary_missing_dir(tmp_path, monkeypatch):
+    from DITWorkstation.App import config
+    monkeypatch.setattr(config, "log_dir", tmp_path / "no_such_dir")
+    assert common.log_files_summary() == (0, 0)

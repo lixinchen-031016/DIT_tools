@@ -18,6 +18,9 @@ from DITWorkstation.App.session_context import (
 )
 from DITWorkstation.Services.archive_service import ArchiveService
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
+from DITWorkstation.Views.Widgets.project_template_dialog import (
+    create_project_from_template, save_project_as_template,
+)
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS
 
 
@@ -214,7 +217,15 @@ class ProjectDashboardView(RefreshOnShowView):
         self.btn_restore.setToolTip("从归档 zip 恢复项目到当前工作区（可选还原素材文件）")
         self.btn_restore.clicked.connect(self._restore_project)
 
-        for btn in (self.btn_archive, self.btn_restore):
+        self.btn_template = QPushButton("🧩 从模板新建项目…")
+        self.btn_template.setToolTip("基于项目模板快速创建新项目（名称/描述/工作目录自动预填）")
+        self.btn_template.clicked.connect(self._create_from_template)
+
+        self.btn_save_template = QPushButton("💾 保存当前项目为模板…")
+        self.btn_save_template.setToolTip("把当前项目的名称/描述/工作目录保存为模板，供后续复用")
+        self.btn_save_template.clicked.connect(self._save_as_template)
+
+        for btn in (self.btn_archive, self.btn_restore, self.btn_template, self.btn_save_template):
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {COLOR.BG_CARD};
@@ -227,7 +238,7 @@ class ProjectDashboardView(RefreshOnShowView):
                 QPushButton:hover {{ background-color: {COLOR.BORDER_LIGHT}; }}
                 QPushButton:disabled {{ color: {COLOR.DISABLED}; }}
             """)
-            manage_layout.addWidget(btn)
+        manage_layout.addWidget(btn)
         manage_layout.addStretch()
         layout.addLayout(manage_layout)
 
@@ -253,6 +264,34 @@ class ProjectDashboardView(RefreshOnShowView):
         layout.addWidget(self.recent_ops_label)
 
         layout.addStretch()
+
+    @safe_slot("从模板新建项目失败")
+    def _create_from_template(self):
+        """从模板新建项目：创建后广播并让选择控件选中新项目。"""
+        project = create_project_from_template(
+            parent=self, db_service=self.db_service
+        )
+        if project:
+            self.selector.refresh()
+            self._refresh()
+
+    @safe_slot("保存项目模板失败")
+    def _save_as_template(self):
+        """把当前项目保存为项目模板。"""
+        current = self.selector.get_current_project()
+        if current is None:
+            QMessageBox.information(
+                self, "提示", "请先在右上角选择一个项目，再保存为模板。"
+            )
+            return
+        template = save_project_as_template(
+            parent=self, db_service=self.db_service, project=current
+        )
+        if template:
+            QMessageBox.information(
+                self, "保存成功",
+                f"项目模板「{template.name}」已保存，可在「从模板新建项目…」中使用。"
+            )
 
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""

@@ -29,7 +29,9 @@ from DITWorkstation.Views.asset_info_view import AssetInfoView
 from DITWorkstation.Views.project_dashboard_view import ProjectDashboardView
 from DITWorkstation.Views.first_run_wizard import FirstRunWizard, _SOP_GUIDE_TEXT
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS
+from DITWorkstation.App import config
 from DITWorkstation.Utils import logger, get_db_service
+from DITWorkstation.Services.volume_monitor import VolumeMonitor
 
 
 # 导航配置（NAV_ITEMS / get_nav_index）已抽离到 App/navigation.py 作为单一事实源，
@@ -148,6 +150,11 @@ class MainWindow(QMainWindow):
         self._status_timer.timeout.connect(self._update_task_status)
         self._status_timer.start()
         self._update_task_status()
+
+        # 存储卡自动识别：插入媒体卡时自动跳转到导入视图并预填源目录
+        self.volume_monitor = VolumeMonitor(self)
+        self.volume_monitor.volume_mounted.connect(self._on_volume_mounted)
+        self.volume_monitor.start()
 
     def _setup_menu(self):
         """创建菜单栏 — 提供帮助入口与新手向导重启"""
@@ -372,6 +379,7 @@ class MainWindow(QMainWindow):
         """
         running = self._running_workers()
         if not running:
+            self.volume_monitor.stop()
             super().closeEvent(event)
             return
 
@@ -417,7 +425,17 @@ class MainWindow(QMainWindow):
                     logger.debug(f"等待 worker 结束失败: {e}")
             logger.info(f"主窗口关闭：已等待 {len(running)} 个后台 worker 结束")
 
+        self.volume_monitor.stop()
         super().closeEvent(event)
+
+    def _on_volume_mounted(self, path: str):
+        """检测到存储卡：状态栏提示，并按设置自动跳转到导入视图。"""
+        from pathlib import Path
+        name = Path(path).name or path
+        self.status_label_task.setText(f"💾 检测到存储卡: {name}")
+        if getattr(config, "auto_detect_volume", True):
+            self._navigate_to("import")
+            self.import_view.set_source_folder(path, auto_scan=True)
 
     def _on_data_changed(self, event: str):
         """

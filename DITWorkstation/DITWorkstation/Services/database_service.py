@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from DITWorkstation.App import config
-from DITWorkstation.Models import Project, ShootingLog, MediaAsset, Workspace
+from DITWorkstation.Models import Project, ProjectTemplate, ShootingLog, MediaAsset, Workspace
 from DITWorkstation.Utils import logger, normalize_path
 
 
@@ -162,6 +162,17 @@ class DatabaseService:
                 CREATE INDEX IF NOT EXISTS idx_assets_path ON media_assets(file_path);
                 CREATE INDEX IF NOT EXISTS idx_assets_checksum ON media_assets(checksum_value);
                 CREATE INDEX IF NOT EXISTS idx_assets_log_id ON media_assets(log_id);
+                CREATE INDEX IF NOT EXISTS idx_assets_project_date
+                    ON media_assets(project_id, date_imported);
+
+                CREATE TABLE IF NOT EXISTS asset_tags (
+                    asset_id TEXT NOT NULL,
+                    tag TEXT NOT NULL,
+                    PRIMARY KEY (asset_id, tag),
+                    FOREIGN KEY (asset_id) REFERENCES media_assets(asset_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_asset_tags_tag ON asset_tags(tag);
 
                 CREATE TABLE IF NOT EXISTS backup_jobs (
                     job_id TEXT PRIMARY KEY,
@@ -189,6 +200,16 @@ class DatabaseService:
 
                 CREATE INDEX IF NOT EXISTS idx_operation_logs_project ON operation_logs(project_id);
                 CREATE INDEX IF NOT EXISTS idx_operation_logs_created ON operation_logs(created_at);
+
+                CREATE TABLE IF NOT EXISTS project_templates (
+                    template_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    base_path TEXT DEFAULT '',
+                    notes TEXT DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
             """)
             conn.commit()
         finally:
@@ -206,8 +227,44 @@ class DatabaseService:
             except sqlite3.Error:
                 pass
 
+    # 当前数据库 schema 版本：每次结构变更 +1，并在 _migrate_db 中补充对应迁移
+    _DB_VERSION = 2
+
     def _migrate_db(self):
-        """数据库迁移：为旧表补齐新增字段"""
+        """按 PRAGMA user_version 分版本迁移数据库。
+
+        版本化迁移保证：
+        - 旧库升级路径明确（v0 → v1 → v2 …），新库直接建全量 schema；
+        - 每个迁移幂等，重复执行不破坏数据。
+        """
+        conn = self._create_conn()
+        try:
+            version = self._get_user_version(conn)
+            if version < 1:
+                self._migrate_v1(conn)
+                self._set_user_version(conn, 1)
+                logger.info("数据库迁移完成: v1")
+            if version < 2:
+                self._migrate_v2(conn)
+                self._set_user_version(conn, 2)
+                logger.info("数据库迁移完成: v2")
+
+            # 向后兼容：旧项目（workspace_id 为 NULL）自动归入"默认工作区"
+            self._migrate_legacy_projects_to_default_workspace(conn)
+            conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _get_user_version(conn) -> int:
+        return conn.execute("PRAGMA user_version").fetchone()[0]
+
+    @staticmethod
+    def _set_user_version(conn, version: int):
+        conn.execute(f"PRAGMA user_version = {int(version)}")
+
+    def _migrate_v1(self, conn):
+        """v1：为旧表补齐历史新增字段（幂等 ALTER）。"""
         migrations = {
             "media_assets": [
                 ("asset_type", "TEXT DEFAULT 'other'"),
@@ -230,23 +287,55 @@ class DatabaseService:
                 ("failed_files_json", "TEXT DEFAULT '[]'"),
             ],
         }
-        conn = self._create_conn()
-        try:
-            for table, columns in migrations.items():
-                existing = {row["name"] for row in
-                            conn.execute(f"PRAGMA table_info({table})").fetchall()}
-                for col_name, col_def in columns:
-                    if col_name not in existing:
-                        conn.execute(
-                            f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}"
-                        )
-                        logger.info(f"数据库迁移: {table} 新增列 {col_name}")
-            conn.commit()
+        for table, columns in migrations.items():
+            existing = {row["name"] for row in
+                        conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            for col_name, col_def in columns:
+                if col_name not in existing:
+                    conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}"
+                    )
+                    logger.info(f"数据库迁移 v1: {table} 新增列 {col_name}")
 
-            # 向后兼容：旧项目（workspace_id 为 NULL）自动归入"默认工作区"
-            self._migrate_legacy_projects_to_default_workspace(conn)
-        finally:
-            conn.close()
+    def _migrate_v2(self, conn):
+        """v2：asset_tags 关联表回填 + project_templates 建表 + 默认模板。"""
+        # 回填 asset_tags：把历史 tags 逗号字符串拆分为关联表记录
+        rows = conn.execute(
+            "SELECT asset_id, tags FROM media_assets WHERE TRIM(COALESCE(tags, '')) != ''"
+        ).fetchall()
+        for row in rows:
+            for tag in self._split_tags(row["tags"]):
+                conn.execute(
+                    "INSERT OR IGNORE INTO asset_tags (asset_id, tag) VALUES (?, ?)",
+                    (row["asset_id"], tag),
+                )
+        if rows:
+            logger.info(f"数据库迁移 v2: 回填 {len(rows)} 条素材的标签到 asset_tags")
+
+        # 预置默认项目模板（仅当模板表为空时）
+        count = conn.execute("SELECT COUNT(*) FROM project_templates").fetchone()[0]
+        if count == 0:
+            now = datetime.now().isoformat()
+            conn.execute(
+                "INSERT INTO project_templates "
+                "(template_id, name, description, base_path, notes, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "default",
+                    "标准影视项目",
+                    "适用于常规影视/广告拍摄：自动创建 DIT_Workspace 工作目录",
+                    "DIT_Workspace",
+                    "基于模板创建项目时会自动预填工作目录与描述。",
+                    now,
+                    now,
+                ),
+            )
+            logger.info("数据库迁移 v2: 预置默认项目模板")
+
+    @staticmethod
+    def _split_tags(tags: str) -> list:
+        """把逗号分隔的标签字符串拆分为去空白、去空的标签列表。"""
+        return [t.strip() for t in (tags or "").split(",") if t.strip()]
 
     def _migrate_legacy_projects_to_default_workspace(self, conn):
         """把所有 workspace_id 为 NULL 的旧项目归入"默认工作区"。
@@ -509,9 +598,110 @@ class DatabaseService:
         """
         with self._transaction() as conn:
             conn.execute("DELETE FROM media_assets WHERE project_id = ?", (project_id,))
+            conn.execute(
+                "DELETE FROM asset_tags WHERE asset_id NOT IN (SELECT asset_id FROM media_assets)"
+            )
             conn.execute("DELETE FROM shooting_logs WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
             logger.info(f"删除项目: {project_id}")
+
+    # ===== 项目模板 =====
+
+    def create_project_template(
+        self,
+        name: str,
+        description: str = "",
+        base_path: str = "",
+        notes: str = "",
+    ) -> ProjectTemplate:
+        """创建项目模板。"""
+        template = ProjectTemplate(
+            template_id=str(uuid.uuid4())[:8],
+            name=name,
+            description=description,
+            base_path=base_path,
+            notes=notes,
+        )
+        with self._transaction() as conn:
+            conn.execute(
+                "INSERT INTO project_templates "
+                "(template_id, name, description, base_path, notes, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    template.template_id, template.name, template.description,
+                    template.base_path, template.notes,
+                    template.created_at.isoformat(), template.updated_at.isoformat(),
+                ),
+            )
+            logger.info(f"创建项目模板: {template.template_id} - {template.name}")
+        return template
+
+    def get_project_templates(self) -> List[ProjectTemplate]:
+        """获取所有项目模板，按创建时间倒序。"""
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM project_templates ORDER BY created_at DESC"
+            ).fetchall()
+            return [self._row_to_template(r) for r in rows]
+
+    def get_project_template(self, template_id: str) -> Optional[ProjectTemplate]:
+        """获取单个项目模板。"""
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM project_templates WHERE template_id = ?", (template_id,)
+            ).fetchone()
+            return self._row_to_template(row) if row else None
+
+    def update_project_template(self, template_id: str, **kwargs) -> bool:
+        """更新项目模板（支持 name / description / base_path / notes）。"""
+        if not kwargs:
+            return False
+        fields = []
+        params = []
+        for key, value in kwargs.items():
+            if key in ['name', 'description', 'base_path', 'notes']:
+                fields.append(f"{key} = ?")
+                params.append(value)
+        if not fields:
+            return False
+        fields.append("updated_at = ?")
+        params.append(datetime.now().isoformat())
+        params.append(template_id)
+        try:
+            with self._transaction() as conn:
+                conn.execute(
+                    f"UPDATE project_templates SET {', '.join(fields)} WHERE template_id = ?",
+                    params,
+                )
+                logger.info(f"更新项目模板: {template_id}")
+                return True
+        except Exception as e:
+            logger.error(f"更新项目模板失败 {template_id}: {e}")
+            return False
+
+    def delete_project_template(self, template_id: str) -> bool:
+        """删除项目模板。"""
+        try:
+            with self._transaction() as conn:
+                conn.execute(
+                    "DELETE FROM project_templates WHERE template_id = ?", (template_id,)
+                )
+                logger.info(f"删除项目模板: {template_id}")
+                return True
+        except Exception as e:
+            logger.error(f"删除项目模板失败 {template_id}: {e}")
+            return False
+
+    def _row_to_template(self, row: sqlite3.Row) -> ProjectTemplate:
+        return ProjectTemplate(
+            template_id=row["template_id"],
+            name=row["name"],
+            description=row["description"],
+            base_path=row["base_path"],
+            notes=row["notes"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
 
     # ===== 拍摄日志 =====
 
@@ -624,6 +814,15 @@ class DatabaseService:
 
     # ===== 素材资产 =====
 
+    def _sync_asset_tags(self, conn, asset_id: str, tags: str):
+        """把 tags 逗号字符串同步到 asset_tags 关联表（须在事务内调用）。"""
+        conn.execute("DELETE FROM asset_tags WHERE asset_id = ?", (asset_id,))
+        for tag in self._split_tags(tags):
+            conn.execute(
+                "INSERT OR IGNORE INTO asset_tags (asset_id, tag) VALUES (?, ?)",
+                (asset_id, tag),
+            )
+
     def add_media_asset(self, asset: MediaAsset) -> MediaAsset:
         """添加素材资产"""
         with self._transaction() as conn:
@@ -649,6 +848,7 @@ class DatabaseService:
                  asset.lens_model, asset.focal_length, asset.video_metadata,
                  asset.rating, asset.tags, asset.notes)
             )
+            self._sync_asset_tags(conn, asset.asset_id, asset.tags)
             logger.info(f"添加素材资产: {asset.asset_id} - {asset.file_name}")
         return asset
 
@@ -682,6 +882,7 @@ class DatabaseService:
                          asset.lens_model, asset.focal_length, asset.video_metadata,
                          asset.rating, asset.tags, asset.notes)
                     )
+                    self._sync_asset_tags(conn, asset.asset_id, asset.tags)
                 logger.info(f"批量添加素材资产: {len(assets)} 个")
                 return len(assets)
         except Exception as e:
@@ -728,11 +929,14 @@ class DatabaseService:
                     value = value.isoformat()
                 fields.append(f"{key} = ?")
                 params.append(value)
+        tags_updated = 'tags' in kwargs
         params.append(asset_id)
 
         try:
             with self._transaction() as conn:
                 conn.execute(f"UPDATE media_assets SET {', '.join(fields)} WHERE asset_id = ?", params)
+                if tags_updated:
+                    self._sync_asset_tags(conn, asset_id, kwargs.get('tags') or '')
                 logger.info(f"更新素材资产: {asset_id}")
                 return True
         except Exception as e:
@@ -744,6 +948,7 @@ class DatabaseService:
         try:
             with self._transaction() as conn:
                 conn.execute("DELETE FROM media_assets WHERE asset_id = ?", (asset_id,))
+                conn.execute("DELETE FROM asset_tags WHERE asset_id = ?", (asset_id,))
                 logger.info(f"删除素材资产: {asset_id}")
                 return True
         except Exception as e:
@@ -912,6 +1117,59 @@ class DatabaseService:
             logger.error(f"按旧路径同步重命名失败 {old_key}: {e}")
             return False
 
+    def _asset_filter_clause(
+        self,
+        project_id: Optional[str] = None,
+        scene: Optional[str] = None,
+        shot: Optional[str] = None,
+        file_type: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        keyword: Optional[str] = None,
+        log_id: Optional[str] = None,
+        rating: Optional[int] = None,
+        tag: Optional[str] = None,
+    ) -> tuple:
+        """构造素材筛选子句 (WHERE_SQL, params)，供 search_assets / count_assets 复用。"""
+        query = " WHERE 1=1"
+        params = []
+
+        if project_id:
+            query += " AND project_id = ?"
+            params.append(project_id)
+        if scene:
+            query += " AND scene LIKE ?"
+            params.append(f"%{scene}%")
+        if shot:
+            query += " AND shot LIKE ?"
+            params.append(f"%{shot}%")
+        if file_type:
+            query += " AND file_type = ?"
+            params.append(file_type)
+        if date_from:
+            query += " AND date_imported >= ?"
+            params.append(date_from)
+        if date_to:
+            query += " AND date_imported <= ?"
+            params.append(date_to)
+        if keyword:
+            query += " AND (file_name LIKE ? OR scene LIKE ? OR shot LIKE ? OR notes LIKE ?)"
+            params.extend([f"%{keyword}%"] * 4)
+        if log_id:
+            query += " AND log_id = ?"
+            params.append(log_id)
+        if rating is not None and rating > 0:
+            query += " AND rating >= ?"
+            params.append(rating)
+        if tag:
+            # 基于 asset_tags 关联表的子串匹配：行为与旧 tags LIKE 一致，
+            # 但按规范化后的标签 token 匹配，避免逗号/空白导致误匹配。
+            query += (" AND EXISTS (SELECT 1 FROM asset_tags WHERE "
+                      "asset_id = media_assets.asset_id AND tag LIKE ? COLLATE NOCASE)")
+            params.append(f"%{tag}%")
+
+        return query, params
+
     def search_assets(
         self,
         project_id: Optional[str] = None,
@@ -924,56 +1182,64 @@ class DatabaseService:
         log_id: Optional[str] = None,
         rating: Optional[int] = None,
         tag: Optional[str] = None,
-        limit: Optional[int] = None
+        limit: Optional[int] = None,
+        offset: Optional[int] = None
     ) -> List[MediaAsset]:
-        """搜索素材
+        """搜索素材（支持分页）。
 
         Args:
             rating: 按 rating 过滤（>=rating）。None 表示不过滤。
-            tag: 按自定义标签模糊过滤（tags 字段包含该关键字）。
-            limit: 返回结果上限。None 表示不限制；达到上限时调用方应提示用户缩小条件。
+            tag: 按自定义标签过滤（基于 asset_tags 关联表，子串匹配）。
+            limit: 返回结果上限。None 表示不限制。
+            offset: 分页偏移。None 表示从第一条开始。
         """
+        where_sql, params = self._asset_filter_clause(
+            project_id=project_id, scene=scene, shot=shot, file_type=file_type,
+            date_from=date_from, date_to=date_to, keyword=keyword,
+            log_id=log_id, rating=rating, tag=tag,
+        )
         with self._connection() as conn:
-            query = "SELECT * FROM media_assets WHERE 1=1"
-            params = []
-
-            if project_id:
-                query += " AND project_id = ?"
-                params.append(project_id)
-            if scene:
-                query += " AND scene LIKE ?"
-                params.append(f"%{scene}%")
-            if shot:
-                query += " AND shot LIKE ?"
-                params.append(f"%{shot}%")
-            if file_type:
-                query += " AND file_type = ?"
-                params.append(file_type)
-            if date_from:
-                query += " AND date_imported >= ?"
-                params.append(date_from)
-            if date_to:
-                query += " AND date_imported <= ?"
-                params.append(date_to)
-            if keyword:
-                query += " AND (file_name LIKE ? OR scene LIKE ? OR shot LIKE ?)"
-                params.extend([f"%{keyword}%"] * 3)
-            if log_id:
-                query += " AND log_id = ?"
-                params.append(log_id)
-            if rating is not None and rating > 0:
-                query += " AND rating >= ?"
-                params.append(rating)
-            if tag:
-                query += " AND tags LIKE ?"
-                params.append(f"%{tag}%")
-
-            query += " ORDER BY date_imported DESC"
+            query = f"SELECT * FROM media_assets{where_sql} ORDER BY date_imported DESC"
             if limit is not None and limit > 0:
                 query += " LIMIT ?"
                 params.append(limit)
+                if offset is not None and offset > 0:
+                    query += " OFFSET ?"
+                    params.append(offset)
             rows = conn.execute(query, params).fetchall()
             return [self._row_to_asset(r) for r in rows]
+
+    def count_assets(
+        self,
+        project_id: Optional[str] = None,
+        scene: Optional[str] = None,
+        shot: Optional[str] = None,
+        file_type: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        keyword: Optional[str] = None,
+        log_id: Optional[str] = None,
+        rating: Optional[int] = None,
+        tag: Optional[str] = None,
+    ) -> int:
+        """统计符合条件的素材总数（与 search_assets 同条件）。"""
+        where_sql, params = self._asset_filter_clause(
+            project_id=project_id, scene=scene, shot=shot, file_type=file_type,
+            date_from=date_from, date_to=date_to, keyword=keyword,
+            log_id=log_id, rating=rating, tag=tag,
+        )
+        with self._connection() as conn:
+            row = conn.execute(f"SELECT COUNT(*) FROM media_assets{where_sql}", params).fetchone()
+            return row[0]
+
+    def get_all_tags(self) -> List[str]:
+        """返回全部素材标签（去重、按使用次数降序），供检索自动补全。"""
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT tag, COUNT(*) AS cnt FROM asset_tags "
+                "GROUP BY tag ORDER BY cnt DESC, tag ASC"
+            ).fetchall()
+            return [r["tag"] for r in rows]
 
     def get_assets_by_log_id(self, log_id: str) -> List[MediaAsset]:
         """按拍摄日志ID获取关联的素材"""

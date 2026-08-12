@@ -4,7 +4,7 @@ import sys
 import platform
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 
 def _resolve_data_dir() -> Path:
@@ -38,6 +38,11 @@ def _resolve_report_dir() -> Path:
         # 打包后：输出到用户文档目录
         return Path.home() / "Documents" / "DIT_Reports"
     return Path.home() / "Documents" / "DIT_Reports"
+
+
+def _resolve_log_dir() -> Path:
+    """解析日志输出目录（开发态与冻结态一致，均在用户主目录下）"""
+    return Path.home() / ".dit_workstation" / "logs"
 
 
 @dataclass
@@ -85,6 +90,12 @@ class AppConfig:
     max_parallel_copies: int = 4  # 最大并行拷贝数
     verify_after_copy: bool = True  # 拷贝后验证
 
+    # 存储卡自动识别
+    auto_detect_volume: bool = True  # 检测到存储卡时自动跳转到导入视图并预填源目录
+
+    # 检索分页
+    search_page_size: int = 500  # 素材检索每页显示的条数
+
     # 支持的RAW格式
     raw_extensions: List[str] = field(default_factory=lambda: [
         ".cr2", ".cr3", ".nef", ".arw", ".dng", ".orf", ".rw2", ".raf", ".pef", ".srw"
@@ -108,6 +119,12 @@ class AppConfig:
     # 报告输出目录（用户文档下，跨平台可写）
     report_dir: Path = field(default_factory=_resolve_report_dir)
 
+    # 日志输出目录（可经设置界面重设）
+    log_dir: Path = field(default_factory=_resolve_log_dir)
+
+    # 缩略图缓存目录；None 时使用 effective_db_dir / "thumbnails"
+    thumbnail_cache_dir: Optional[Path] = None
+
     # 导入配置
     project_work_dir_name: str = "DIT_Workspace"
     import_copy_on_modify: bool = True
@@ -118,6 +135,13 @@ class AppConfig:
     @property
     def db_path(self) -> Path:
         return self.effective_db_dir / self.db_name
+
+    @property
+    def effective_thumbnail_dir(self) -> Path:
+        """实际缩略图缓存目录（未单独设置时跟随数据库目录）。"""
+        if self.thumbnail_cache_dir:
+            return self.thumbnail_cache_dir
+        return self.effective_db_dir / "thumbnails"
 
     @property
     def all_media_extensions(self) -> List[str]:
@@ -159,6 +183,13 @@ class AppConfig:
         except (PermissionError, OSError):
             self.report_dir = self._writable_dir_or_fallback(
                 Path.home() / ".ditworkstation" / "reports"
+            )
+        # 日志目录
+        try:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+        except (PermissionError, OSError):
+            self.log_dir = self._writable_dir_or_fallback(
+                Path.home() / ".ditworkstation" / "logs"
             )
 
 

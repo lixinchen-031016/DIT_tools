@@ -6,6 +6,7 @@ import functools
 import threading
 import traceback
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Callable
 
@@ -209,6 +210,47 @@ def count_recent_paths() -> int:
         len(v) for k, v in settings.items()
         if k.startswith(f"{_RECENT_PATHS_KEY}_") and isinstance(v, list)
     )
+
+
+# ===== 应用配置持久化 =====
+_APP_SETTINGS_KEY = "app_config"
+
+
+def load_app_settings() -> dict:
+    """读取 settings.json 中保存的应用配置片段（不存在时返回空 dict）。"""
+    settings = _load_settings()
+    cfg = settings.get(_APP_SETTINGS_KEY, {})
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def save_app_settings(**updates):
+    """把一组应用配置合并写入 settings.json 的 app_config 段。
+
+    只覆盖传入的键，不影响最近路径等其他配置。
+    """
+    settings = _load_settings()
+    cfg = settings.get(_APP_SETTINGS_KEY, {})
+    if not isinstance(cfg, dict):
+        cfg = {}
+    cfg.update(updates)
+    settings[_APP_SETTINGS_KEY] = cfg
+    _save_settings(settings)
+
+
+def apply_saved_config():
+    """把 settings.json 中保存的应用配置应用到全局 AppConfig。
+
+    仅应用 AppConfig 上真实存在的字段；未知/旧字段静默忽略。
+    路径类字段会把字符串值转换为 Path（thumbnail_cache_dir 默认为 None 也需转换）。
+    在应用启动（创建主窗口前）调用一次。
+    """
+    from DITWorkstation.App import config
+    _PATH_FIELDS = {"db_dir", "report_dir", "log_dir", "thumbnail_cache_dir"}
+    for key, value in load_app_settings().items():
+        if hasattr(config, key):
+            if key in _PATH_FIELDS and isinstance(value, str):
+                value = Path(value)
+            setattr(config, key, value)
 
 
 def _show_recent_paths_dialog(parent, title: str, recent_paths: list) -> str:
@@ -459,17 +501,36 @@ class Logger:
             console_handler.setFormatter(formatter)
             self.logger.addHandler(console_handler)
 
-            try:
-                log_dir = Path.home() / ".dit_workstation" / "logs"
-                log_dir.mkdir(parents=True, exist_ok=True)
-                file_handler = logging.FileHandler(
-                    log_dir / f"{generate_timestamp()}.log", encoding="utf-8"
-                )
-                file_handler.setFormatter(formatter)
-                self.logger.addHandler(file_handler)
-            except PermissionError as e:
-                self.logger.warning(f"无法创建日志文件（仅控制台输出）: {e}")
+            self.set_log_dir(config.log_dir)
 
+    def set_log_dir(self, log_dir):
+        """重设日志文件目录：移除旧文件句柄，在新目录创建轮转日志文件。
+
+        供「设置 → 修改日志存储位置」在运行期即时生效使用。
+        """
+        log_dir = Path(log_dir)
+        # 移除旧的文件句柄（保留控制台句柄）
+        for handler in list(self.logger.handlers):
+            if isinstance(handler, RotatingFileHandler):
+                try:
+                    handler.close()
+                except Exception:
+                    pass
+                self.logger.removeHandler(handler)
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            file_handler = RotatingFileHandler(
+                log_dir / "dit_workstation.log",
+                maxBytes=5 * 1024 * 1024,  # 单文件上限 5MB
+                backupCount=10,  # 保留最近 10 个轮转文件，避免日志无限膨胀
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(logging.Formatter(
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            ))
+            self.logger.addHandler(file_handler)
+        except (PermissionError, OSError) as e:
+            self.logger.warning(f"无法创建日志文件（仅控制台输出）: {e}")
     def info(self, message: str):
         self.logger.info(message)
 
@@ -484,6 +545,47 @@ class Logger:
 
 
 logger = Logger()
+
+
+def log_files_summary() -> tuple:
+    """返回日志目录下日志文件的数量与总字节数（含轮转文件）。"""
+    log_dir = Path(config.log_dir)
+    if not log_dir.is_dir():
+        return 0, 0
+    count = 0
+    size = 0
+    try:
+        for p in log_dir.glob("dit_workstation.log*"):
+            count += 1
+            try:
+                size += p.stat().st_size
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return count, size
+
+
+def delete_log_files() -> int:
+    """删除日志目录下的日志文件（含轮转文件），返回删除的文件数。
+
+    删除后重新打开文件句柄，让后续日志写入全新文件。
+    """
+    log_dir = Path(config.log_dir)
+    if not log_dir.is_dir():
+        return 0
+    removed = 0
+    for p in log_dir.glob("dit_workstation.log*"):
+        try:
+            p.unlink()
+            removed += 1
+        except OSError as e:
+            logger.warning(f"删除日志文件失败 {p}: {e}")
+    if removed:
+        logger.info(f"已删除 {removed} 个日志文件")
+        # 重新打开文件句柄，创建全新的日志文件
+        logger.set_log_dir(log_dir)
+    return removed
 
 
 # ===== 共享数据库服务单例 =====
