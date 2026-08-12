@@ -339,12 +339,12 @@ class TestMediainfoLibPaths(unittest.TestCase):
         """打包态应优先包含 _MEIPASS 下的随包动态库"""
         paths = self._with_meipass("/fake/bundle")
         if sys.platform == "win32":
-            # Windows 下 Path 拼接使用反斜杠分隔符
-            self.assertEqual(paths[0], os.path.join("/fake/bundle", "MediaInfo.dll"))
+            # 实现内使用 Path 拼接，Windows 下会规范化为反斜杠分隔符
+            self.assertEqual(paths[0], str(Path("/fake/bundle") / "MediaInfo.dll"))
         elif sys.platform == "darwin":
-            self.assertEqual(paths[0], "/fake/bundle/libmediainfo.0.dylib")
+            self.assertEqual(paths[0], str(Path("/fake/bundle") / "libmediainfo.0.dylib"))
         else:
-            self.assertEqual(paths[0], "/fake/bundle/libmediainfo.so.0")
+            self.assertEqual(paths[0], str(Path("/fake/bundle") / "libmediainfo.so.0"))
 
     def test_dev_mode_has_no_bundle_path(self):
         """开发态（无 _MEIPASS）不应包含打包目录"""
