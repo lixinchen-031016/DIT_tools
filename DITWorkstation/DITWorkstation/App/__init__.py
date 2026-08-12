@@ -59,18 +59,23 @@ class AppConfig:
 
     @staticmethod
     def _writable_dir_or_fallback(target: Path) -> Path:
-        """检查目标目录是否可写，否则回退到 ~/.ditworkstation"""
-        try:
-            target.mkdir(parents=True, exist_ok=True)
-            # 测试是否真的可写
-            test_file = target / ".write_test"
-            test_file.touch()
-            test_file.unlink()
-            return target
-        except (PermissionError, OSError):
-            fallback = Path.home() / ".ditworkstation"
-            fallback.mkdir(parents=True, exist_ok=True)
-            return fallback
+        """检查目标目录是否可写，否则依次回退到 ~/.ditworkstation、系统临时目录"""
+        import tempfile
+        candidates = [target, Path.home() / ".ditworkstation"]
+        for cand in candidates:
+            try:
+                cand.mkdir(parents=True, exist_ok=True)
+                # 测试是否真的可写
+                test_file = cand / ".write_test"
+                test_file.touch()
+                test_file.unlink()
+                return cand
+            except (PermissionError, OSError):
+                continue
+        # 所有标准路径都不可写，回退到系统临时目录
+        fallback = Path(tempfile.gettempdir()) / "DITWorkstation"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
 
     # 校验和配置
     default_checksum_algorithm: str = "xxhash64"  # xxhash64 或 md5
@@ -145,17 +150,16 @@ class AppConfig:
         return ext in self.audio_extensions
 
     def ensure_dirs(self):
-        """确保必要目录存在（含 TCC 回退）"""
-        # db_dir 经 effective_db_dir 自动处理 TCC 回退
-        # 触发一次 effective_db_dir 计算，确保目录已创建
+        """确保必要目录存在（含多级回退）"""
+        # db_dir 经 effective_db_dir 自动处理多级回退
         _ = self.effective_db_dir
-        # report_dir 同样尝试创建，失败时回退到 ~/.ditworkstation/reports
+        # report_dir 同样尝试创建，失败时复用同一回退逻辑
         try:
             self.report_dir.mkdir(parents=True, exist_ok=True)
         except (PermissionError, OSError):
-            fallback = Path.home() / ".ditworkstation" / "reports"
-            fallback.mkdir(parents=True, exist_ok=True)
-            self.report_dir = fallback
+            self.report_dir = self._writable_dir_or_fallback(
+                Path.home() / ".ditworkstation" / "reports"
+            )
 
 
 # 全局配置实例
