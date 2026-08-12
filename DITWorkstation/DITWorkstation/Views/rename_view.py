@@ -299,6 +299,15 @@ class RenameView(QWidget):
                 msg += f"，{unmatched} 个未入库（仅文件系统重命名）"
         QMessageBox.information(self, "重命名完成", msg)
 
+        # 操作审计
+        try:
+            self.db_service.record_operation(
+                "文件重命名",
+                f"成功 {len(results)} 个，数据库同步 {synced} 个",
+            )
+        except Exception as e:
+            logger.warning(f"记录重命名操作日志失败: {e}")
+
         # 广播 assets_changed，让 asset_info_view / search_view 刷新路径
         if synced > 0:
             try:

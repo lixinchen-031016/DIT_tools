@@ -6,7 +6,8 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QSplitter, QGroupBox, QFormLayout, QScrollArea,
-    QMessageBox, QAbstractItemView, QProgressBar, QFrame, QSizePolicy
+    QMessageBox, QAbstractItemView, QProgressBar, QFrame, QSizePolicy,
+    QLineEdit, QTextEdit,
 )
 from PySide6.QtCore import Qt, QThread, Signal, Slot
 from PySide6.QtGui import QPixmap
@@ -274,6 +275,7 @@ class AssetInfoView(RefreshOnShowView):
             ["文件名", "类型", "大小", "EXIF"],
             sortable=True,
             resize_to_contents_cols=[1, 2, 3],
+            selection_mode=QAbstractItemView.ExtendedSelection,
         )
         # 表格全局样式由 main.py 注入的 GLOBAL_QSS 统一控制，不再单独 setStyleSheet
         self.asset_table.itemSelectionChanged.connect(self._on_asset_selected)
@@ -283,6 +285,51 @@ class AssetInfoView(RefreshOnShowView):
         self.asset_table.customContextMenuRequested.connect(self._on_asset_context_menu)
         left_layout.addWidget(self.asset_table, 1)
         attach_empty_state(self.asset_table, "📦", "暂无素材", "请先在「媒体导入」中导入素材")
+
+        # 批量操作栏：多选后可批量评级 / 批量删除
+        batch_row = QHBoxLayout()
+        batch_row.setSpacing(6)
+        batch_row.addWidget(QLabel("批量:"))
+        self.batch_rating_buttons = []
+        for value, text in sorted(RATING_LABELS.items()):
+            btn = QPushButton(text)
+            btn.setToolTip(f"把选中素材的评级设为 {text}")
+            btn.setEnabled(False)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {COLOR.BORDER_LIGHT};
+                    border: 1px solid {COLOR.BORDER};
+                    border-radius: {RADIUS.INPUT}px;
+                    padding: 4px 8px;
+                    font-size: {FONT_SIZE.SM}px;
+                    color: {COLOR.TEXT_PRIMARY};
+                }}
+                QPushButton:hover {{ background-color: {COLOR.BORDER}; }}
+            """)
+            btn.clicked.connect(lambda checked, v=value: self._batch_set_rating(v))
+            self.batch_rating_buttons.append(btn)
+            batch_row.addWidget(btn)
+        self.batch_delete_btn = QPushButton("🗑 删除选中")
+        self.batch_delete_btn.setToolTip("从项目移除选中的素材记录（不删除磁盘文件）")
+        self.batch_delete_btn.setEnabled(False)
+        self.batch_delete_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR.DANGER_HOVER};
+                color: white;
+                border: none;
+                border-radius: {RADIUS.INPUT}px;
+                padding: 4px 10px;
+                font-size: {FONT_SIZE.SM}px;
+            }}
+            QPushButton:hover {{ background-color: {COLOR.DANGER}; }}
+        """)
+        self.batch_delete_btn.clicked.connect(self._batch_delete)
+        batch_row.addWidget(self.batch_delete_btn)
+        self.batch_selected_label = QLabel("")
+        self.batch_selected_label.setStyleSheet(f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};")
+        batch_row.addWidget(self.batch_selected_label)
+        batch_row.addStretch()
+        left_layout.addLayout(batch_row)
 
         refresh_btn = QPushButton("🔄 刷新列表")
         refresh_btn.clicked.connect(self._load_assets)
@@ -306,6 +353,7 @@ class AssetInfoView(RefreshOnShowView):
         self._setup_props_file_header(props_layout)
         self._setup_rating_row(props_layout)
         self._setup_props_groups(props_layout)
+        self._setup_tags_group(props_layout)
 
         props_layout.addStretch()
         right_scroll.setWidget(props_widget)
@@ -386,6 +434,50 @@ class AssetInfoView(RefreshOnShowView):
             self._rating_buttons.append((value, btn))
             rating_row.addWidget(btn)
         props_layout.addLayout(rating_row)
+
+    def _setup_tags_group(self, props_layout):
+        """标签与备注编辑分组（可保存到素材记录）"""
+        group = QGroupBox("🏷 标签与备注")
+        group.setStyleSheet(_GROUP_STYLE)
+        form = QFormLayout(group)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        form.setContentsMargins(16, 8, 16, 12)
+        form.setVerticalSpacing(8)
+
+        self.tags_edit = QLineEdit()
+        self.tags_edit.setPlaceholderText("多个标签用逗号分隔，如：日戏,主镜头,精修")
+        self.tags_edit.setToolTip("自定义标签，可在「素材检索」中按标签筛选")
+        self.tags_edit.setEnabled(False)
+        form.addRow("标签:", self.tags_edit)
+
+        self.notes_edit = QTextEdit()
+        self.notes_edit.setPlaceholderText("备注信息（可选）")
+        self.notes_edit.setMaximumHeight(90)
+        self.notes_edit.setEnabled(False)
+        form.addRow("备注:", self.notes_edit)
+
+        save_row = QHBoxLayout()
+        self.save_tags_btn = QPushButton("💾 保存标签与备注")
+        self.save_tags_btn.setEnabled(False)
+        self.save_tags_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR.PRIMARY};
+                color: white;
+                border: none;
+                border-radius: {RADIUS.INPUT}px;
+                padding: 6px 14px;
+                font-size: {FONT_SIZE.SM}px;
+            }}
+            QPushButton:hover {{ background-color: {COLOR.PRIMARY_HOVER}; }}
+            QPushButton:disabled {{ background-color: {COLOR.DISABLED}; }}
+        """)
+        self.save_tags_btn.clicked.connect(self._save_tags_notes)
+        save_row.addWidget(self.save_tags_btn)
+        save_row.addStretch()
+        form.addRow("", save_row)
+
+        props_layout.addWidget(group)
 
     def _setup_props_groups(self, props_layout):
         # 各分组（使用统一的 _create_group 方法）
@@ -525,6 +617,7 @@ class AssetInfoView(RefreshOnShowView):
         project_id = self.selector.get_current_project_id()
         self.asset_table.setRowCount(0)
         sync_empty_state(self.asset_table)
+        self._update_batch_state()
         self.current_file_label.setText("请选择左侧素材查看详情")
         self.refresh_exif_btn.setEnabled(False)
         self._clear_properties()
@@ -574,6 +667,75 @@ class AssetInfoView(RefreshOnShowView):
             self.current_file_label.setText(self.current_asset.file_name)
             self._display_properties(self.current_asset)
             self._request_thumbnail(self.current_asset)
+        self._update_batch_state()
+
+    # ===== 批量操作 =====
+
+    def _selected_asset_ids(self) -> list:
+        """返回当前多选行对应的 asset_id 列表。"""
+        ids = []
+        for index in self.asset_table.selectionModel().selectedRows():
+            item = self.asset_table.item(index.row(), 0)
+            if item is not None:
+                aid = item.data(Qt.UserRole)
+                if aid:
+                    ids.append(aid)
+        return ids
+
+    def _update_batch_state(self):
+        """刷新批量操作按钮可用状态与已选计数。"""
+        count = len(self._selected_asset_ids())
+        enabled = count > 0
+        for btn in self.batch_rating_buttons:
+            btn.setEnabled(enabled)
+        self.batch_delete_btn.setEnabled(enabled)
+        self.batch_selected_label.setText(f"已选 {count} 个" if count else "")
+
+    @safe_slot("批量评级失败")
+    def _batch_set_rating(self, rating: int):
+        """对选中素材批量设置评级。"""
+        ids = self._selected_asset_ids()
+        if not ids:
+            return
+        ok = 0
+        for aid in ids:
+            if self.db_service.update_media_asset(aid, rating=rating):
+                ok += 1
+        self._load_assets()
+        QMessageBox.information(
+            self, "批量评级", f"已为 {ok}/{len(ids)} 个素材设置评级"
+        )
+        try:
+            get_data_bus().emit_data_changed("assets_changed")
+        except Exception as e:
+            logger.warning(f"广播 assets_changed 失败: {e}")
+
+    @safe_slot("批量删除失败")
+    def _batch_delete(self):
+        """从项目移除选中的素材记录（不删除磁盘文件）。"""
+        ids = self._selected_asset_ids()
+        if not ids:
+            return
+        reply = QMessageBox.question(
+            self, "确认删除",
+            f"确定从项目移除 {len(ids)} 条素材记录？\n\n"
+            "仅移除数据库记录，不会删除磁盘上的源文件。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        ok = 0
+        for aid in ids:
+            if self.db_service.delete_media_asset(aid):
+                ok += 1
+        self._load_assets()
+        QMessageBox.information(
+            self, "删除完成", f"已移除 {ok}/{len(ids)} 条素材记录"
+        )
+        try:
+            get_data_bus().emit_data_changed("assets_changed")
+        except Exception as e:
+            logger.warning(f"广播 assets_changed 失败: {e}")
 
     def _on_asset_double_clicked(self, index):
         """双击素材 → 打开所在目录（通过 item 的 UserRole 取 asset_id，排序安全）"""
@@ -658,6 +820,13 @@ class AssetInfoView(RefreshOnShowView):
             self.current_asset.asset_id
         )
         self._sync_rating_buttons(rating)
+        try:
+            self.db_service.record_operation(
+                "设置评级", f"{self.current_asset.file_name} -> {RATING_LABELS.get(rating, rating)}",
+                project_id=self.current_asset.project_id,
+            )
+        except Exception as e:
+            logger.warning(f"记录评级操作日志失败: {e}")
         # 广播素材变更，让看板/检索等视图刷新
         try:
             get_data_bus().emit_data_changed("assets_changed")
@@ -762,12 +931,51 @@ class AssetInfoView(RefreshOnShowView):
         self._set_value("checksum", "checksum_algorithm", asset.checksum_algorithm)
         self._set_value("checksum", "checksum_value", asset.checksum_value)
 
+        # 标签与备注（可编辑）
+        self.tags_edit.setText(asset.tags or "")
+        self.notes_edit.setPlainText(asset.notes or "")
+        self.tags_edit.setEnabled(True)
+        self.notes_edit.setEnabled(True)
+        self.save_tags_btn.setEnabled(True)
+
     def _clear_properties(self):
         for group_labels in self._label_refs.values():
             for lbl in group_labels.values():
                 lbl.setText(_PLACEHOLDER)
                 lbl.setStyleSheet(_STYLE_MISSING)
                 lbl.setToolTip("")
+        self.tags_edit.clear()
+        self.notes_edit.clear()
+        self.tags_edit.setEnabled(False)
+        self.notes_edit.setEnabled(False)
+        self.save_tags_btn.setEnabled(False)
+
+    @safe_slot("保存标签备注失败")
+    def _save_tags_notes(self):
+        """保存当前素材的标签与备注。"""
+        if not self.current_asset:
+            return
+        ok = self.db_service.update_media_asset(
+            self.current_asset.asset_id,
+            tags=self.tags_edit.text().strip(),
+            notes=self.notes_edit.toPlainText().strip(),
+        )
+        if not ok:
+            QMessageBox.warning(self, "保存失败", "更新标签/备注失败，请重试")
+            return
+        self.current_asset = self.db_service.get_media_asset(self.current_asset.asset_id)
+        logger.info(f"已保存素材标签/备注: {self.current_asset.asset_id}")
+        try:
+            self.db_service.record_operation(
+                "更新标签/备注", self.current_asset.file_name,
+                project_id=self.current_asset.project_id,
+            )
+        except Exception as e:
+            logger.warning(f"记录标签操作日志失败: {e}")
+        try:
+            get_data_bus().emit_data_changed("assets_changed")
+        except Exception as e:
+            logger.warning(f"广播 assets_changed 失败: {e}")
 
     # ===== 单个文件重新读取 EXIF =====
     @safe_slot("读取元数据失败")

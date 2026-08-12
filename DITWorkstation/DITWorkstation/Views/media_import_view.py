@@ -1,4 +1,5 @@
 """媒体导入页面"""
+import hashlib
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -10,12 +11,14 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QMessageBox,
     QSplitter, QComboBox, QDateTimeEdit, QMenu, QApplication
 )
-from PySide6.QtCore import Qt, Slot, QDateTime
+from PySide6.QtCore import Qt, Slot, QDateTime, Signal
+from PySide6.QtGui import QPixmap
 
 from DITWorkstation.App.navigation import get_nav_index
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import Project
 from DITWorkstation.Services.media_import_service import MediaImportService
+from DITWorkstation.Services.thumbnail_service import ThumbnailService, SIZE_LARGE
 from DITWorkstation.Utils import format_size, WorkerThread, get_db_service, pick_directory, find_overwrite_conflicts, open_in_file_manager, logger
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
@@ -28,19 +31,25 @@ from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QS
 class MediaImportView(RefreshOnShowView):
     """媒体导入视图"""
 
+    # 缩略图预览完成信号（由 ThumbnailService.thumbnail_ready 桥接）
+    _preview_ready = Signal(str, QPixmap)
+
     def __init__(self):
         super().__init__()
         # 注入共享 db_service 单例，避免与其它视图各自新建 DatabaseService
         self.db_service = get_db_service()
         self.import_service = MediaImportService(db_service=self.db_service)
         self.current_project: Optional[Project] = None
-        self.pending_files = []
         self.worker = None
         self._cancel_requested = False
         # 扫描得到的全部文件（含 stat 信息），时间筛选时在此列表上过滤，
         # 避免每次调整时间范围都重新扫描存储卡。
         self._all_scanned_files: list[Path] = []
+        self.thumbnail_service = ThumbnailService()
+        self._preview_key = ""  # 当前预览的缓存键
         self._setup_ui()
+        self._preview_ready.connect(self._on_preview_ready)
+        self.thumbnail_service.thumbnail_ready.connect(self._preview_ready)
         # 监听选择控件的 项目切换 信号，做本视图业务联动
         # （工作区/项目下拉与全局信号同步已由 WorkspaceProjectSelector 内部处理）
         self.selector.project_changed.connect(self._on_project_changed)
@@ -164,18 +173,76 @@ class MediaImportView(RefreshOnShowView):
         files_group = QGroupBox("待导入文件")
         files_layout = QVBoxLayout(files_group)
 
+        # 选择工具行：全选 / 全不选 / 反选 + 已选计数
+        select_row = QHBoxLayout()
+        select_row.setSpacing(8)
+        self.select_all_btn = QPushButton("☑ 全选")
+        self.select_all_btn.setToolTip("勾选全部文件")
+        self.select_all_btn.clicked.connect(lambda: self._set_all_checked(True))
+        self.select_none_btn = QPushButton("☐ 全不选")
+        self.select_none_btn.setToolTip("取消勾选全部文件")
+        self.select_none_btn.clicked.connect(lambda: self._set_all_checked(False))
+        self.select_invert_btn = QPushButton("⇄ 反选")
+        self.select_invert_btn.setToolTip("反转勾选状态")
+        self.select_invert_btn.clicked.connect(self._invert_selection)
+        select_row.addWidget(self.select_all_btn)
+        select_row.addWidget(self.select_none_btn)
+        select_row.addWidget(self.select_invert_btn)
+        select_row.addStretch()
+        self.selected_label = QLabel("")
+        self.selected_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        select_row.addWidget(self.selected_label)
+        files_layout.addLayout(select_row)
+
+        # 表格 + 缩略图预览 左右分栏
+        files_splitter = QSplitter(Qt.Horizontal)
+        files_splitter.setChildrenCollapsible(False)
+
         self.files_table = make_table(
-            ["文件名", "类型", "大小", "修改时间", "路径"],
+            ["导入", "文件名", "类型", "大小", "修改时间", "路径"],
             sortable=True,
             resize_to_contents_cols=[0, 1, 2, 3],
         )
         # 双击打开所在目录
         self.files_table.doubleClicked.connect(self._on_file_double_clicked)
+        # 行选中变化 → 刷新缩略图预览
+        self.files_table.itemSelectionChanged.connect(self._on_selection_changed)
+        # 勾选状态变化 → 更新已选计数
+        self.files_table.itemChanged.connect(self._on_item_changed)
         # 右键菜单：打开目录 / 复制路径
         self.files_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.files_table.customContextMenuRequested.connect(self._on_files_context_menu)
-        files_layout.addWidget(self.files_table, 1)
+        files_splitter.addWidget(self.files_table)
         attach_empty_state(self.files_table, "📁", "暂无待导入文件", "点击上方「浏览…」选择存储卡目录")
+
+        # 缩略图预览面板：选中行时显示对应素材缩略图
+        preview_panel = QWidget()
+        preview_panel.setFixedWidth(260)
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.setContentsMargins(8, 0, 0, 0)
+        preview_layout.setSpacing(8)
+        preview_title = QLabel("缩略图预览")
+        preview_title.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        preview_layout.addWidget(preview_title)
+
+        self.preview_label = QLabel("选中文件后在此预览")
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setMinimumHeight(160)
+        self.preview_label.setWordWrap(True)
+        self.preview_label.setStyleSheet(
+            f"background-color: {COLOR.BG_APP}; color: {COLOR.TEXT_SECONDARY}; "
+            f"border: 1px dashed {COLOR.BORDER}; border-radius: {RADIUS.INPUT}px;"
+        )
+        preview_layout.addWidget(self.preview_label, 1)
+
+        self.preview_info = QLabel("")
+        self.preview_info.setWordWrap(True)
+        self.preview_info.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        preview_layout.addWidget(self.preview_info)
+        files_splitter.addWidget(preview_panel)
+        files_splitter.setStretchFactor(0, 1)
+        files_splitter.setStretchFactor(1, 0)
+        files_layout.addWidget(files_splitter, 1)
 
         self.files_label = QLabel("")
         self.files_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
@@ -298,7 +365,7 @@ class MediaImportView(RefreshOnShowView):
         if self.current_project:
             self._log(f"已选择项目: {self.current_project.name}")
             self._load_logs(project_id)
-            self.import_btn.setEnabled(len(self.pending_files) > 0)
+            self._update_selected_label()
             self._update_copy_dest_label()
 
     def _get_current_workspace(self):
@@ -444,68 +511,165 @@ class MediaImportView(RefreshOnShowView):
                     # stat 失败的文件保留，避免遗漏
                     filtered.append(f)
             self._display_files(filtered)
-            self.pending_files = [str(f) for f in filtered]
             self.files_label.setText(
                 f"共 {len(filtered)} 个文件"
                 f"（已从 {len(self._all_scanned_files)} 个中筛选）"
             )
         else:
             self._display_files(self._all_scanned_files)
-            self.pending_files = [str(f) for f in self._all_scanned_files]
             self.files_label.setText(f"共 {len(self._all_scanned_files)} 个文件")
 
-        self.import_btn.setEnabled(
-            len(self.pending_files) > 0 and self.current_project is not None
-        )
+        self._update_selected_label()
 
     def _display_files(self, files):
-        self.files_table.setRowCount(len(files))
-        sync_empty_state(self.files_table)
-        for i, f in enumerate(files):
-            stat = f.stat()
-            self.files_table.setItem(i, 0, QTableWidgetItem(f.name))
-            asset_type = self.import_service.classify_media_type(str(f))
-            type_map = {
-                "image": "🖼️ 图片",
-                "video": "🎬 视频",
-                "raw": "📷 RAW",
-                "audio": "🎵 音频",
-                "other": "📄 其他"
-            }
-            self.files_table.setItem(i, 1, QTableWidgetItem(type_map.get(asset_type.value, asset_type.value)))
-            self.files_table.setItem(i, 2, QTableWidgetItem(format_size(stat.st_size)))
-            # 修改时间列（存储 timestamp 供排序，显示友好格式）
-            mtime = datetime.fromtimestamp(stat.st_mtime)
-            mtime_item = QTableWidgetItem(mtime.strftime("%Y-%m-%d %H:%M"))
-            mtime_item.setData(Qt.UserRole, stat.st_mtime)
-            self.files_table.setItem(i, 3, mtime_item)
-            self.files_table.setItem(i, 4, QTableWidgetItem(str(f.parent)))
+        # 排序开启时先禁用，填充完再恢复，避免 setItem 过程中表格自动重排
+        self.files_table.setSortingEnabled(False)
+        self.files_table.blockSignals(True)
+        try:
+            self.files_table.setRowCount(len(files))
+            sync_empty_state(self.files_table)
+            for i, f in enumerate(files):
+                stat = f.stat()
+                # 勾选列：默认全部勾选；UserRole 存完整路径，排序后仍可定位
+                check_item = QTableWidgetItem()
+                check_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+                check_item.setCheckState(Qt.Checked)
+                check_item.setData(Qt.UserRole, str(f))
+                self.files_table.setItem(i, 0, check_item)
+                self.files_table.setItem(i, 1, QTableWidgetItem(f.name))
+                asset_type = self.import_service.classify_media_type(str(f))
+                type_map = {
+                    "image": "🖼️ 图片",
+                    "video": "🎬 视频",
+                    "raw": "📷 RAW",
+                    "audio": "🎵 音频",
+                    "other": "📄 其他"
+                }
+                self.files_table.setItem(i, 2, QTableWidgetItem(type_map.get(asset_type.value, asset_type.value)))
+                self.files_table.setItem(i, 3, QTableWidgetItem(format_size(stat.st_size)))
+                # 修改时间列（存储 timestamp 供排序，显示友好格式）
+                mtime = datetime.fromtimestamp(stat.st_mtime)
+                mtime_item = QTableWidgetItem(mtime.strftime("%Y-%m-%d %H:%M"))
+                mtime_item.setData(Qt.UserRole, stat.st_mtime)
+                self.files_table.setItem(i, 4, mtime_item)
+                self.files_table.setItem(i, 5, QTableWidgetItem(str(f.parent)))
+        finally:
+            self.files_table.blockSignals(False)
+        self.files_table.setSortingEnabled(True)
+        self._update_selected_label()
+
+    def _selected_files(self) -> list:
+        """返回勾选的文件路径列表（按当前表格顺序）。"""
+        paths = []
+        for row in range(self.files_table.rowCount()):
+            item = self.files_table.item(row, 0)
+            if item is None:
+                continue
+            if item.checkState() == Qt.Checked:
+                path = item.data(Qt.UserRole)
+                if path:
+                    paths.append(path)
+        return paths
+
+    def _set_all_checked(self, checked: bool):
+        """全选 / 全不选"""
+        self.files_table.blockSignals(True)
+        try:
+            for row in range(self.files_table.rowCount()):
+                item = self.files_table.item(row, 0)
+                if item is not None:
+                    item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        finally:
+            self.files_table.blockSignals(False)
+        self._update_selected_label()
+
+    def _invert_selection(self):
+        """反选：勾选/取消勾选互换"""
+        self.files_table.blockSignals(True)
+        try:
+            for row in range(self.files_table.rowCount()):
+                item = self.files_table.item(row, 0)
+                if item is None:
+                    continue
+                new_state = Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
+                item.setCheckState(new_state)
+        finally:
+            self.files_table.blockSignals(False)
+        self._update_selected_label()
+
+    def _update_selected_label(self):
+        """更新已选计数与导入按钮可用状态。"""
+        total = self.files_table.rowCount()
+        selected = len(self._selected_files())
+        self.selected_label.setText(f"已选 {selected} / {total}")
+        self.import_btn.setEnabled(
+            selected > 0 and self.current_project is not None
+        )
+
+    def _on_item_changed(self, item):
+        """勾选状态变化时刷新计数（避免排序时误触发）。"""
+        if item is not None and item.column() == 0:
+            self._update_selected_label()
+
+    def _on_selection_changed(self):
+        """行选中变化 → 请求缩略图预览。"""
+        index = self.files_table.currentIndex()
+        if not index.isValid():
+            return
+        check_item = self.files_table.item(index.row(), 0)
+        name_item = self.files_table.item(index.row(), 1)
+        if check_item is None or name_item is None:
+            return
+        file_path = check_item.data(Qt.UserRole) or ""
+        if not file_path:
+            return
+        self._preview_key = hashlib.md5(file_path.encode("utf-8")).hexdigest()
+        self.preview_label.setText("生成缩略图中…")
+        self.preview_info.setText(name_item.text())
+        asset_type = self.import_service.classify_media_type(file_path).value
+        pix = self.thumbnail_service.get_thumbnail(
+            self._preview_key, file_path, asset_type, SIZE_LARGE
+        )
+        if pix is not None:
+            self._apply_preview(self._preview_key, pix)
+
+    @Slot(str, QPixmap)
+    def _on_preview_ready(self, cache_key: str, pixmap: QPixmap):
+        """异步缩略图生成完成：仅当仍是当前选中文件时回填。"""
+        if cache_key == self._preview_key:
+            self._apply_preview(cache_key, pixmap)
+
+    def _apply_preview(self, cache_key: str, pixmap: QPixmap):
+        self.preview_label.setText("")
+        self.preview_label.setPixmap(pixmap.scaled(
+            240, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        ))
 
     def _on_file_double_clicked(self, index):
         """双击待导入文件 → 打开所在目录（通过表格单元格文本定位，避免排序后行号错位）"""
         if not index.isValid():
             return
         row = index.row()
-        name_item = self.files_table.item(row, 0)
-        parent_item = self.files_table.item(row, 4)
-        if name_item is None or parent_item is None:
+        check_item = self.files_table.item(row, 0)
+        if check_item is None:
             return
-        from pathlib import Path as _Path
-        path = str(_Path(parent_item.text()) / name_item.text())
+        path = check_item.data(Qt.UserRole) or ""
+        if not path:
+            return
         open_in_file_manager(path)
 
     def _on_files_context_menu(self, pos):
         """右键菜单：打开所在目录 / 复制路径"""
-        from pathlib import Path as _Path
         index = self.files_table.indexAt(pos)
         if not index.isValid():
             return
         row = index.row()
-        name_item = self.files_table.item(row, 0)
-        parent_item = self.files_table.item(row, 4)
-        if name_item is None or parent_item is None:
+        check_item = self.files_table.item(row, 0)
+        if check_item is None:
             return
-        path = str(_Path(parent_item.text()) / name_item.text())
+        path = check_item.data(Qt.UserRole) or ""
+        if not path:
+            return
         menu = QMenu(self)
         action_open = menu.addAction("打开所在目录")
         action_copy = menu.addAction("复制文件路径")
@@ -520,8 +684,9 @@ class MediaImportView(RefreshOnShowView):
             QMessageBox.warning(self, "提示", "请先选择项目")
             return
 
-        if not self.pending_files:
-            QMessageBox.warning(self, "提示", "没有可导入的文件")
+        selected_files = self._selected_files()
+        if not selected_files:
+            QMessageBox.warning(self, "提示", "请先勾选要导入的文件（☑ 列）")
             return
 
         copy_to_workspace = self.copy_mode_check.isChecked()
@@ -539,7 +704,7 @@ class MediaImportView(RefreshOnShowView):
 
             # 覆盖确认：检查工作区目标目录中是否已存在同名文件
             try:
-                source_names = [p.name for p in self.pending_files]
+                source_names = [Path(p).name for p in selected_files]
                 conflicts = find_overwrite_conflicts(source_names, [workspace_dir])
                 if conflicts:
                     names = next(iter(conflicts.values()))
@@ -572,7 +737,7 @@ class MediaImportView(RefreshOnShowView):
         self.worker = WorkerThread(
             self.import_service.import_assets,
             self.current_project.project_id,
-            self.pending_files,
+            selected_files,
             compute_checksum=self.checksum_check.isChecked(),
             copy_to_workspace=copy_to_workspace,
             workspace_dir=workspace_dir,

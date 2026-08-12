@@ -338,6 +338,13 @@ class BackupService:
                         self.db_service.add_backup_location_to_assets(
                             file_paths, t.path, project_id=project_id
                         )
+                # 操作审计：记录备份结果（失败不影响备份本身）
+                self.db_service.record_operation(
+                    "数据备份",
+                    f"{job.status.value}：{len(files)} 个文件，"
+                    f"{len(job.targets)} 个目标",
+                    project_id=project_id,
+                )
             except Exception as e:
                 logger.error(f"备份结果回写 DB 失败（不影响文件备份）: {e}", exc_info=True)
 

@@ -69,6 +69,37 @@ class ThumbnailService(QObject):
         self._pool.start(worker)
         return None
 
+    @property
+    def cache_dir(self) -> Path:
+        """缩略图缓存目录。"""
+        return self._cache_dir
+
+    def cache_size(self) -> int:
+        """返回缩略图缓存占用总字节数。"""
+        total = 0
+        try:
+            for p in self._cache_dir.glob("*.png"):
+                total += p.stat().st_size
+        except OSError:
+            pass
+        return total
+
+    def clear_cache(self) -> int:
+        """清空缩略图缓存，返回删除的文件数。"""
+        removed = 0
+        try:
+            for p in self._cache_dir.glob("*.png"):
+                try:
+                    p.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+        except OSError:
+            pass
+        if removed:
+            logger.info(f"缩略图缓存已清理: {removed} 个文件")
+        return removed
+
     def _generate(self, file_path: str, asset_type: str, size: int) -> Optional[bytes]:
         """实际生成 PNG bytes。失败返回 None（调用方显示占位图）。"""
         p = Path(file_path)

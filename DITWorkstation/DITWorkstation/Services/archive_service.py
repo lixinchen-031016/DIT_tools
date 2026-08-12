@@ -188,6 +188,8 @@ class ArchiveService:
             "focal_length": asset.focal_length,
             "video_metadata": asset.video_metadata,
             "rating": asset.rating,
+            "tags": asset.tags,
+            "notes": asset.notes,
         }
 
     @staticmethod
@@ -366,6 +368,8 @@ class ArchiveService:
                     focal_length=d.get("focal_length", ""),
                     video_metadata=d.get("video_metadata", ""),
                     rating=d.get("rating", 0),
+                    tags=d.get("tags", ""),
+                    notes=d.get("notes", ""),
                 )
                 if d.get("date_imported"):
                     try:

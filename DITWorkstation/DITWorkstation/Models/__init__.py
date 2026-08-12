@@ -237,3 +237,5 @@ class MediaAsset:
     focal_length: str = ""
     video_metadata: str = ""  # VideoMetadata 的 JSON 序列化（codec/frame_rate/bit_rate/audio_codec/audio_sample_rate）
     rating: int = 0  # 镜次评级：0=未评级, 1=可用, 2=备选, 3=优选
+    tags: str = ""  # 自定义标签（逗号分隔，如 "日戏,主镜头"）
+    notes: str = ""  # 自定义备注

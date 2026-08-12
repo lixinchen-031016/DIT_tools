@@ -193,6 +193,12 @@ class SearchView(RefreshOnShowView):
         self.rating_combo.addItem(RATING_LABELS[AssetRating.PREFERRED.value], AssetRating.PREFERRED.value)
         row3.addWidget(QLabel("评级:"))
         row3.addWidget(self.rating_combo)
+        self.tag_edit = QLineEdit()
+        self.tag_edit.setPlaceholderText("标签关键字")
+        self.tag_edit.setToolTip("按自定义标签筛选（素材信息视图中设置的标签）")
+        self.tag_edit.returnPressed.connect(self._search)
+        row3.addWidget(QLabel("标签:"))
+        row3.addWidget(self.tag_edit)
         row3.addStretch()
         search_layout.addRow("", row3)
 
@@ -398,6 +404,7 @@ class SearchView(RefreshOnShowView):
         keyword = self.keyword_edit.text() or None
         log_id = self.log_combo.currentData() or None
         rating = self.rating_combo.currentData()
+        tag = self.tag_edit.text().strip() or None
 
         file_type = None
         if self.type_combo.currentIndex() > 0:
@@ -420,6 +427,7 @@ class SearchView(RefreshOnShowView):
             keyword=keyword,
             log_id=log_id,
             rating=rating,
+            tag=tag,
             limit=self._SEARCH_LIMIT + 1
         )
 
@@ -515,6 +523,7 @@ class SearchView(RefreshOnShowView):
         self.shot_edit.clear()
         self.type_combo.setCurrentIndex(0)
         self.log_combo.setCurrentIndex(0)
+        self.tag_edit.clear()
         self.date_check.setChecked(False)
         self.project_combo.setCurrentIndex(0)
         self.result_table.setRowCount(0)

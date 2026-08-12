@@ -62,6 +62,23 @@ def test_export_assets_csv_creates_file(tmp_dir):
     assert rows[1][0] == "IMG_0001.cr2"
     assert rows[1][3] == "raw"
     assert "★★ 备选" in rows[1][8]  # rating=2 的评级标签
+    assert rows[1][-3] == ""  # 标签默认空
+    assert rows[1][-2] == ""  # 备注默认空
+
+
+def test_export_assets_csv_includes_tags_and_notes(tmp_dir):
+    """CSV 导出包含标签与备注列"""
+    out = tmp_dir / "tags.csv"
+    ReportService().export_assets_csv(
+        [_asset(tags="日戏,主镜头", notes="需要精修")],
+        str(out),
+    )
+    with open(out, encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.reader(f))
+    assert "标签" in rows[0]
+    assert "备注" in rows[0]
+    assert rows[1][-3] == "日戏,主镜头"
+    assert rows[1][-2] == "需要精修"
 
 
 def test_export_assets_csv_empty(tmp_dir):

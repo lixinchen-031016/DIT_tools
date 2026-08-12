@@ -334,7 +334,7 @@ class ReportService:
             "场景", "镜头", "镜次", "评级",
             "拍摄时间", "相机品牌", "相机型号", "镜头型号", "焦距",
             "分辨率", "时长(秒)", "校验和算法", "校验和",
-            "备份位置", "原始路径", "关联日志ID", "是否工作副本", "导入时间",
+            "备份位置", "原始路径", "关联日志ID", "是否工作副本", "标签", "备注", "导入时间",
         ]
 
         def _dt(value) -> str:
@@ -358,6 +358,7 @@ class ReportService:
                     " | ".join(a.backup_locations), a.original_path,
                     a.log_id or "",
                     "是" if a.is_working_copy else "否",
+                    a.tags, a.notes,
                     _dt(a.date_imported),
                 ])
 

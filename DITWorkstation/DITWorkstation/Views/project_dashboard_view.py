@@ -237,6 +237,21 @@ class ProjectDashboardView(RefreshOnShowView):
         self.task_progress.setVisible(False)
         layout.addWidget(self.task_progress)
 
+        # 最近操作（审计日志摘要）
+        recent_label = QLabel("🕘 最近操作")
+        recent_label.setStyleSheet(
+            f"font-size: {FONT_SIZE.LG}px; font-weight: 600; color: {COLOR.TEXT_PRIMARY}; margin-top: 8px;"
+        )
+        layout.addWidget(recent_label)
+        self.recent_ops_label = QLabel("暂无操作记录")
+        self.recent_ops_label.setWordWrap(True)
+        self.recent_ops_label.setStyleSheet(
+            f"background-color: {COLOR.BG_CARD}; color: {COLOR.TEXT_PRIMARY}; "
+            f"border: 1px solid {COLOR.BORDER}; border-radius: {RADIUS.BUTTON}px; "
+            f"padding: 12px 16px; font-size: {FONT_SIZE.SM}px;"
+        )
+        layout.addWidget(self.recent_ops_label)
+
         layout.addStretch()
 
     def _on_show_refresh(self):
@@ -263,6 +278,7 @@ class ProjectDashboardView(RefreshOnShowView):
 
     def _refresh(self):
         """根据当前项目刷新统计卡片与 SOP 提示"""
+        self._refresh_recent_operations()
         project_id = self.selector.get_current_project_id()
         if not project_id:
             self.card_assets.set_value("—", "未选择项目")
@@ -321,6 +337,25 @@ class ProjectDashboardView(RefreshOnShowView):
 
         # SOP 提示
         self.sop_hint.setText(self._build_sop_hint(asset_count, backed_up, log_count, backup_job_count))
+
+    def _refresh_recent_operations(self):
+        """刷新「最近操作」审计日志摘要（最近 5 条）。"""
+        try:
+            ops = self.db_service.get_recent_operations(limit=5)
+        except Exception as e:
+            logger.warning(f"读取最近操作失败: {e}")
+            ops = []
+        if not ops:
+            self.recent_ops_label.setText("暂无操作记录")
+            return
+        lines = []
+        for op in ops:
+            ts = op["created_at"].strftime("%m-%d %H:%M") if op["created_at"] else "--"
+            line = f"{ts}  {op['event']}"
+            if op["detail"]:
+                line += f"：{op['detail']}"
+            lines.append(line)
+        self.recent_ops_label.setText("\n".join(lines))
 
     def _count_assets_with_log(self, project_id: str) -> int:
         """统计已关联 log_id 的 asset 数（用于卡片提示）"""

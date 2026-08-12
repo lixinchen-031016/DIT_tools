@@ -353,6 +353,17 @@ class RawExtractionView(RefreshOnShowView):
 
         QMessageBox.information(self, "提取完成", msg_text)
 
+        # 操作审计
+        try:
+            self.db_service.record_operation(
+                "RAW提取",
+                f"成功 {success}，未找到 {not_found}，失败 {failed}"
+                + (f"，已入库 {imported_count}" if imported_count else ""),
+                project_id=project_id,
+            )
+        except Exception as e:
+            logger.warning(f"记录 RAW 提取操作日志失败: {e}")
+
         # 广播 assets_changed，让其他视图刷新
         if imported_count > 0:
             try:

@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
+import shutil
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -11,7 +12,9 @@ from DITWorkstation.Utils.common import (
     format_size, sanitize_filename, get_file_extension,
     get_file_stem, calculate_speed, generate_timestamp, generate_log_message,
     normalize_path, find_overwrite_conflicts,
+    add_recent_path, clear_recent_paths, count_recent_paths,
 )
+from DITWorkstation.App import config
 
 
 class TestFormatSize(unittest.TestCase):
@@ -211,6 +214,38 @@ class TestFindOverwriteConflicts(unittest.TestCase):
                 ["/src/IMG_001.CR2"], [str(target)]
             )
             self.assertEqual(conflicts, {})
+
+
+class TestRecentPaths(unittest.TestCase):
+    """最近路径记录的写入/计数/清空"""
+
+    def setUp(self):
+        self.category = "test_recent_util"
+        self.temp_dir = tempfile.mkdtemp()
+        self._orig_db_dir = config.db_dir
+        config.db_dir = Path(self.temp_dir) / "appdata"
+        clear_recent_paths(self.category)
+
+    def tearDown(self):
+        clear_recent_paths(self.category)
+        clear_recent_paths("other_category_test")
+        config.db_dir = self._orig_db_dir
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_add_and_count(self):
+        """写入路径后计数增加，且全部类别计数包含它"""
+        before = count_recent_paths()
+        add_recent_path("/tmp/foo", self.category)
+        add_recent_path("/tmp/bar", self.category)
+        self.assertEqual(count_recent_paths(), before + 2)
+
+    def test_clear_all(self):
+        """clear_recent_paths('all') 清空全部类别"""
+        add_recent_path("/tmp/foo", self.category)
+        add_recent_path("/tmp/baz", "other_category_test")
+        cleared = clear_recent_paths("all")
+        self.assertGreaterEqual(cleared, 2)
+        self.assertEqual(count_recent_paths(), 0)
 
 
 if __name__ == "__main__":

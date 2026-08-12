@@ -1273,6 +1273,71 @@ class TestWorkspaceManagement(unittest.TestCase):
         ))
         self.assertEqual(self.db.find_duplicate_assets(), [])
 
+    def test_tags_notes_roundtrip(self):
+        """标签/备注写入后可读回，且可通过 update_media_asset 修改"""
+        p = self.db.create_project(name="标签项目")
+        asset = MediaAsset(
+            asset_id=str(uuid.uuid4())[:8],
+            project_id=p.project_id,
+            file_path="/path/tag.jpg",
+            file_name="tag.jpg",
+            tags="日戏,主镜头",
+            notes="需要精修",
+        )
+        self.db.add_media_asset(asset)
+        loaded = self.db.get_media_asset(asset.asset_id)
+        self.assertEqual(loaded.tags, "日戏,主镜头")
+        self.assertEqual(loaded.notes, "需要精修")
+
+        self.assertTrue(self.db.update_media_asset(
+            asset.asset_id, tags="夜戏", notes="新备注"
+        ))
+        updated = self.db.get_media_asset(asset.asset_id)
+        self.assertEqual(updated.tags, "夜戏")
+        self.assertEqual(updated.notes, "新备注")
+
+    def test_search_assets_by_tag(self):
+        """按标签模糊搜索只返回匹配素材"""
+        p = self.db.create_project(name="检索项目")
+        a1 = MediaAsset(
+            asset_id=str(uuid.uuid4())[:8], project_id=p.project_id,
+            file_path="/a1.jpg", file_name="a1.jpg", tags="日戏,主镜头",
+        )
+        a2 = MediaAsset(
+            asset_id=str(uuid.uuid4())[:8], project_id=p.project_id,
+            file_path="/a2.jpg", file_name="a2.jpg", tags="夜戏",
+        )
+        self.db.add_media_assets_batch([a1, a2])
+
+        hits = self.db.search_assets(project_id=p.project_id, tag="日戏")
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].asset_id, a1.asset_id)
+
+        hits = self.db.search_assets(project_id=p.project_id, tag="不存在")
+        self.assertEqual(hits, [])
+
+    def test_operation_log_record_and_query(self):
+        """操作审计日志可写入并按时间倒序查询"""
+        p = self.db.create_project(name="审计项目")
+        self.assertTrue(self.db.record_operation(
+            "导入素材", "成功 3 个", project_id=p.project_id
+        ))
+        self.assertTrue(self.db.record_operation(
+            "数据备份", "completed：3 个文件", project_id=p.project_id
+        ))
+        self.assertTrue(self.db.record_operation("文件重命名", "成功 2 个"))
+
+        recent = self.db.get_recent_operations(limit=2)
+        self.assertEqual(len(recent), 2)
+        # 倒序：最新的是「文件重命名」
+        self.assertEqual(recent[0]["event"], "文件重命名")
+        self.assertEqual(recent[1]["event"], "数据备份")
+        self.assertIsNotNone(recent[0]["created_at"])
+
+        by_project = self.db.get_recent_operations(limit=10, project_id=p.project_id)
+        self.assertEqual(len(by_project), 2)
+        self.assertTrue(all(o["project_id"] == p.project_id for o in by_project))
+
 
 if __name__ == "__main__":
     unittest.main()

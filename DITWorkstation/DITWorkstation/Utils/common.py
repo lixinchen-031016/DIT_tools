@@ -183,6 +183,34 @@ def get_recent_paths(category: str = "default") -> list:
     return settings.get(key, [])
 
 
+def clear_recent_paths(category: str = "default") -> int:
+    """清空最近使用的路径记录，返回清空的条数。
+
+    category 为 "all" 时清空全部类别的记录。
+    """
+    settings = _load_settings()
+    if category == "all":
+        keys = [k for k in settings if k.startswith(f"{_RECENT_PATHS_KEY}_")]
+        count = sum(len(settings.get(k, [])) for k in keys)
+        for k in keys:
+            settings.pop(k, None)
+    else:
+        key = f"{_RECENT_PATHS_KEY}_{category}"
+        count = len(settings.get(key, []))
+        settings.pop(key, None)
+    _save_settings(settings)
+    return count
+
+
+def count_recent_paths() -> int:
+    """统计所有类别最近路径记录的总条数。"""
+    settings = _load_settings()
+    return sum(
+        len(v) for k, v in settings.items()
+        if k.startswith(f"{_RECENT_PATHS_KEY}_") and isinstance(v, list)
+    )
+
+
 def _show_recent_paths_dialog(parent, title: str, recent_paths: list) -> str:
     """弹出最近路径选择对话框。
 

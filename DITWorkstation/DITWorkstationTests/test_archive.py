@@ -49,6 +49,8 @@ def _make_project_with_data(db_service, src_dir):
             shot="001A",
             log_id=log.log_id,
             backup_locations=["/tmp/backup"],
+            tags="日戏,主镜头",
+            notes="归档测试备注",
         ))
     db_service.add_media_assets_batch(assets)
     return project, log, assets
@@ -124,6 +126,9 @@ def test_restore_project_metadata_only(db_service, tmp_dir):
     # 日志-素材关联被保留（scene/shot 同步写入素材）
     assert all(a.log_id == logs[0].log_id for a in assets)
     assert all(a.scene == "S01" for a in assets)
+    # 标签/备注随归档保留
+    assert all(a.tags == "日戏,主镜头" for a in assets)
+    assert all(a.notes == "归档测试备注" for a in assets)
 
 
 def test_restore_project_with_files(db_service, tmp_dir):

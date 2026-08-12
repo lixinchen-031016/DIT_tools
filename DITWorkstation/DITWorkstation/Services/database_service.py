@@ -178,6 +178,17 @@ class DatabaseService:
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_backup_jobs_project ON backup_jobs(project_id);
+
+                CREATE TABLE IF NOT EXISTS operation_logs (
+                    log_id TEXT PRIMARY KEY,
+                    project_id TEXT,
+                    event TEXT NOT NULL,
+                    detail TEXT DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_operation_logs_project ON operation_logs(project_id);
+                CREATE INDEX IF NOT EXISTS idx_operation_logs_created ON operation_logs(created_at);
             """)
             conn.commit()
         finally:
@@ -209,6 +220,8 @@ class DatabaseService:
                 ("focal_length", "TEXT DEFAULT ''"),
                 ("video_metadata", "TEXT DEFAULT ''"),
                 ("rating", "INTEGER DEFAULT 0"),
+                ("tags", "TEXT DEFAULT ''"),
+                ("notes", "TEXT DEFAULT ''"),
             ],
             "projects": [
                 ("workspace_id", "TEXT"),
@@ -617,8 +630,8 @@ class DatabaseService:
                     asset_type, checksum_algorithm, checksum_value, scene, shot, take, date_imported,
                     date_taken, camera_make, camera_model, backup_locations, log_id,
                     is_working_copy, original_path, width, height, duration_seconds,
-                    lens_model, focal_length, video_metadata, rating)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    lens_model, focal_length, video_metadata, rating, tags, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (asset.asset_id, asset.project_id, asset.file_path, asset.file_name,
                  asset.file_size, asset.file_type, asset.asset_type,
                  asset.checksum_algorithm, asset.checksum_value,
@@ -631,7 +644,7 @@ class DatabaseService:
                  asset.original_path,
                  asset.width, asset.height, asset.duration_seconds,
                  asset.lens_model, asset.focal_length, asset.video_metadata,
-                 asset.rating)
+                 asset.rating, asset.tags, asset.notes)
             )
             logger.info(f"添加素材资产: {asset.asset_id} - {asset.file_name}")
         return asset
@@ -649,9 +662,9 @@ class DatabaseService:
                            (asset_id, project_id, file_path, file_name, file_size, file_type,
                             asset_type, checksum_algorithm, checksum_value, scene, shot, take, date_imported,
                             date_taken, camera_make, camera_model, backup_locations, log_id,
-                            is_working_copy, original_path, width, height, duration_seconds,
-                            lens_model, focal_length, video_metadata, rating)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           is_working_copy, original_path, width, height, duration_seconds,
+                           lens_model, focal_length, video_metadata, rating, tags, notes)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (asset.asset_id, asset.project_id, asset.file_path, asset.file_name,
                          asset.file_size, asset.file_type, asset.asset_type,
                          asset.checksum_algorithm, asset.checksum_value,
@@ -664,7 +677,7 @@ class DatabaseService:
                          asset.original_path,
                          asset.width, asset.height, asset.duration_seconds,
                          asset.lens_model, asset.focal_length, asset.video_metadata,
-                         asset.rating)
+                         asset.rating, asset.tags, asset.notes)
                     )
                 logger.info(f"批量添加素材资产: {len(assets)} 个")
                 return len(assets)
@@ -703,7 +716,7 @@ class DatabaseService:
                        'is_working_copy', 'original_path',
                        'width', 'height', 'duration_seconds',
                        'lens_model', 'focal_length', 'video_metadata',
-                       'rating']:
+                       'rating', 'tags', 'notes']:
                 if key == 'backup_locations' and isinstance(value, list):
                     value = "|".join(value)
                 if key == 'is_working_copy' and isinstance(value, bool):
@@ -907,12 +920,14 @@ class DatabaseService:
         keyword: Optional[str] = None,
         log_id: Optional[str] = None,
         rating: Optional[int] = None,
+        tag: Optional[str] = None,
         limit: Optional[int] = None
     ) -> List[MediaAsset]:
         """搜索素材
 
         Args:
             rating: 按 rating 过滤（>=rating）。None 表示不过滤。
+            tag: 按自定义标签模糊过滤（tags 字段包含该关键字）。
             limit: 返回结果上限。None 表示不限制；达到上限时调用方应提示用户缩小条件。
         """
         with self._connection() as conn:
@@ -946,6 +961,9 @@ class DatabaseService:
             if rating is not None and rating > 0:
                 query += " AND rating >= ?"
                 params.append(rating)
+            if tag:
+                query += " AND tags LIKE ?"
+                params.append(f"%{tag}%")
 
             query += " ORDER BY date_imported DESC"
             if limit is not None and limit > 0:
@@ -1021,6 +1039,70 @@ class DatabaseService:
                 "backup_job_count": backup_job_count,
                 "backed_up_count": backed_up_count,
             }
+
+    # ===== 操作审计日志 =====
+
+    def record_operation(
+        self,
+        event: str,
+        detail: str = "",
+        project_id: Optional[str] = None
+    ) -> bool:
+        """记录一条操作审计日志（导入/备份/重命名/评级等关键操作）。
+
+        Args:
+            event: 事件类型（如 "导入素材"、"数据备份"）
+            detail: 事件详情（如成功/失败统计）
+            project_id: 关联项目（可空）
+
+        Returns:
+            是否写入成功
+        """
+        try:
+            with self._transaction() as conn:
+                conn.execute(
+                    "INSERT INTO operation_logs (log_id, project_id, event, detail, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (str(uuid.uuid4())[:8], project_id, event, detail,
+                     datetime.now().isoformat())
+                )
+                return True
+        except Exception as e:
+            logger.error(f"记录操作日志失败: {e}")
+            return False
+
+    def get_recent_operations(
+        self,
+        limit: int = 10,
+        project_id: Optional[str] = None
+    ) -> List[dict]:
+        """获取最近的操作审计日志（按时间倒序）。"""
+        with self._connection() as conn:
+            if project_id:
+                rows = conn.execute(
+                    "SELECT * FROM operation_logs WHERE project_id = ? "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (project_id, limit)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM operation_logs ORDER BY created_at DESC LIMIT ?",
+                    (limit,)
+                ).fetchall()
+            results = []
+            for r in rows:
+                try:
+                    created_at = datetime.fromisoformat(r["created_at"])
+                except ValueError:
+                    created_at = None
+                results.append({
+                    "log_id": r["log_id"],
+                    "project_id": r["project_id"],
+                    "event": r["event"],
+                    "detail": r["detail"],
+                    "created_at": created_at,
+                })
+            return results
 
     # ===== 备份作业持久化 =====
 
@@ -1238,4 +1320,6 @@ class DatabaseService:
             focal_length=row["focal_length"] if "focal_length" in row.keys() else "",
             video_metadata=row["video_metadata"] if "video_metadata" in row.keys() else "",
             rating=row["rating"] if "rating" in row.keys() else 0,
+            tags=row["tags"] if "tags" in row.keys() else "",
+            notes=row["notes"] if "notes" in row.keys() else "",
         )

@@ -308,6 +308,17 @@ class MediaImportService:
             "details": details
         }
 
+        # 操作审计：记录本次导入结果（失败不影响导入本身）
+        try:
+            self.db_service.record_operation(
+                "导入素材",
+                f"共 {total} 个，成功 {imported}，跳过 {skipped}，失败 {failed}"
+                + ("，已取消" if cancelled else ""),
+                project_id=project_id,
+            )
+        except Exception as e:
+            logger.warning(f"记录导入操作日志失败: {e}")
+
         logger.info(f"导入完成: 共 {total} 个, 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个, 取消: {cancelled}")
         return result
 

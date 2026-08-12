@@ -58,6 +58,21 @@ class TestThumbnailService(unittest.TestCase):
         )
         self.assertIsNone(data)
 
+    def test_cache_size_and_clear(self):
+        """cache_size 反映缓存占用，clear_cache 清空缓存文件"""
+        path = self._make_jpeg()
+        data = self.service._generate(str(path), "image", 64)
+        self.assertIsNotNone(data)
+        # 手动写入一个缓存文件（模拟异步生成完成后的落盘）
+        cache_file = self.service.cache_dir / "test_key_64.png"
+        cache_file.write_bytes(data)
+
+        self.assertGreater(self.service.cache_size(), 0)
+        removed = self.service.clear_cache()
+        self.assertEqual(removed, 1)
+        self.assertEqual(self.service.cache_size(), 0)
+        self.assertFalse(cache_file.exists())
+
     def _make_fake_raw(self, name="fake.arw"):
         """构造 Pillow 无法解码的伪 RAW 文件（模拟相机 RAW 容器）"""
         path = Path(self.temp_dir) / name

@@ -153,6 +153,13 @@ class MainWindow(QMainWindow):
         """创建菜单栏 — 提供帮助入口与新手向导重启"""
         menubar = self.menuBar()
 
+        # 设置菜单
+        settings_menu = menubar.addMenu("设置(&S)")
+        settings_action = settings_menu.addAction("设置…")
+        settings_action.setShortcut("Ctrl+,")
+        settings_action.setToolTip("缩略图缓存清理、最近路径管理与数据目录信息")
+        settings_action.triggered.connect(self._show_settings)
+
         # 帮助菜单
         help_menu = menubar.addMenu("帮助(&H)")
 
@@ -216,6 +223,12 @@ class MainWindow(QMainWindow):
             "<p>支持安全备份、校验和验证、JPG 筛选 RAW 提取、批量重命名、"
             "拍摄日志管理、素材检索与报告生成。</p>"
         )
+
+    def _show_settings(self):
+        """打开设置对话框"""
+        from DITWorkstation.Views.Widgets.settings_dialog import SettingsDialog
+        dialog = SettingsDialog(self)
+        dialog.exec()
 
     def _wrap_scrollable(self, view: QWidget) -> QScrollArea:
         """把视图包裹在 QScrollArea 中，内容超出时自动出现滚动条。
