@@ -2,7 +2,7 @@
 
 > 专业摄影数据管理桌面应用 — 从素材导入到报告生成的一站式 DIT 工作流
 
-DIT 工作站是一款面向影视与摄影行业的桌面端数据管理工具，为 DIT（数字影像工程师）提供从素材导入、备份、RAW 提取、重命名、拍摄日志、素材信息、检索到报告生成的完整工作流。基于 PySide6 构建原生桌面体验，使用 SQLite 进行本地数据持久化，支持高性能校验、跨平台 PDF 报告输出与单文件应用打包分发。
+DIT 工作站是一款面向影视与摄影行业的桌面端数据管理工具，为 DIT（数字影像工程师）提供从素材导入、备份、RAW 提取、重命名、拍摄日志、素材信息、检索到报告生成的完整工作流。基于 PySide6 构建原生桌面体验，使用 SQLite 进行本地数据持久化，支持高性能校验、跨平台 PDF 报告输出与一键打包分发（macOS onedir / Windows 单文件）。
 
 ---
 
@@ -161,7 +161,7 @@ DIT_tools/
 │   ├── DITWorkstation.spec         # PyInstaller 配置
 │   └── DITWorkstation.entitlements.plist  # macOS 签名权限
 ├── dist/                           # 打包产物（gitignore）
-│   ├── DITWorkstation.app          # macOS 应用包（约 45MB）
+│   ├── DITWorkstation.app          # macOS 应用包（onedir，约 130MB）
 │   └── DITWorkstation.dmg          # macOS 安装镜像
 └── DITWorkstation/
     ├── DITWorkstation/             # 应用主包
@@ -288,7 +288,7 @@ pytest DITWorkstationTests/ -v
 
 ## 📦 打包分发
 
-支持使用 PyInstaller 打包为单文件桌面应用，方便分发给非技术用户。
+支持使用 PyInstaller 一键打包为桌面应用，方便分发给非技术用户。
 
 ### macOS 打包
 
@@ -297,7 +297,7 @@ cd /path/to/DIT_tools
 bash build/build_macos.sh
 ```
 
-- **产物**：`dist/DITWorkstation.app`（单文件应用包，约 45MB，arm64 架构）+ `dist/DITWorkstation.dmg`（脚本自动生成）
+- **产物**：`dist/DITWorkstation.app`（onedir 应用包，约 130MB，arm64 架构；依赖置于 `Contents/Frameworks`，启动更快）+ `dist/DITWorkstation.dmg`（脚本自动生成，约 57MB）
 - **要求**：macOS 主机、Python 3.11+、MediaInfo（`brew install mediainfo`，可选；打包态优先使用随包分发的动态库）
 - **签名**：adhoc 签名（Hardened Runtime），分发时需 Apple Developer ID 正式签名才能通过 Gatekeeper
 - **数据目录**：`~/Library/Application Support/DITWorkstation/`

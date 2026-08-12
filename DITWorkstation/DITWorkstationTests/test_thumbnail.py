@@ -101,7 +101,11 @@ class TestThumbnailService(unittest.TestCase):
     def test_raw_without_preview_returns_none(self):
         """RAW 既无内嵌预览也未安装 rawpy 时返回 None（不抛异常）"""
         raw_path = self._make_fake_raw()
-        with mock.patch("exifread.process_file", return_value={}):
+        # 显式把 rawpy 标记为"未安装"：rawpy 装上后真实 import 会引入
+        # numpy，在 macOS 上 PySide6 退出阶段偶发 SIGSEGV（测试已通过但
+        # 进程退出码 139，会中止打包脚本）；本测试场景本就是 rawpy 缺失
+        with mock.patch.dict(sys.modules, {"rawpy": None}), \
+             mock.patch("exifread.process_file", return_value={}):
             data = self.service._gen_image(str(raw_path), 32)
         self.assertIsNone(data)
 

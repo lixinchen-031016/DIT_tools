@@ -68,6 +68,9 @@ echo "=== [5/6] 执行 PyInstaller 打包 ==="
 # 清理旧的 PyInstaller 工作目录与产物（工作目录是 build/DITWorkstation，不是 build/dist）
 rm -rf build/DITWorkstation dist 2>/dev/null || true
 pyinstaller build/DITWorkstation.spec --noconfirm --clean
+# onedir 模式会额外产出 COLLECT 副产品目录 dist/DITWorkstation（与 .app 内容重复），
+# 只保留 .app 与 .dmg 作为分发产物
+rm -rf dist/DITWorkstation
 
 echo "=== [6/6] 生成 DMG（可选） ==="
 if command -v hdiutil >/dev/null 2>&1 && [[ -d "dist/DITWorkstation.app" ]]; then

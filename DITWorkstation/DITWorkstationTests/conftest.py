@@ -35,9 +35,52 @@ def _reset_global_state():
     """
     reset_singletons()
     reset_session_state()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _qt_cleanup_session():
+    """会话结束、解释器退出前显式收尾 Qt。
+
+    macOS 真实 GUI 会话下，PySide6 若把残留的 QWidget 包装器留到
+    Py_Finalize 阶段由 runCleanupFunctions 统一析构，会偶发 SIGSEGV
+    （QPushButtonWrapper 二次析构，KERN_INVALID_ADDRESS；测试已全部
+    通过但进程退出码为 139，会中止打包脚本）。在 pytest 完成前显式
+    销毁全部顶层控件、冲刷 DeferredDelete 事件并销毁 QApplication，
+    确保 BindingManager 中无存活包装器，消除该竞态。
+    """
     yield
-    reset_singletons()
-    reset_session_state()
+    try:
+        from PySide6.QtCore import QEventLoop, QThreadPool, QTimer
+        try:
+            QThreadPool.globalInstance().waitForDone(5000)
+        except Exception:
+            pass
+        app = QApplication.instance()
+        if app is not None:
+            for w in list(app.topLevelWidgets()):
+                try:
+                    w.hide()
+                    w.deleteLater()
+                except RuntimeError:
+                    pass
+            app.processEvents()
+            loop = QEventLoop()
+            QTimer.singleShot(0, loop.quit)
+            loop.exec()
+            app.processEvents()
+            app.quit()
+    except Exception:
+        pass
+    # 在解释器终结前显式释放并销毁 QApplication（shiboken 会立即删除
+    # 底层 C++ 对象）。若留到 Py_Finalize 阶段由 Python 模块级 _app
+    # 引用触发析构，macOS 上会偶发 SIGSEGV。
+    global _app
+    _app = None
+    try:
+        import gc
+        gc.collect()
+    except Exception:
+        pass
 
 
 @pytest.fixture
