@@ -36,6 +36,9 @@ def _collect_mediainfo_binaries():
             "/usr/local/lib/libmediainfo.dylib",
         ]
     elif system == "Windows":
+        configured = os.environ.get("MEDIAINFO_DLL")
+        if configured:
+            candidates.append(configured)
         pf64 = os.environ.get("ProgramW6432") or os.environ.get("ProgramFiles")
         pf32 = os.environ.get("ProgramFiles(x86)")
         if pf64:

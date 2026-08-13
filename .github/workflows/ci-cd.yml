@@ -196,26 +196,30 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: 安装 MediaInfo（供视频元数据功能打包进 .exe）
-        # choco 的 mediainfo 包仅把 DLL 放在 chocolatey 的 tools 目录，
-        # 而 spec 只探测 C:\Program Files\MediaInfo\MediaInfo.dll，
-        # 故安装后需复制到该路径，确保 PyInstaller 能把 .dll 打进 .exe；
-        # 同时把 chocolatey bin 加入 PATH，使后续 build 脚本的 where mediainfo 检测通过
+        # mediainfo 是 CLI 包，不保证提供 pymediainfo 所需的 MediaInfo.dll。
+        # GUI 包包含官方 DLL，直接导出其实际路径给 PyInstaller，避免依赖固定安装目录。
         shell: pwsh
         run: |
-          choco install mediainfo --yes
+          choco install mediainfo-gui --yes --no-progress
           $chocoRoot = if ($env:ChocolateyInstall) { $env:ChocolateyInstall } else { "C:\ProgramData\chocolatey" }
-          # 定位 choco 安装的 MediaInfo.dll 所在目录（通常在 ...\lib\mediainfo\tools\）
-          $dll = Get-ChildItem "$chocoRoot\lib\mediainfo" -Recurse -Filter MediaInfo.dll -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($dll) {
-            # 复制该目录下全部 .dll（MediaInfo.dll 及其依赖，如 libcurl 等），确保运行时可加载
-            New-Item -ItemType Directory -Force -Path "C:\Program Files\MediaInfo" | Out-Null
-            Get-ChildItem $dll.DirectoryName -Filter *.dll | ForEach-Object { Copy-Item $_.FullName "C:\Program Files\MediaInfo\$($_.Name)" }
-            Write-Host "已复制 MediaInfo 相关 DLL -> C:\Program Files\MediaInfo\"
-          } else {
-            Write-Host "警告：安装后仍找不到 MediaInfo.dll，视频元数据功能将受限"
+          $roots = @(
+            (Join-Path $env:ProgramFiles "MediaInfo"),
+            (Join-Path ${env:ProgramFiles(x86)} "MediaInfo"),
+            (Join-Path $chocoRoot "lib\mediainfo-gui"),
+            (Join-Path $chocoRoot "lib\mediainfo")
+          ) | Where-Object { $_ -and (Test-Path $_) }
+          $dll = $roots |
+            ForEach-Object { Get-ChildItem $_ -Recurse -File -Filter MediaInfo.dll -ErrorAction SilentlyContinue } |
+            Select-Object -First 1
+          if (-not $dll) {
+            Write-Host "MediaInfo 安装目录内容："
+            Get-ChildItem "$chocoRoot\lib" -Recurse -File -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -match "MediaInfo|mediainfo" } |
+              Select-Object -First 50 FullName
+            throw "安装后找不到 MediaInfo.dll"
           }
-          $chocoBin = "$chocoRoot\bin"
-          if (Test-Path $chocoBin) { echo "$chocoBin" >> $env:GITHUB_PATH }
+          Write-Host "使用 MediaInfo.dll: $($dll.FullName)"
+          "MEDIAINFO_DLL=$($dll.FullName)" >> $env:GITHUB_ENV
 
       - name: 安装依赖并执行 PyInstaller 打包
         shell: cmd

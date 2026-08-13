@@ -38,10 +38,18 @@ if errorlevel 1 (
     exit /b 1
 )
 
-where mediainfo >nul 2>&1
-if errorlevel 1 (
-    echo 警告：未安装 MediaInfo，视频元数据功能将受限
-    echo       请从 https://mediaarea.net/en/MediaInfo 下载安装
+if defined MEDIAINFO_DLL (
+    if not exist "%MEDIAINFO_DLL%" (
+        echo 错误：MediaInfo.dll 路径无效：%MEDIAINFO_DLL%
+        exit /b 1
+    )
+    echo MediaInfo.dll: %MEDIAINFO_DLL%
+) else (
+    where mediainfo >nul 2>&1
+    if errorlevel 1 (
+        echo 警告：未安装 MediaInfo，视频元数据功能将受限
+        echo       请从 https://mediaarea.net/en/MediaInfo 下载安装
+    )
 )
 
 echo === [2/5] 创建/复用 venv ===
