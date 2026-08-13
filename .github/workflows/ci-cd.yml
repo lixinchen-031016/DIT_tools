@@ -1,0 +1,276 @@
+# =============================================================================
+# DIT 工作站 — CI/CD 工作流
+# -----------------------------------------------------------------------------
+# 架构分析（依据 README.md / requirements.txt / build/ / DITWorkstation/）：
+#   - 类型    : 跨平台桌面应用（PySide6 / Qt GUI），非服务端程序
+#   - 运行时  : Python 3.11+（README 推荐 3.13）
+#   - 技术栈  : PySide6 6.11.1、SQLite（WAL 本地持久化）、xxhash、Pillow、
+#              ExifRead、pymediainfo、reportlab；PyInstaller 打包；pytest 测试
+#   - 目录结构: DITWorkstation/ 为主包，DITWorkstation/DITWorkstationTests/ 为
+#              测试套件（252 个用例，offscreen 无头运行）；build/ 为打包脚本与
+#              PyInstaller spec；dist/ 为产物
+#   - 构建命令: macOS → bash build/build_macos.sh   (产物 .app + .dmg)
+#              Windows → build\build_windows.bat     (产物 .exe)
+#   - 测试命令: cd DITWorkstation && pytest DITWorkstationTests/ -v
+#   - 部署目标: 桌面分发产物（PyInstaller 不支持交叉编译，需在各平台原生构建），
+#              统一发布到 GitHub Releases（nightly 预发布 + 正式 tag 发布）
+#
+# 触发条件 : 推送 main 分支 / 推送 v* 标签 / 向 main 发起 PR / 手动触发
+# 作业依赖 : test →(通过后才)→ build-macos / build-windows →(汇合)→ deploy
+# 条件部署 : 仅「推送至本仓库 main 或 tag」时执行 deploy，PR 与 fork 不部署
+#
+# 需要的 Secrets（在仓库 Settings → Secrets and variables 中配置）：
+#   MACOS_SIGN_CERT_P12      (可选) Developer ID Application 证书 .p12，base64 存储
+#   MACOS_SIGN_CERT_PASSWORD (可选) .p12 导出密码
+#   MACOS_NOTARIZE_APPLE_ID  (可选) 公证用 Apple ID
+#   MACOS_NOTARIZE_PASSWORD  (可选) App 专用密码
+#   MACOS_NOTARIZE_TEAM_ID   (可选) 10 位 Team ID
+#   WINDOWS_SIGN_PFX         (可选) 代码签名证书 .pfx，base64 存储
+#   WINDOWS_SIGN_PASSWORD    (可选) .pfx 密码
+#   （GITHUB_TOKEN 由 GitHub 自动注入，无需手动配置；deploy 已申请 contents:write）
+# =============================================================================
+
+name: CI/CD - DIT 工作站
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+# 同一分支/PR 只保留最新一次运行，取消进行中的旧运行，节省资源
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"        # 与 build 脚本最低要求 3.11+ 对齐
+  APP_NAME: "DITWorkstation"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) 测试门禁：Ubuntu + 无头 Qt，快速反馈，PR 也可运行（无需密钥）
+  # ---------------------------------------------------------------------------
+  test:
+    name: 测试 (Ubuntu, Python ${{ env.PYTHON_VERSION }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 安装系统依赖 (Qt offscreen 运行所需)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglib2.0-0 libegl1 libxkbcommon0 libdbus-1-3 \
+            libx11-6 libxext6 libxrender1 libxcb1 libx11-xcb1 \
+            libxau6 libxdmcp6 libfontconfig1 libicu70 libgl1-mesa-dri
+
+      - name: 安装 Python 依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 运行单元测试 (headless / offscreen)
+        env:
+          QT_QPA_PLATFORM: offscreen   # conftest 也会默认设置，此处显式保证
+        run: |
+          cd DITWorkstation
+          pytest DITWorkstationTests/ -v --junitxml=../test-report.xml
+
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: test-report.xml
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 2) 构建 macOS 原生产物（.app + .dmg），依赖测试通过
+  # ---------------------------------------------------------------------------
+  build-macos:
+    name: 构建 macOS (.app / .dmg)
+    needs: test
+    runs-on: macos-latest
+    env:
+      # 可选签名/公证密钥（未配置时跳过签名步骤，产物为 adhoc 签名）
+      MACOS_SIGN_CERT_P12: ${{ secrets.MACOS_SIGN_CERT_P12 }}
+      MACOS_SIGN_CERT_PASSWORD: ${{ secrets.MACOS_SIGN_CERT_PASSWORD }}
+      MACOS_NOTARIZE_APPLE_ID: ${{ secrets.MACOS_NOTARIZE_APPLE_ID }}
+      MACOS_NOTARIZE_PASSWORD: ${{ secrets.MACOS_NOTARIZE_PASSWORD }}
+      MACOS_NOTARIZE_TEAM_ID: ${{ secrets.MACOS_NOTARIZE_TEAM_ID }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 安装依赖并执行 PyInstaller 打包
+        # 脚本内部会自建 venv、安装依赖、运行测试、产出 dist/DITWorkstation.app(.dmg)
+        run: bash build/build_macos.sh
+
+      # ---- 可选：Apple 开发者签名 + 公证（仅当配置了证书 Secrets 时执行）----
+      - name: 导入证书并签名/公证
+        if: env.MACOS_SIGN_CERT_P12 != ''
+        env:
+          CERT_P12: ${{ secrets.MACOS_SIGN_CERT_P12 }}
+          CERT_PWD: ${{ secrets.MACOS_SIGN_CERT_PASSWORD }}
+          AC_USER: ${{ secrets.MACOS_NOTARIZE_APPLE_ID }}
+          AC_PWD: ${{ secrets.MACOS_NOTARIZE_PASSWORD }}
+          AC_TEAM: ${{ secrets.MACOS_NOTARIZE_TEAM_ID }}
+        run: |
+          echo "$CERT_P12" | base64 -d > /tmp/sign.p12
+          KEYCHAIN=build.keychain-db
+          security create-keychain -p "$CERT_PWD" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "$CERT_PWD" "$KEYCHAIN"
+          security import /tmp/sign.p12 -k "$KEYCHAIN" -P "$CERT_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$CERT_PWD" "$KEYCHAIN"
+          rm -f /tmp/sign.p12
+          codesign --force --options runtime --timestamp \
+            --sign "Developer ID Application" dist/DITWorkstation.app
+          if command -v xcrun >/dev/null 2>&1 && [ -n "$AC_USER" ]; then
+            hdiutil create -volname "DIT工作站" -srcfolder dist/DITWorkstation.app \
+              -ov -format UDZO dist/DITWorkstation.dmg
+            xcrun notarytool submit dist/DITWorkstation.dmg \
+              --apple-id "$AC_USER" --password "$AC_PWD" --team-id "$AC_TEAM" --wait
+            xcrun stapler staple dist/DITWorkstation.dmg
+          fi
+
+      - name: 上传 macOS 构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dist
+          path: |
+            dist/DITWorkstation.app
+            dist/DITWorkstation.dmg
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # 3) 构建 Windows 原生产物（.exe），依赖测试通过
+  # ---------------------------------------------------------------------------
+  build-windows:
+    name: 构建 Windows (.exe)
+    needs: test
+    runs-on: windows-latest
+    env:
+      # 可选签名密钥（未配置时跳过签名步骤）
+      WINDOWS_SIGN_PFX: ${{ secrets.WINDOWS_SIGN_PFX }}
+      WINDOWS_SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 安装依赖并执行 PyInstaller 打包
+        shell: cmd
+        run: build\build_windows.bat
+
+      # ---- 可选：Windows 代码签名（仅当配置了 PFX Secrets 时执行）----
+      - name: 签名 Windows 可执行文件
+        if: env.WINDOWS_SIGN_PFX != ''
+        env:
+          PFX: ${{ secrets.WINDOWS_SIGN_PFX }}
+          PFX_PWD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
+        shell: pwsh
+        run: |
+          [System.Convert]::FromBase64String($env:PFX) | Set-Content -Encoding Byte dist/DITWorkstation.exe.pfx
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Select-Object -First 1
+          if (-not $signtool) { Write-Error "未找到 signtool.exe"; exit 1 }
+          & $signtool.FullName sign /f dist/DITWorkstation.exe.pfx /p "$env:PFX_PWD" `
+            /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 dist/DITWorkstation.exe
+
+      - name: 上传 Windows 构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-dist
+          path: dist/DITWorkstation.exe
+          if-no-files-found: error   # .exe 是核心产物，缺失即视为失败
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # 4) 条件部署：仅「推送至本仓库 main 或 tag」时，发布到 GitHub Releases
+  #    - 推送 v* 标签 → 正式 Release（非预发布）
+  #    - 推送 main   → 滚动 nightly 预发布（覆盖上一次 nightly）
+  #    - 仅 PR / fork → 不执行（needs 链已保证产物只在 push 时汇合部署）
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: 发布到 GitHub Releases
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'push' &&
+      github.repository == 'lixinchen-031016/DIT_tools'
+    permissions:
+      contents: write   # 创建 Release 所需
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载 macOS 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-dist
+          path: artifacts/macos
+
+      - name: 下载 Windows 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-dist
+          path: artifacts/windows
+
+      - name: 计算发布元数据
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "tag=${GITHUB_REF_NAME}"        >> "$GITHUB_OUTPUT"
+            echo "prerelease=false"              >> "$GITHUB_OUTPUT"
+            echo "title=DIT 工作站 ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=nightly"                   >> "$GITHUB_OUTPUT"
+            echo "prerelease=true"               >> "$GITHUB_OUTPUT"
+            echo "title=DIT 工作站 nightly (${GITHUB_SHA::7})" >> "$GITHUB_OUTPUT"
+            # 清理上一次 nightly，保持单一滚动预发布
+            gh release delete nightly --yes || true
+            git push --delete origin nightly 2>/dev/null || true
+          fi
+
+      - name: 发布到 GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ steps.meta.outputs.title }}" \
+            --generate-notes \
+            $([ "${{ steps.meta.outputs.prerelease }}" = "true" ] && echo "--prerelease") \
+            "artifacts/macos/DITWorkstation.dmg" \
+            "artifacts/macos/DITWorkstation.app" \
+            "artifacts/windows/DITWorkstation.exe"

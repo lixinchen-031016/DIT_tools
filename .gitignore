@@ -1,0 +1,76 @@
+# ============================================================
+# DIT 工作站 — .gitignore
+# 保护构建产物、虚拟环境、开发数据库、缓存与 IDE/系统文件
+# 注意：build/ 目录下的打包脚本（*.sh / *.bat / *.spec / *.plist / *.manifest）
+#       是源码，需纳入版本控制，仅忽略 PyInstaller 的工作子目录 build/DITWorkstation/
+# ============================================================
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*$py.class
+*.egg-info/
+.eggs/
+*.egg
+pip-wheel-metadata/
+
+# ---------- 虚拟环境 ----------
+.venv/
+venv/
+env/
+ENV/
+
+# ---------- 打包产物 (PyInstaller) ----------
+dist/
+# PyInstaller 工作目录（非源码脚本，build/ 下的打包脚本需保留）
+build/DITWorkstation/
+# macOS 应用包 / 安装镜像（产物）
+*.app/
+*.dmg
+# Windows 可执行文件（产物）
+*.exe
+.DS_Store
+
+# ---------- 开发模式数据库与日志 ----------
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.log
+data/*.json
+# 如需保留 data/ 目录本身（无内容），取消下一行注释：
+# !data/.gitkeep
+
+# ---------- 测试缓存 ----------
+.pytest_cache/
+.cache/
+.coverage
+htmlcov/
+*.cover
+
+# ---------- IDE / 编辑器 ----------
+.idea/
+.trae/
+.reasonix/
+.vscode/
+
+# ---------- 系统文件 ----------
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---------- 临时文件 ----------
+*.tmp
+*.bak
+*~
+
+# ---------- 密钥 / 证书（切勿提交）----------
+*.p12
+*.pfx
+*.key
+*.pem
+secrets.*
