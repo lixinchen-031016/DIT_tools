@@ -32,6 +32,7 @@ class BackupService:
         self._cancelled_lock = threading.Lock()
         self._executor: Optional[ThreadPoolExecutor] = None
         self._executor_lock = threading.Lock()
+        self._persist_lock = threading.Lock()
 
     def scan_source(self, source_path: str) -> List[Dict]:
         """
@@ -275,6 +276,7 @@ class BackupService:
         """
         self._set_cancelled(False)
         job.status = BackupStatus.RUNNING
+        job.completed_at = None
         source = Path(job.source_path)
 
         files = getattr(job, '_files_cache', None)
@@ -285,7 +287,17 @@ class BackupService:
         target_count = len(job.targets)
         if target_count == 0:
             job.status = BackupStatus.FAILED
+            self._persist_snapshot(job, project_id)
             return job
+
+        for target in job.targets:
+            target.pending_files = [
+                f.get("relative", Path(f["path"]).name) for f in files
+            ]
+            target.failed_files = []
+            target.status = CopyStatus.PENDING
+            target.error_message = ""
+        self._persist_snapshot(job, project_id)
 
         with self._executor_lock:
             if self._executor:
@@ -297,7 +309,8 @@ class BackupService:
             future = self._executor.submit(
                 self._copy_to_target,
                 source, files, target, job.algorithm,
-                progress_callback, file_completed_callback, verify
+                progress_callback, file_completed_callback, verify,
+                lambda: self._persist_snapshot(job, project_id)
             )
             futures[future] = target
 
@@ -362,6 +375,7 @@ class BackupService:
                 failed_files=list(
                     failed_by_target.get(t["path"], t.get("failed_files", []))
                 ),
+                pending_files=list(t.get("pending_files", [])),
             ))
         return job
 
@@ -401,6 +415,7 @@ class BackupService:
 
         self._set_cancelled(False)
         job.status = BackupStatus.RUNNING
+        job.completed_at = None
         files = self.scan_source(job.source_path)
         file_by_rel = {f["relative"]: f for f in files}
 
@@ -415,7 +430,10 @@ class BackupService:
             target.status = CopyStatus.COPYING
             failed_files = [file_by_rel[r] for r in target.failed_files if r in file_by_rel]
             missing = [r for r in target.failed_files if r not in file_by_rel]
-            target.failed_files = []
+            target.failed_files = list(missing)
+            target.pending_files = [
+                f.get("relative", Path(f["path"]).name) for f in failed_files
+            ]
             target.error_message = ""
             if missing:
                 target.error_message = (
@@ -429,7 +447,8 @@ class BackupService:
             future = self._executor.submit(
                 self._copy_to_target,
                 Path(job.source_path), failed_files, target, job.algorithm,
-                progress_callback, file_completed_callback, verify
+                progress_callback, file_completed_callback, verify,
+                lambda: self._persist_snapshot(job, project_id)
             )
             futures[future] = target
 
@@ -449,6 +468,16 @@ class BackupService:
 
         return self._finalize_and_persist(job, files, project_id, operation_event="备份重试")
 
+    def _persist_snapshot(self, job: BackupJob, project_id: Optional[str]):
+        """持久化运行中任务快照；失败不阻断文件拷贝。"""
+        if self.db_service is None:
+            return
+        try:
+            with self._persist_lock:
+                self.db_service.save_backup_job(job, project_id=project_id)
+        except Exception as exc:
+            logger.error(f"备份运行快照持久化失败（不影响文件备份）: {exc}")
+
     def _finalize_and_persist(
         self,
         job: BackupJob,
@@ -457,6 +486,17 @@ class BackupService:
         operation_event: str = "数据备份"
     ) -> BackupJob:
         """汇总作业状态、持久化并回写 asset.backup_locations（execute/retry 共用）。"""
+        # 取消/进程中断留下的 pending 文件必须进入重试列表，不能被静默丢弃。
+        for target in job.targets:
+            if target.pending_files:
+                target.failed_files = list(dict.fromkeys(
+                    list(target.failed_files) + list(target.pending_files)
+                ))
+                target.pending_files = []
+                if target.status == CopyStatus.CANCELLED:
+                    target.status = CopyStatus.FAILED
+                if not target.error_message:
+                    target.error_message = "任务中断，未完成文件已转入重试队列"
         completed = all(t.status == CopyStatus.COMPLETED for t in job.targets)
         any_failed = any(t.status == CopyStatus.FAILED for t in job.targets)
 
@@ -500,7 +540,8 @@ class BackupService:
         algorithm: ChecksumAlgorithm,
         progress_callback: Optional[Callable],
         file_completed_callback: Optional[Callable],
-        verify: Optional[bool] = None
+        verify: Optional[bool] = None,
+        persist_callback: Optional[Callable[[], None]] = None,
     ):
         """拷贝文件到单个目标。
 
@@ -536,6 +577,11 @@ class BackupService:
             except OSError as e:
                 failed_files.append(relative)
                 failed_errors[relative] = f"无法创建目录: {e}"
+                if relative in target.pending_files:
+                    target.pending_files.remove(relative)
+                target.failed_files = list(failed_files)
+                if persist_callback:
+                    persist_callback()
                 continue
 
             try:
@@ -557,6 +603,10 @@ class BackupService:
                         ):
                             target.completed_files += 1
                             target.copied_bytes += file_info["size"]
+                            if relative in target.pending_files:
+                                target.pending_files.remove(relative)
+                            if persist_callback:
+                                persist_callback()
                             if file_completed_callback:
                                 task = CopyTask(
                                     source_path=str(src_file),
@@ -601,6 +651,10 @@ class BackupService:
 
                 target.completed_files += 1
                 target.copied_bytes += file_info["size"]
+                if relative in target.pending_files:
+                    target.pending_files.remove(relative)
+                if persist_callback:
+                    persist_callback()
 
                 elapsed = checksum_time - start_time
                 speed = calculate_speed(elapsed, file_info["size"])
@@ -624,6 +678,11 @@ class BackupService:
             except Exception as e:
                 failed_files.append(relative)
                 failed_errors[relative] = str(e)
+                if relative in target.pending_files:
+                    target.pending_files.remove(relative)
+                target.failed_files = list(failed_files)
+                if persist_callback:
+                    persist_callback()
                 logger.error(f"文件拷贝失败 {relative}: {e}")
                 # 清理残缺/损坏的目标文件，避免残留半成品影响后续复检
                 try:
@@ -635,6 +694,8 @@ class BackupService:
             target.status = CopyStatus.CANCELLED
             return
         target.failed_files = failed_files
+        if persist_callback:
+            persist_callback()
         if failed_files:
             target.status = CopyStatus.FAILED
             shown = "；".join(

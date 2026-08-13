@@ -2,6 +2,7 @@
 import sqlite3
 import threading
 import uuid
+import shutil
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -27,11 +28,14 @@ class DatabaseService:
         # 线程级连接池：每个线程复用同一连接，避免高频操作反复建连 + 重复设置 PRAGMA
         self._conns: dict = {}
         self._conns_lock = threading.Lock()
+        self._had_existing_db = self.db_path.exists() and self.db_path.stat().st_size > 0
         self._init_db()
 
     def _create_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
+        # 外键约束必须在每条连接上启用，SQLite 默认关闭该选项。
+        conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA cache_size=-20000")
@@ -44,11 +48,31 @@ class DatabaseService:
     def _get_conn(self) -> sqlite3.Connection:
         """获取当前线程的复用连接（连接池）。"""
         tid = threading.get_ident()
+        current_thread = threading.current_thread()
         with self._conns_lock:
-            conn = self._conns.get(tid)
+            # worker 线程结束后清理其连接，避免长期运行时连接表只增不减。
+            dead = [old_tid for old_tid, (thread, _conn) in self._conns.items()
+                    if old_tid != tid and not thread.is_alive()]
+            for old_tid in dead:
+                _thread, old_conn = self._conns.pop(old_tid)
+                try:
+                    old_conn.close()
+                except sqlite3.Error:
+                    pass
+
+            entry = self._conns.get(tid)
+            if entry and entry[0] is not current_thread:
+                # 线程 ID 可能被操作系统复用，不能把旧线程的连接交给新线程。
+                try:
+                    entry[1].close()
+                except sqlite3.Error:
+                    pass
+                self._conns.pop(tid, None)
+                entry = None
+            conn = entry[1] if entry else None
             if conn is None:
                 conn = self._create_conn()
-                self._conns[tid] = conn
+                self._conns[tid] = (current_thread, conn)
             return conn
 
     @contextmanager
@@ -219,11 +243,22 @@ class DatabaseService:
     def close_all(self):
         """关闭连接池中所有连接（测试/退出时调用）。"""
         with self._conns_lock:
-            conns = list(self._conns.values())
+            conns = [conn for _thread, conn in self._conns.values()]
             self._conns.clear()
         for conn in conns:
             try:
                 conn.close()
+            except sqlite3.Error:
+                pass
+
+    def close_current_thread(self):
+        """关闭当前线程的连接，供长任务线程在退出前显式调用。"""
+        tid = threading.get_ident()
+        with self._conns_lock:
+            entry = self._conns.pop(tid, None)
+        if entry:
+            try:
+                entry[1].close()
             except sqlite3.Error:
                 pass
 
@@ -240,6 +275,8 @@ class DatabaseService:
         conn = self._create_conn()
         try:
             version = self._get_user_version(conn)
+            if version < self._DB_VERSION and self._had_existing_db:
+                self._backup_before_migration(conn)
             if version < 1:
                 self._migrate_v1(conn)
                 self._set_user_version(conn, 1)
@@ -251,9 +288,72 @@ class DatabaseService:
 
             # 向后兼容：旧项目（workspace_id 为 NULL）自动归入"默认工作区"
             self._migrate_legacy_projects_to_default_workspace(conn)
+            self._recover_interrupted_backup_jobs(conn)
             conn.commit()
         finally:
             conn.close()
+
+    def _backup_before_migration(self, conn):
+        """在升级旧库前生成可恢复副本，避免迁移失败后只能人工抢救。"""
+        backup_path = self.db_path.with_suffix(self.db_path.suffix + ".pre-migration.bak")
+        try:
+            # SQLite backup API 会同时读取主库和 WAL，生成一致快照；
+            # 直接复制 .db 可能遗漏尚未合并到主库的数据。
+            backup_conn = sqlite3.connect(str(backup_path))
+            try:
+                conn.backup(backup_conn)
+                backup_conn.commit()
+            finally:
+                backup_conn.close()
+            logger.info(f"数据库迁移前备份已生成: {backup_path}")
+        except (OSError, sqlite3.Error) as exc:
+            raise RuntimeError(f"无法创建数据库迁移备份: {exc}") from exc
+
+    @staticmethod
+    def _recover_interrupted_backup_jobs(conn):
+        """把上次进程退出时仍为 running 的备份转为可重试状态。"""
+        import json
+
+        rows = conn.execute(
+            "SELECT job_id, targets_json FROM backup_jobs WHERE status = 'running'"
+        ).fetchall()
+        for row in rows:
+            try:
+                targets = json.loads(row["targets_json"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                targets = []
+            has_completed = False
+            for target in targets:
+                if target.get("status") == "completed":
+                    has_completed = True
+                    continue
+                pending = list(target.get("pending_files", []))
+                failed = list(target.get("failed_files", []))
+                for relative in pending:
+                    if relative not in failed:
+                        failed.append(relative)
+                target["failed_files"] = failed
+                target["pending_files"] = []
+                target["status"] = "failed"
+                target["error_message"] = (
+                    "应用在备份执行期间退出，未完成文件已转入重试队列"
+                )
+            status = "partial" if has_completed else "failed"
+            conn.execute(
+                "UPDATE backup_jobs SET status = ?, targets_json = ?, "
+                "failed_files_json = ?, completed_at = ? WHERE job_id = ?",
+                (
+                    status,
+                    json.dumps(targets, ensure_ascii=False),
+                    json.dumps([
+                        {"path": t.get("path", ""), "files": t.get("failed_files", [])}
+                        for t in targets if t.get("failed_files")
+                    ], ensure_ascii=False),
+                    datetime.now().isoformat(),
+                    row["job_id"],
+                ),
+            )
+            logger.warning(f"备份任务已标记为中断待重试: {row['job_id']}")
 
     @staticmethod
     def _get_user_version(conn) -> int:
@@ -470,6 +570,17 @@ class DatabaseService:
 
         try:
             with self._transaction() as conn:
+                default_exists = conn.execute(
+                    "SELECT 1 FROM workspaces WHERE workspace_id = 'default'"
+                ).fetchone()
+                if default_exists is None:
+                    now = datetime.now().isoformat()
+                    conn.execute(
+                        "INSERT INTO workspaces "
+                        "(workspace_id, name, path, description, created_at, updated_at) "
+                        "VALUES ('default', ?, '', ?, ?, ?)",
+                        ("默认工作区", "默认工作区", now, now),
+                    )
                 if reassign_to:
                     conn.execute(
                         "UPDATE projects SET workspace_id = ? WHERE workspace_id = ?",
@@ -513,19 +624,21 @@ class DatabaseService:
         workspace_id 指定所属工作区；为 None 时归入"默认工作区"（id='default'），
         保证新项目不会成为孤儿。
         """
-        # 兜底：未指定 workspace_id 时归入默认工作区
-        if workspace_id is None:
+        # 兜底：未指定 workspace_id，或显式指定 default 但旧库尚未建默认工作区时，
+        # 都确保默认工作区存在。
+        if workspace_id is None or workspace_id == "default":
             ws = self.get_workspace("default")
             if ws is None:
                 # 数据库刚初始化且无任何工作区时，先建默认工作区
-                ws = self.create_workspace(name="默认工作区", description="默认工作区")
-                # 强制其 ID 为 'default' 以保证幂等
+                now = datetime.now().isoformat()
                 with self._transaction() as conn:
                     conn.execute(
-                        "UPDATE workspaces SET workspace_id = 'default' WHERE workspace_id = ?",
-                        (ws.workspace_id,)
+                        "INSERT INTO workspaces "
+                        "(workspace_id, name, path, description, created_at, updated_at) "
+                        "VALUES ('default', ?, '', ?, ?, ?)",
+                        ("默认工作区", "默认工作区", now, now),
                     )
-                ws.workspace_id = "default"
+                ws = self.get_workspace("default")
             workspace_id = ws.workspace_id
 
         project = Project(
@@ -597,10 +710,17 @@ class DatabaseService:
         注意：backup_jobs 表无 project_id 外键，保留备份历史记录不级联删除。
         """
         with self._transaction() as conn:
-            conn.execute("DELETE FROM media_assets WHERE project_id = ?", (project_id,))
+            # 备份历史需要保留，但启用外键后必须先解除项目关联。
             conn.execute(
-                "DELETE FROM asset_tags WHERE asset_id NOT IN (SELECT asset_id FROM media_assets)"
+                "UPDATE backup_jobs SET project_id = NULL WHERE project_id = ?",
+                (project_id,)
             )
+            conn.execute(
+                "DELETE FROM asset_tags WHERE asset_id IN "
+                "(SELECT asset_id FROM media_assets WHERE project_id = ?)",
+                (project_id,)
+            )
+            conn.execute("DELETE FROM media_assets WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM shooting_logs WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
             logger.info(f"删除项目: {project_id}")
@@ -947,8 +1067,8 @@ class DatabaseService:
         """删除素材资产"""
         try:
             with self._transaction() as conn:
-                conn.execute("DELETE FROM media_assets WHERE asset_id = ?", (asset_id,))
                 conn.execute("DELETE FROM asset_tags WHERE asset_id = ?", (asset_id,))
+                conn.execute("DELETE FROM media_assets WHERE asset_id = ?", (asset_id,))
                 logger.info(f"删除素材资产: {asset_id}")
                 return True
         except Exception as e:
@@ -1385,6 +1505,15 @@ class DatabaseService:
             是否成功
         """
         import json
+        if project_id:
+            with self._connection() as conn:
+                exists = conn.execute(
+                    "SELECT 1 FROM projects WHERE project_id = ?", (project_id,)
+                ).fetchone()
+            if exists is None:
+                # 兼容未关联项目的历史调用，同时保持外键约束有效。
+                logger.warning(f"备份作业关联项目不存在，改为未关联: {project_id}")
+                project_id = None
         targets_json = json.dumps([
             {
                 "path": t.path,
@@ -1397,6 +1526,7 @@ class DatabaseService:
                 "verified": t.verified,
                 "error_message": t.error_message,
                 "failed_files": list(t.failed_files),
+                "pending_files": list(t.pending_files),
             } for t in job.targets
         ], ensure_ascii=False)
         failed_files_json = json.dumps([
@@ -1456,6 +1586,7 @@ class DatabaseService:
                 for t in targets:
                     # 兼容旧数据：未记录 failed_files 时视为空列表
                     t.setdefault("failed_files", [])
+                    t.setdefault("pending_files", [])
                 completed_at = None
                 if r["completed_at"]:
                     try:

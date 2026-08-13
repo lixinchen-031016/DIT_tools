@@ -98,6 +98,7 @@ class BackupTarget:
     verified: bool = False
     error_message: str = ""
     failed_files: List[str] = field(default_factory=list)  # 失败文件相对路径列表（供断点续传/重试）
+    pending_files: List[str] = field(default_factory=list)  # 尚未处理文件（异常恢复用）
 
 
 @dataclass

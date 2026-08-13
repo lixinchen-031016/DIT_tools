@@ -1,11 +1,13 @@
 """备份断点续传与失败重试测试"""
 import os
 import sqlite3
+import json
+from datetime import datetime
 
 from DITWorkstation.Services.backup_service import BackupService
 from DITWorkstation.Services.checksum_service import ChecksumService
 from DITWorkstation.Services.database_service import DatabaseService
-from DITWorkstation.Models import BackupStatus, CopyStatus
+from DITWorkstation.Models import BackupStatus, CopyStatus, BackupJob, BackupTarget
 
 
 def _make_sources(tmp_path, count=3, size=10000):
@@ -173,6 +175,46 @@ def test_migration_adds_failed_files_column(tmp_path):
         cols = [r["name"] for r in
                 conn.execute("PRAGMA table_info(backup_jobs)").fetchall()]
     assert "failed_files_json" in cols
+
+
+def test_migration_creates_recovery_backup(tmp_path):
+    """旧库迁移前生成 SQLite 一致性备份。"""
+    db_path = tmp_path / "old.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE marker (value TEXT)")
+    conn.execute("INSERT INTO marker VALUES ('before-migration')")
+    conn.commit()
+    conn.close()
+
+    DatabaseService(db_path=db_path)
+    backup = tmp_path / "old.db.pre-migration.bak"
+    assert backup.exists()
+    backup_conn = sqlite3.connect(str(backup))
+    assert backup_conn.execute("SELECT value FROM marker").fetchone()[0] == "before-migration"
+    backup_conn.close()
+
+
+def test_running_backup_is_recovered_as_retryable(tmp_path):
+    """数据库重新打开时，running 任务转为失败文件待重试状态。"""
+    db_path = tmp_path / "test.db"
+    db = DatabaseService(db_path=db_path)
+    job = BackupJob(
+        job_id="running-1", source_path=str(tmp_path / "src"),
+        status=BackupStatus.RUNNING, created_at=datetime.now(),
+        targets=[BackupTarget(
+            path=str(tmp_path / "dst"), status=CopyStatus.COPYING,
+            pending_files=["unfinished.dat"], total_files=2,
+        )], total_files=2,
+    )
+    # 以不存在 project_id 验证外键兼容处理，并保证任务仍可恢复。
+    assert db.save_backup_job(job, project_id="missing-project")
+    db.close_all()
+
+    recovered = DatabaseService(db_path=db_path)
+    raw = recovered.get_backup_job("running-1")
+    assert raw["status"] == "failed"
+    assert raw["targets"][0]["failed_files"] == ["unfinished.dat"]
+    assert raw["targets"][0]["pending_files"] == []
 
 
 def test_backup_history_ui_shows_failed_files(tmp_path, monkeypatch):

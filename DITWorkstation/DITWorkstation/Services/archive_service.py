@@ -4,11 +4,13 @@
 恢复：从归档 zip 重建项目、日志与素材记录，可选还原素材文件。
 """
 import json
+import os
 import shutil
+import tempfile
 import uuid
 import zipfile
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable, Dict, List, Optional
 
 from DITWorkstation.Models import MediaAsset, Project, ShootingLog
@@ -22,6 +24,8 @@ _ASSETS_JSON = "assets.json"
 _LOGS_JSON = "logs.json"
 _CHECKSUMS_TXT = "checksums.txt"
 _FILES_DIR = "files"
+_MAX_ARCHIVE_FILE_BYTES = 50 * 1024 * 1024 * 1024  # 50 GiB
+_MAX_ARCHIVE_TOTAL_BYTES = 200 * 1024 * 1024 * 1024  # 200 GiB
 
 
 class ArchiveService:
@@ -251,9 +255,16 @@ class ArchiveService:
             raise FileNotFoundError(f"归档文件不存在: {archive_path}")
 
         with zipfile.ZipFile(archive) as zf:
-            if _MANIFEST not in zf.namelist():
+            names = zf.namelist()
+            if _MANIFEST not in names:
                 raise ValueError("无效的归档包：缺少 manifest.json")
-            manifest = json.loads(zf.read(_MANIFEST))
+            self._validate_archive_members(zf)
+            try:
+                manifest = json.loads(zf.read(_MANIFEST))
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise ValueError("无效的归档包：manifest.json 不是有效 JSON") from exc
+            if not isinstance(manifest, dict) or not isinstance(manifest.get("project"), dict):
+                raise ValueError("无效的归档包：manifest.json 结构错误")
             if manifest.get("version") != _ARCHIVE_VERSION:
                 raise ValueError(
                     f"不支持的归档版本: {manifest.get('version')}（当前支持 {_ARCHIVE_VERSION}）"
@@ -271,20 +282,42 @@ class ArchiveService:
                     raise ValueError("归档包内含素材文件，请提供还原目录 files_dest")
                 dest_root = Path(files_dest)
                 dest_root.mkdir(parents=True, exist_ok=True)
-                for member in zf.infolist():
-                    if member.is_dir():
-                        continue
-                    if not member.filename.startswith(f"{_FILES_DIR}/"):
-                        continue
-                    rel = member.filename[len(_FILES_DIR) + 1:]
-                    target = dest_root / rel
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    try:
-                        with zf.open(member) as src, open(target, "wb") as out:
-                            shutil.copyfileobj(src, out)
-                        file_map[member.filename] = str(target)
-                    except OSError as e:
-                        logger.error(f"还原文件失败 {member.filename}: {e}")
+                # 先写入目标目录内的临时目录，避免校验失败时留下可见半成品。
+                with tempfile.TemporaryDirectory(prefix=".dit-restore-", dir=str(dest_root)) as temp_dir:
+                    staged = {}
+                    for member in zf.infolist():
+                        if member.is_dir() or not member.filename.startswith(f"{_FILES_DIR}/"):
+                            continue
+                        rel = self._safe_archive_relative_path(member.filename)
+                        stage_target = Path(temp_dir) / rel
+                        stage_target.parent.mkdir(parents=True, exist_ok=True)
+                        try:
+                            with zf.open(member) as src, open(stage_target, "xb") as out:
+                                shutil.copyfileobj(src, out)
+                            staged[member.filename] = (rel, stage_target)
+                        except OSError as e:
+                            raise ValueError(f"归档文件还原失败 {member.filename}: {e}") from e
+
+                    # 所有文件写入临时目录后再校验 manifest 中的校验和。
+                    checksums = {
+                        d.get("archive_file"): d
+                        for d in asset_dicts if isinstance(d, dict) and d.get("archive_file")
+                    }
+                    for member_name, (rel, stage_target) in staged.items():
+                        asset_info = checksums.get(member_name)
+                        if verify and asset_info and asset_info.get("checksum_value"):
+                            cached = self.checksum_service.compute_file_checksum(
+                                str(stage_target),
+                                self._checksum_algorithm(asset_info.get("checksum_algorithm")),
+                                cancel_check=cancel_check,
+                            )
+                            if cached.hash_value != asset_info["checksum_value"]:
+                                raise ValueError(f"归档文件校验和不一致: {member_name}")
+                    for member_name, (rel, stage_target) in staged.items():
+                        target = self._safe_restore_target(dest_root, rel)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(str(stage_target), str(target))
+                        file_map[member_name] = str(target)
 
             old_name = manifest["project"].get("name", "恢复项目")
             project = self._create_restored_project(
@@ -398,6 +431,61 @@ class ArchiveService:
             "missing_files": missing_files,
             "mismatches": mismatches,
         }
+
+    @staticmethod
+    def _safe_archive_relative_path(member_name: str) -> Path:
+        """校验 zip 成员路径，拒绝绝对路径、父目录跳转和 NUL 字符。"""
+        prefix = f"{_FILES_DIR}/"
+        if not member_name.startswith(prefix) or "\x00" in member_name:
+            raise ValueError(f"非法归档成员路径: {member_name!r}")
+        rel_name = member_name[len(prefix):].replace("\\", "/")
+        posix_rel = PurePosixPath(rel_name)
+        windows_rel = PureWindowsPath(rel_name)
+        if (
+            not rel_name
+            or posix_rel.is_absolute()
+            or windows_rel.is_absolute()
+            or windows_rel.drive
+            or any(part in ("", ".", "..") for part in posix_rel.parts)
+        ):
+            raise ValueError(f"非法归档成员路径: {member_name!r}")
+        return Path(*posix_rel.parts)
+
+    @classmethod
+    def _validate_archive_members(cls, zf: zipfile.ZipFile):
+        """限制归档解压大小并验证所有素材成员路径。"""
+        total = 0
+        for member in zf.infolist():
+            if member.file_size > _MAX_ARCHIVE_FILE_BYTES:
+                raise ValueError(f"归档单文件过大: {member.filename}")
+            total += member.file_size
+            if total > _MAX_ARCHIVE_TOTAL_BYTES:
+                raise ValueError("归档解压总大小超过限制")
+            if member.filename.startswith(f"{_FILES_DIR}/") and not member.is_dir():
+                cls._safe_archive_relative_path(member.filename)
+
+    @staticmethod
+    def _safe_restore_target(dest_root: Path, relative: Path) -> Path:
+        """确保最终还原路径不会通过已有符号链接逃出目标目录。"""
+        # resolve 只用于安全比较；返回原始路径，保持用户输入的路径形式
+        # （macOS 的 /var 与 /private/var 可能是两个不同字符串）。
+        root = dest_root.resolve()
+        target = dest_root / relative
+        resolved_target = target.resolve(strict=False)
+        try:
+            resolved_target.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"还原目标路径越出目标目录: {relative}") from exc
+        return target
+
+    @staticmethod
+    def _checksum_algorithm(value: Optional[str]):
+        try:
+            from DITWorkstation.Models import ChecksumAlgorithm
+            return ChecksumAlgorithm(value or ChecksumAlgorithm.XXHASH64.value)
+        except ValueError:
+            from DITWorkstation.Models import ChecksumAlgorithm
+            return ChecksumAlgorithm.XXHASH64
 
     def _create_restored_project(
         self, old_name: str, project_info: Dict, workspace_id: Optional[str]

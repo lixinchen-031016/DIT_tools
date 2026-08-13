@@ -179,3 +179,54 @@ def test_restore_invalid_archive(tmp_dir):
         zf.writestr("random.txt", "not an archive")
     with pytest.raises(ValueError):
         ArchiveService(db_service=object()).restore_project(str(bogus))
+
+
+def test_restore_rejects_path_traversal_member(db_service, tmp_dir):
+    """恢复归档拒绝 files/ 下的父目录跳转路径。"""
+    archive = tmp_dir / "malicious.zip"
+    manifest = {
+        "version": 1,
+        "project": {"name": "恶意归档", "created_at": "2026-01-01T00:00:00"},
+    }
+    assets = [{
+        "asset_id": "asset-1", "project_id": "old", "file_path": "x.txt",
+        "file_name": "x.txt", "file_size": 4, "file_type": ".txt",
+        "checksum_algorithm": "xxhash64", "checksum_value": "",
+        "date_imported": "2026-01-01T00:00:00", "archive_file": "files/../outside.txt",
+    }]
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+        zf.writestr("assets.json", json.dumps(assets))
+        zf.writestr("logs.json", "[]")
+        zf.writestr("files/../outside.txt", b"evil")
+
+    with pytest.raises(ValueError, match="非法归档成员路径"):
+        ArchiveService(db_service=db_service).restore_project(
+            str(archive), restore_files=True, files_dest=str(tmp_dir / "restore")
+        )
+    assert not (tmp_dir / "outside.txt").exists()
+
+
+@pytest.mark.parametrize("member", [
+    "files/C:/outside.txt",
+    "files/C:\\outside.txt",
+    "files/\\\\server\\share\\outside.txt",
+])
+def test_archive_path_validation_rejects_windows_absolute_paths(member):
+    """在非 Windows 测试机上也拒绝 Windows 绝对路径语义。"""
+    with pytest.raises(ValueError, match="非法归档成员路径"):
+        ArchiveService._safe_archive_relative_path(member)
+
+
+def test_restore_rejects_symlinked_destination_parent(tmp_dir):
+    """还原目标目录已有外部符号链接时拒绝越界落盘。"""
+    root = tmp_dir / "restore"
+    root.mkdir()
+    outside = tmp_dir / "outside"
+    outside.mkdir()
+    try:
+        (root / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("当前环境不支持创建符号链接")
+    with pytest.raises(ValueError, match="越出目标目录"):
+        ArchiveService._safe_restore_target(root, Path("linked/file.txt"))
