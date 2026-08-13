@@ -51,6 +51,24 @@ def test_apply_saved_config_sets_known_fields(tmp_path, monkeypatch):
     assert not hasattr(config, "unknown_key")
 
 
+def test_apply_saved_card_automation_config(tmp_path, monkeypatch):
+    _patch_settings_path(monkeypatch, tmp_path)
+    common.save_app_settings(
+        auto_card_automation_enabled=True,
+        auto_card_import=False,
+        auto_card_backup=True,
+        auto_card_project_id="project-1",
+        auto_card_template_id="template-1",
+    )
+    common.apply_saved_config()
+    from DITWorkstation.App import config
+    assert config.auto_card_automation_enabled is True
+    assert config.auto_card_import is False
+    assert config.auto_card_backup is True
+    assert config.auto_card_project_id == "project-1"
+    assert config.auto_card_template_id == "template-1"
+
+
 def test_path_settings_roundtrip_as_path_objects(tmp_path, monkeypatch):
     """路径类配置以字符串持久化，启动时恢复为 Path 对象"""
     _patch_settings_path(monkeypatch, tmp_path)

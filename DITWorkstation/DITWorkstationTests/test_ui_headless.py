@@ -122,6 +122,9 @@ def test_settings_dialog_has_location_and_cleanup_controls(tmp_dir, monkeypatch)
     assert dlg.delete_logs_btn.text() == "🗑 删除日志文件"
     # 标签内容应包含「共 x 个文件」之类的统计信息
     assert "日志" in dlg.log_info_label.text() or "共" in dlg.log_info_label.text()
+    assert hasattr(dlg, "auto_card_automation_check")
+    assert hasattr(dlg, "auto_card_project_combo")
+    assert hasattr(dlg, "auto_card_template_combo")
 
 
 def test_settings_dialog_change_db_dir_moves_database(tmp_dir, monkeypatch):

@@ -106,6 +106,11 @@ class AppConfig:
 
     # 存储卡自动识别
     auto_detect_volume: bool = True  # 检测到存储卡时自动跳转到导入视图并预填源目录
+    auto_card_automation_enabled: bool = False  # 检测到存储卡时按规则自动导入/备份
+    auto_card_import: bool = True
+    auto_card_backup: bool = False
+    auto_card_template_id: str = ""
+    auto_card_project_id: str = ""
 
     # 检索分页
     search_page_size: int = 500  # 素材检索每页显示的条数

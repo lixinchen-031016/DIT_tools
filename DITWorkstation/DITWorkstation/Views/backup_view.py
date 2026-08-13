@@ -13,7 +13,7 @@ from PySide6.QtCore import Signal, Slot, Qt
 from pathlib import Path
 from typing import Optional
 
-from DITWorkstation.Models import ChecksumAlgorithm, BackupJob
+from DITWorkstation.Models import ChecksumAlgorithm, BackupJob, BackupTemplate
 from DITWorkstation.Services.backup_service import BackupService
 from DITWorkstation.Services.media_import_service import MediaImportService
 from DITWorkstation.Utils import (
@@ -22,7 +22,9 @@ from DITWorkstation.Utils import (
 )
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.App.navigation import get_nav_index
-from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
+from DITWorkstation.Views.Widgets import (
+    RefreshOnShowView, WorkspaceProjectSelector, edit_backup_template,
+)
 from DITWorkstation.Views.Widgets.status_panel import StatusPanel
 from DITWorkstation.Views.Widgets.error_dialog import show_error
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS, MONO_FONT_QSS
@@ -53,6 +55,7 @@ class BackupView(RefreshOnShowView):
         self._backup_project_id: Optional[str] = None
         # 备份目标路径列表（内联删除按钮式，替代 QListWidget）
         self._target_paths: list[str] = []
+        self._backup_templates = []
         self._setup_ui()
         self._verify_progress.connect(self._on_verify_progress)
         # 项目切换由共享控件处理（broadcast_none=False 保留"不关联"语义）
@@ -148,6 +151,23 @@ class BackupView(RefreshOnShowView):
         target_btn_layout.addStretch()
         target_layout.addLayout(target_btn_layout)
         config_layout.addWidget(target_group)
+
+        # 备份方案模板
+        template_row = QHBoxLayout()
+        template_row.addWidget(QLabel("备份方案:"))
+        self.template_combo = QComboBox()
+        self.template_combo.setMinimumWidth(240)
+        self.template_combo.currentIndexChanged.connect(self._apply_selected_template)
+        template_row.addWidget(self.template_combo)
+        self.save_template_btn = QPushButton("保存当前方案")
+        self.save_template_btn.setToolTip("把当前备份目标、校验算法和验证选项保存为可复用模板")
+        self.save_template_btn.clicked.connect(self._save_backup_template)
+        template_row.addWidget(self.save_template_btn)
+        self.delete_template_btn = QPushButton("删除方案")
+        self.delete_template_btn.clicked.connect(self._delete_backup_template)
+        template_row.addWidget(self.delete_template_btn)
+        template_row.addStretch()
+        config_layout.addLayout(template_row)
 
         # 配置选项（内联，不再单独 GroupBox）
         config_row = QHBoxLayout()
@@ -274,8 +294,85 @@ class BackupView(RefreshOnShowView):
         try:
             self.selector.refresh()
             self._load_backup_history()
+            self._load_backup_templates()
         except Exception as e:
             self._log(f"刷新工作区/项目列表失败: {e}")
+
+    def _load_backup_templates(self):
+        try:
+            self._backup_templates = self.db_service.get_backup_templates()
+        except Exception as e:
+            self._log(f"加载备份方案失败: {e}")
+            self._backup_templates = []
+        self.template_combo.blockSignals(True)
+        self.template_combo.clear()
+        self.template_combo.addItem("（手动配置）", None)
+        for template in self._backup_templates:
+            label = template.name
+            if template.description:
+                label += f" - {template.description}"
+            self.template_combo.addItem(label, template.template_id)
+        self.template_combo.blockSignals(False)
+        self.delete_template_btn.setEnabled(bool(self._backup_templates))
+
+    def _apply_selected_template(self, index: int):
+        template_id = self.template_combo.itemData(index)
+        if not template_id:
+            return
+        template = next((t for t in self._backup_templates if t.template_id == template_id), None)
+        if template is None:
+            return
+        self._target_paths = list(template.target_paths)
+        self._rebuild_target_rows()
+        self.algorithm_combo.setCurrentIndex(0 if template.algorithm == ChecksumAlgorithm.XXHASH64 else 1)
+        self.verify_check.setChecked(template.verify_after_copy)
+        self._log(f"已应用备份方案: {template.name}")
+
+    def _save_backup_template(self):
+        if not self._target_paths:
+            QMessageBox.warning(self, "提示", "请先添加至少一个备份目标")
+            return
+        draft = BackupTemplate(
+            template_id="",
+            name="",
+            target_paths=list(self._target_paths),
+            algorithm=(
+                ChecksumAlgorithm.XXHASH64
+                if self.algorithm_combo.currentIndex() == 0
+                else ChecksumAlgorithm.MD5
+            ),
+            verify_after_copy=self.verify_check.isChecked(),
+        )
+        values = edit_backup_template(self, draft)
+        if not values:
+            return
+        try:
+            template = self.db_service.create_backup_template(**values)
+            self._load_backup_templates()
+            index = self.template_combo.findData(template.template_id)
+            if index >= 0:
+                self.template_combo.setCurrentIndex(index)
+            self._log(f"已保存备份方案: {template.name}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存备份方案失败：{e}")
+
+    def _delete_backup_template(self):
+        template_id = self.template_combo.currentData()
+        if not template_id:
+            QMessageBox.information(self, "提示", "请选择要删除的备份方案")
+            return
+        template = next((t for t in self._backup_templates if t.template_id == template_id), None)
+        if template is None:
+            return
+        reply = QMessageBox.question(
+            self, "确认删除", f"确定删除备份方案「{template.name}」？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        if self.db_service.delete_backup_template(template_id):
+            self._load_backup_templates()
+            self._log(f"已删除备份方案: {template.name}")
 
     def _load_backup_history(self):
         """加载备份作业历史（最近 20 条），供断点续传 / 重试选择。"""

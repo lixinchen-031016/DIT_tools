@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QGroupBox, QFormLayout, QCheckBox, QMessageBox, QApplication,
+    QGroupBox, QFormLayout, QCheckBox, QMessageBox, QApplication, QComboBox,
 )
 from PySide6.QtCore import Qt, QProcess
 
@@ -140,6 +140,34 @@ class SettingsDialog(QDialog):
         )
         self.auto_detect_check.toggled.connect(self._on_auto_detect_toggled)
         volume_layout.addWidget(self.auto_detect_check)
+
+        self.auto_card_automation_check = QCheckBox("检测到相机卡后自动执行配置")
+        self.auto_card_automation_check.setToolTip(
+            "按下面选择的项目和备份方案自动导入或备份；未配置完整时只提示，不会启动任务。"
+        )
+        self.auto_card_automation_check.toggled.connect(self._on_auto_card_automation_toggled)
+        volume_layout.addWidget(self.auto_card_automation_check)
+
+        self.auto_card_import_check = QCheckBox("自动导入素材")
+        self.auto_card_import_check.toggled.connect(self._on_auto_card_import_toggled)
+        volume_layout.addWidget(self.auto_card_import_check)
+
+        self.auto_card_backup_check = QCheckBox("自动执行备份方案")
+        self.auto_card_backup_check.toggled.connect(self._on_auto_card_backup_toggled)
+        volume_layout.addWidget(self.auto_card_backup_check)
+
+        volume_form = QFormLayout()
+        self.auto_card_project_combo = QComboBox()
+        self.auto_card_template_combo = QComboBox()
+        self.auto_card_project_combo.currentIndexChanged.connect(
+            self._on_auto_card_project_changed
+        )
+        self.auto_card_template_combo.currentIndexChanged.connect(
+            self._on_auto_card_template_changed
+        )
+        volume_form.addRow("自动关联项目:", self.auto_card_project_combo)
+        volume_form.addRow("自动备份方案:", self.auto_card_template_combo)
+        volume_layout.addLayout(volume_form)
         layout.addWidget(volume_group)
 
         layout.addStretch()
@@ -184,6 +212,39 @@ class SettingsDialog(QDialog):
         self.recent_info_label.setText(f"共 {recent_total} 条最近使用记录")
         self.verify_after_copy_check.setChecked(config.verify_after_copy)
         self.auto_detect_check.setChecked(config.auto_detect_volume)
+        self._load_automation_options()
+
+    def _load_automation_options(self):
+        """加载相机卡自动化所需的项目和备份方案下拉项。"""
+        try:
+            db = get_db_service()
+            projects = db.get_projects()
+            templates = db.get_backup_templates()
+        except Exception as e:
+            logger.warning(f"加载相机卡自动化配置失败: {e}")
+            projects, templates = [], []
+        self.auto_card_project_combo.blockSignals(True)
+        self.auto_card_project_combo.clear()
+        self.auto_card_project_combo.addItem("（未选择项目）", "")
+        for project in projects:
+            self.auto_card_project_combo.addItem(project.name, project.project_id)
+        self.auto_card_project_combo.setCurrentIndex(
+            max(0, self.auto_card_project_combo.findData(config.auto_card_project_id))
+        )
+        self.auto_card_project_combo.blockSignals(False)
+
+        self.auto_card_template_combo.blockSignals(True)
+        self.auto_card_template_combo.clear()
+        self.auto_card_template_combo.addItem("（不自动备份）", "")
+        for template in templates:
+            self.auto_card_template_combo.addItem(template.name, template.template_id)
+        self.auto_card_template_combo.setCurrentIndex(
+            max(0, self.auto_card_template_combo.findData(config.auto_card_template_id))
+        )
+        self.auto_card_template_combo.blockSignals(False)
+        self.auto_card_automation_check.setChecked(config.auto_card_automation_enabled)
+        self.auto_card_import_check.setChecked(config.auto_card_import)
+        self.auto_card_backup_check.setChecked(config.auto_card_backup)
 
     # ===== 存储位置重设 =====
 
@@ -351,3 +412,25 @@ class SettingsDialog(QDialog):
     def _on_auto_detect_toggled(self, checked: bool):
         config.auto_detect_volume = checked
         save_app_settings(auto_detect_volume=checked)
+
+    def _on_auto_card_automation_toggled(self, checked: bool):
+        config.auto_card_automation_enabled = checked
+        save_app_settings(auto_card_automation_enabled=checked)
+
+    def _on_auto_card_import_toggled(self, checked: bool):
+        config.auto_card_import = checked
+        save_app_settings(auto_card_import=checked)
+
+    def _on_auto_card_backup_toggled(self, checked: bool):
+        config.auto_card_backup = checked
+        save_app_settings(auto_card_backup=checked)
+
+    def _on_auto_card_project_changed(self, index: int):
+        value = self.auto_card_project_combo.itemData(index) or ""
+        config.auto_card_project_id = value
+        save_app_settings(auto_card_project_id=value)
+
+    def _on_auto_card_template_changed(self, index: int):
+        value = self.auto_card_template_combo.itemData(index) or ""
+        config.auto_card_template_id = value
+        save_app_settings(auto_card_template_id=value)

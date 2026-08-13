@@ -4,8 +4,9 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QStackedWidget, QScrollArea,
     QMessageBox, QLabel
 )
-from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtCore import Qt, QSize, QTimer, Slot
 from PySide6.QtGui import QShortcut, QKeySequence
+from pathlib import Path
 
 # 会话上下文（EventBus + 全局项目/工作区状态）已抽离到 App/session_context.py
 # [DEPRECATED] 此处 re-export 仅为向后兼容；新代码应直接从 App.session_context 导入，
@@ -32,6 +33,8 @@ from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS
 from DITWorkstation.App import config
 from DITWorkstation.Utils import logger, get_db_service
 from DITWorkstation.Services.volume_monitor import VolumeMonitor
+from DITWorkstation.Services.card_automation_service import CardAutomationService
+from DITWorkstation.Utils.workers import WorkerThread
 
 
 # 导航配置（NAV_ITEMS / get_nav_index）已抽离到 App/navigation.py 作为单一事实源，
@@ -155,6 +158,8 @@ class MainWindow(QMainWindow):
         self.volume_monitor = VolumeMonitor(self)
         self.volume_monitor.volume_mounted.connect(self._on_volume_mounted)
         self.volume_monitor.start()
+        self.card_automation_service = CardAutomationService(self.backup_view.db_service)
+        self.card_automation_worker = None
 
     def _setup_menu(self):
         """创建菜单栏 — 提供帮助入口与新手向导重启"""
@@ -378,8 +383,15 @@ class MainWindow(QMainWindow):
           用户取消则忽略关闭事件
         """
         running = self._running_workers()
-        if not running:
+        card_running = self.card_automation_worker and self.card_automation_worker.isRunning()
+        if not running and not card_running:
             self.volume_monitor.stop()
+            super().closeEvent(event)
+            return
+        if not running and card_running:
+            self.volume_monitor.stop()
+            self.card_automation_worker.cancel()
+            self.card_automation_worker.wait(5000)
             super().closeEvent(event)
             return
 
@@ -426,16 +438,79 @@ class MainWindow(QMainWindow):
             logger.info(f"主窗口关闭：已等待 {len(running)} 个后台 worker 结束")
 
         self.volume_monitor.stop()
+        if card_running:
+            self.card_automation_worker.cancel()
+            self.card_automation_worker.wait(5000)
         super().closeEvent(event)
 
     def _on_volume_mounted(self, path: str):
-        """检测到存储卡：状态栏提示，并按设置自动跳转到导入视图。"""
-        from pathlib import Path
+        """检测到存储卡：预填导入视图，并按配置启动自动化流程。"""
         name = Path(path).name or path
         self.status_label_task.setText(f"💾 检测到存储卡: {name}")
         if getattr(config, "auto_detect_volume", True):
             self._navigate_to("import")
             self.import_view.set_source_folder(path, auto_scan=True)
+        if getattr(config, "auto_card_automation_enabled", False):
+            self._start_card_automation(path)
+
+    def _start_card_automation(self, source_path: str):
+        """按设置启动一次相机卡自动任务；同一时间只允许一个自动任务。"""
+        if self.card_automation_worker and self.card_automation_worker.isRunning():
+            self.status_label_task.setText("⚠ 已有相机卡自动任务正在执行")
+            return
+        project_id = getattr(config, "auto_card_project_id", "")
+        template_id = getattr(config, "auto_card_template_id", "")
+        do_import = getattr(config, "auto_card_import", True)
+        do_backup = getattr(config, "auto_card_backup", False)
+        template = self.backup_view.db_service.get_backup_template(template_id) if template_id else None
+        if not project_id or (do_backup and template is None):
+            self.status_label_task.setText("⚠ 相机卡自动化配置不完整，请检查设置")
+            logger.warning(f"相机卡自动化配置不完整: project={project_id} template={template_id}")
+            return
+        project = self.backup_view.db_service.get_project(project_id)
+        if project is None:
+            self.status_label_task.setText("⚠ 自动化项目不存在，请检查设置")
+            return
+        set_current_project(project_id)
+        self.card_automation_worker = WorkerThread(
+            self.card_automation_service.execute,
+            source_path,
+            project_id,
+            template=template,
+            do_import=do_import,
+            do_backup=do_backup,
+            inject_progress=True,
+            inject_cancel_check=True,
+        )
+        self.card_automation_worker.progress.connect(self._on_card_automation_progress)
+        self.card_automation_worker.finished.connect(self._on_card_automation_finished)
+        self.card_automation_worker.error.connect(self._on_card_automation_error)
+        self.card_automation_worker.finished.connect(self.card_automation_worker.deleteLater)
+        self.card_automation_worker.error.connect(self.card_automation_worker.deleteLater)
+        self.card_automation_worker.start()
+        self.status_label_task.setText(f"⚙ 自动处理相机卡: {Path(source_path).name}")
+
+    @Slot(str, float, str)
+    def _on_card_automation_progress(self, target: str, progress: float, message: str):
+        self.status_label_task.setText(f"⚙ {message} ({int(progress * 100)}%)")
+
+    @Slot(object)
+    def _on_card_automation_finished(self, result):
+        self.card_automation_worker = None
+        backup = result.get("backup") if isinstance(result, dict) else None
+        imported = (result.get("import") or {}).get("imported", 0) if isinstance(result, dict) else 0
+        backup_text = ""
+        if backup is not None:
+            backup_text = f"，备份状态 {backup.status.value}"
+        self.status_label_task.setText(f"✅ 相机卡自动处理完成：导入 {imported} 个{backup_text}")
+        if imported:
+            get_data_bus().emit_data_changed("assets_changed")
+
+    @Slot(str)
+    def _on_card_automation_error(self, error: str):
+        self.card_automation_worker = None
+        self.status_label_task.setText(f"❌ 相机卡自动处理失败: {error}")
+        logger.error(f"相机卡自动处理失败: {error}")
 
     def _on_data_changed(self, event: str):
         """

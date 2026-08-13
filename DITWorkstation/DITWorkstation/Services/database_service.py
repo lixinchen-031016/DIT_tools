@@ -4,13 +4,17 @@ import threading
 import uuid
 import shutil
 import re
+import json
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from DITWorkstation.App import config
-from DITWorkstation.Models import Project, ProjectTemplate, ShootingLog, MediaAsset, Workspace
+from DITWorkstation.Models import (
+    Project, ProjectTemplate, BackupTemplate, ShootingLog, MediaAsset, Workspace,
+    ChecksumAlgorithm,
+)
 from DITWorkstation.Utils import logger, normalize_path
 
 
@@ -236,6 +240,20 @@ class DatabaseService:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS backup_templates (
+                    template_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    target_paths TEXT DEFAULT '[]',
+                    algorithm TEXT DEFAULT 'xxhash64',
+                    verify_after_copy INTEGER DEFAULT 1,
+                    description TEXT DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_backup_templates_created
+                    ON backup_templates(created_at);
             """)
             conn.commit()
         finally:
@@ -265,7 +283,7 @@ class DatabaseService:
                 pass
 
     # 当前数据库 schema 版本：每次结构变更 +1，并在 _migrate_db 中补充对应迁移
-    _DB_VERSION = 3
+    _DB_VERSION = 4
 
     def _migrate_db(self):
         """按 PRAGMA user_version 分版本迁移数据库。
@@ -292,6 +310,10 @@ class DatabaseService:
                 self._migrate_v3(conn)
                 self._set_user_version(conn, 3)
                 logger.info("数据库迁移完成: v3")
+            if version < 4:
+                self._migrate_v4(conn)
+                self._set_user_version(conn, 4)
+                logger.info("数据库迁移完成: v4")
 
             # FTS 创建必须晚于迁移前备份，否则备份会混入新建索引表。
             # v3 数据库若因中断或旧版本缺失索引，也在这里补建并重建一次。
@@ -448,6 +470,25 @@ class DatabaseService:
     def _migrate_v3(self, conn):
         """v3：预留素材全文索引版本号。索引在迁移备份后统一创建。"""
         return None
+
+    def _migrate_v4(self, conn):
+        """v4：增加可复用的备份方案模板表。"""
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS backup_templates (
+                template_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                target_paths TEXT DEFAULT '[]',
+                algorithm TEXT DEFAULT 'xxhash64',
+                verify_after_copy INTEGER DEFAULT 1,
+                description TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_backup_templates_created "
+            "ON backup_templates(created_at)"
+        )
 
     @staticmethod
     def _fts_table_exists(conn) -> bool:
@@ -890,6 +931,109 @@ class DatabaseService:
             description=row["description"],
             base_path=row["base_path"],
             notes=row["notes"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    # ===== 备份方案模板 =====
+
+    def create_backup_template(
+        self,
+        name: str,
+        target_paths: List[str],
+        algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
+        verify_after_copy: bool = True,
+        description: str = "",
+    ) -> BackupTemplate:
+        """创建备份方案模板。目标路径支持 ``{source_name}`` 占位符。"""
+        template = BackupTemplate(
+            template_id=str(uuid.uuid4())[:8],
+            name=name,
+            target_paths=list(target_paths),
+            algorithm=algorithm,
+            verify_after_copy=verify_after_copy,
+            description=description,
+        )
+        with self._transaction() as conn:
+            conn.execute(
+                "INSERT INTO backup_templates "
+                "(template_id, name, target_paths, algorithm, verify_after_copy, "
+                "description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    template.template_id, template.name,
+                    json.dumps(template.target_paths, ensure_ascii=False),
+                    template.algorithm.value, int(template.verify_after_copy),
+                    template.description, template.created_at.isoformat(),
+                    template.updated_at.isoformat(),
+                ),
+            )
+        return template
+
+    def get_backup_templates(self) -> List[BackupTemplate]:
+        """获取备份方案模板，按创建时间倒序。"""
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM backup_templates ORDER BY created_at DESC"
+            ).fetchall()
+            return [self._row_to_backup_template(row) for row in rows]
+
+    def get_backup_template(self, template_id: str) -> Optional[BackupTemplate]:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM backup_templates WHERE template_id = ?", (template_id,)
+            ).fetchone()
+            return self._row_to_backup_template(row) if row else None
+
+    def update_backup_template(self, template_id: str, **kwargs) -> bool:
+        """更新备份模板字段。"""
+        allowed = {
+            "name", "target_paths", "algorithm", "verify_after_copy", "description"
+        }
+        fields = []
+        params = []
+        for key, value in kwargs.items():
+            if key not in allowed:
+                continue
+            if key == "target_paths":
+                value = json.dumps(list(value), ensure_ascii=False)
+            elif key == "algorithm":
+                value = value.value if isinstance(value, ChecksumAlgorithm) else str(value)
+            elif key == "verify_after_copy":
+                value = int(bool(value))
+            fields.append(f"{key} = ?")
+            params.append(value)
+        if not fields:
+            return False
+        fields.append("updated_at = ?")
+        params.extend([datetime.now().isoformat(), template_id])
+        with self._transaction() as conn:
+            cursor = conn.execute(
+                f"UPDATE backup_templates SET {', '.join(fields)} WHERE template_id = ?",
+                params,
+            )
+            return cursor.rowcount > 0
+
+    def delete_backup_template(self, template_id: str) -> bool:
+        with self._transaction() as conn:
+            cursor = conn.execute(
+                "DELETE FROM backup_templates WHERE template_id = ?", (template_id,)
+            )
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def _row_to_backup_template(row: sqlite3.Row) -> BackupTemplate:
+        try:
+            paths = json.loads(row["target_paths"] or "[]")
+        except (TypeError, ValueError):
+            paths = []
+        try:
+            algorithm = ChecksumAlgorithm(row["algorithm"] or ChecksumAlgorithm.XXHASH64.value)
+        except ValueError:
+            algorithm = ChecksumAlgorithm.XXHASH64
+        return BackupTemplate(
+            template_id=row["template_id"], name=row["name"], target_paths=paths,
+            algorithm=algorithm, verify_after_copy=bool(row["verify_after_copy"]),
+            description=row["description"] or "",
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )

@@ -203,6 +203,19 @@ class ProjectTemplate:
 
 
 @dataclass
+class BackupTemplate:
+    """备份方案模板：复用备份目标、校验算法和完整性验证选项。"""
+    template_id: str
+    name: str
+    target_paths: List[str] = field(default_factory=list)
+    algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64
+    verify_after_copy: bool = True
+    description: str = ""
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
 class ShootingLog:
     """拍摄日志"""
     log_id: str

@@ -64,6 +64,12 @@ class BackupService:
                     })
         return files
 
+    @staticmethod
+    def resolve_template_targets(target_paths: List[str], source_path: str) -> List[str]:
+        """展开备份模板目标路径中的安全占位符。"""
+        source_name = Path(source_path).name or "source"
+        return [str(path).replace("{source_name}", source_name) for path in target_paths]
+
     def create_backup_job(
         self,
         source_path: str,
