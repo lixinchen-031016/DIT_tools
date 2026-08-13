@@ -196,18 +196,25 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: 安装 MediaInfo（供视频元数据功能打包进 .exe）
-        # mediainfo 是 CLI 包，不保证提供 pymediainfo 所需的 MediaInfo.dll。
-        # GUI 包包含官方 DLL，直接导出其实际路径给 PyInstaller，避免依赖固定安装目录。
+        # Chocolatey 当前提供的是 mediainfo CLI 包；mediainfo-gui 已从社区源移除。
+        # CLI 包同样包含 pymediainfo 所需的 MediaInfo.dll，直接导出实际路径给 spec。
         shell: pwsh
         run: |
-          choco install mediainfo-gui --yes --no-progress
+          $ErrorActionPreference = "Stop"
+          choco install mediainfo --yes --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            throw "Chocolatey 安装 mediainfo 失败，退出码: $LASTEXITCODE"
+          }
           $chocoRoot = if ($env:ChocolateyInstall) { $env:ChocolateyInstall } else { "C:\ProgramData\chocolatey" }
-          $roots = @(
-            (Join-Path $env:ProgramFiles "MediaInfo"),
-            (Join-Path ${env:ProgramFiles(x86)} "MediaInfo"),
-            (Join-Path $chocoRoot "lib\mediainfo-gui"),
-            (Join-Path $chocoRoot "lib\mediainfo")
-          ) | Where-Object { $_ -and (Test-Path $_) }
+          $roots = @()
+          if ($env:ProgramFiles) {
+            $roots += Join-Path $env:ProgramFiles "MediaInfo"
+          }
+          if (${env:ProgramFiles(x86)}) {
+            $roots += Join-Path ${env:ProgramFiles(x86)} "MediaInfo"
+          }
+          $roots += Join-Path $chocoRoot "lib\mediainfo"
+          $roots = $roots | Where-Object { Test-Path $_ }
           $dll = $roots |
             ForEach-Object { Get-ChildItem $_ -Recurse -File -Filter MediaInfo.dll -ErrorAction SilentlyContinue } |
             Select-Object -First 1
@@ -217,6 +224,9 @@ jobs:
               Where-Object { $_.Name -match "MediaInfo|mediainfo" } |
               Select-Object -First 50 FullName
             throw "安装后找不到 MediaInfo.dll"
+          }
+          if ($dll.Length -lt 1) {
+            throw "找到的 MediaInfo.dll 为空文件: $($dll.FullName)"
           }
           Write-Host "使用 MediaInfo.dll: $($dll.FullName)"
           "MEDIAINFO_DLL=$($dll.FullName)" >> $env:GITHUB_ENV
