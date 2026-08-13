@@ -281,6 +281,8 @@ jobs:
       - name: 计算发布元数据
         id: meta
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             echo "tag=${GITHUB_REF_NAME}"        >> "$GITHUB_OUTPUT"
