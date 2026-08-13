@@ -127,9 +127,8 @@ jobs:
         # 脚本内部会自建 venv、安装依赖、运行测试、产出 dist/DITWorkstation.app(.dmg)
         run: bash build/build_macos.sh
 
-      # ---- 可选：Apple 开发者签名 + 公证（仅当配置了证书 Secrets 时执行）----
+      # ---- 可选：Apple 开发者签名 + 公证（未配置证书 Secrets 时自动跳过）----
       - name: 导入证书并签名/公证
-        if: secrets.MACOS_SIGN_CERT_P12 != ''
         env:
           CERT_P12: ${{ secrets.MACOS_SIGN_CERT_P12 }}
           CERT_PWD: ${{ secrets.MACOS_SIGN_CERT_PASSWORD }}
@@ -137,6 +136,11 @@ jobs:
           AC_PWD: ${{ secrets.MACOS_NOTARIZE_PASSWORD }}
           AC_TEAM: ${{ secrets.MACOS_NOTARIZE_TEAM_ID }}
         run: |
+          # 未配置签名证书则跳过（secrets 上下文不能用于 if:，故在此用 shell 守卫）
+          if [ -z "$CERT_P12" ]; then
+            echo "未配置 MACOS_SIGN_CERT_P12，跳过签名/公证"
+            exit 0
+          fi
           echo "$CERT_P12" | base64 -d > /tmp/sign.p12
           KEYCHAIN=build.keychain-db
           security create-keychain -p "$CERT_PWD" "$KEYCHAIN"
@@ -191,14 +195,18 @@ jobs:
         shell: cmd
         run: build\build_windows.bat
 
-      # ---- 可选：Windows 代码签名（仅当配置了 PFX Secrets 时执行）----
+      # ---- 可选：Windows 代码签名（未配置 PFX Secrets 时自动跳过）----
       - name: 签名 Windows 可执行文件
-        if: secrets.WINDOWS_SIGN_PFX != ''
         env:
           PFX: ${{ secrets.WINDOWS_SIGN_PFX }}
           PFX_PWD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
         shell: pwsh
         run: |
+          # 未配置签名证书则跳过（secrets 上下文不能用于 if:，故在此用 shell 守卫）
+          if (-not $env:PFX) {
+            Write-Host "未配置 WINDOWS_SIGN_PFX，跳过签名"
+            exit 0
+          }
           [System.Convert]::FromBase64String($env:PFX) | Set-Content -Encoding Byte dist/DITWorkstation.exe.pfx
           $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Select-Object -First 1
           if (-not $signtool) { Write-Error "未找到 signtool.exe"; exit 1 }
