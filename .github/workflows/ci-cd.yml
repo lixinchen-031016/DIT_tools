@@ -123,6 +123,10 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
+      - name: 安装 MediaInfo（供视频元数据功能打包进 .app）
+        # 不安装则 spec 找不到 libmediainfo.dylib，视频元数据功能受限
+        run: brew install mediainfo
+
       - name: 安装依赖并执行 PyInstaller 打包
         # 脚本内部会自建 venv、安装依赖、运行测试、产出 dist/DITWorkstation.app(.dmg)
         run: bash build/build_macos.sh
@@ -190,6 +194,11 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
           cache-dependency-path: requirements.txt
+
+      - name: 安装 MediaInfo（供视频元数据功能打包进 .exe）
+        # 不安装则 spec 找不到 MediaInfo.dll，视频元数据功能受限
+        run: choco install mediainfo --yes
+        shell: pwsh
 
       - name: 安装依赖并执行 PyInstaller 打包
         shell: cmd

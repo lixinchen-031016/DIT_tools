@@ -49,10 +49,10 @@ def _collect_mediainfo_binaries():
     for c in candidates:
         if os.path.exists(c):
             binaries.append((c, "."))
-            print(f"[spec] 包含 MediaInfo 库: {c}")
+            print(f"[spec] bundled MediaInfo lib: {c}")
             break
     else:
-        print(f"[spec] 警告：未找到 MediaInfo 库，视频元数据功能将受限")
+        print("[spec] warning: MediaInfo lib not found, video metadata will be limited")
     return binaries
 
 
