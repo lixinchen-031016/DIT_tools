@@ -6,6 +6,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QGroupBox, QFormLayout, QCheckBox, QMessageBox, QApplication, QComboBox,
+    QScrollArea, QWidget,
 )
 from PySide6.QtCore import Qt, QProcess
 
@@ -31,7 +32,16 @@ class SettingsDialog(QDialog):
         self._refresh_states()
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(14)
 
@@ -171,6 +181,8 @@ class SettingsDialog(QDialog):
         layout.addWidget(volume_group)
 
         layout.addStretch()
+        scroll.setWidget(content)
+        main_layout.addWidget(scroll)
 
     @staticmethod
     def _style_path_label(label: QLabel):
