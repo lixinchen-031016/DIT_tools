@@ -57,6 +57,18 @@ def test_task_view_model_retains_terminal_state_after_completion():
     assert vm.state is TaskState.COMPLETED
 
 
+def test_worker_cleanup_waits_for_native_thread_completion():
+    worker = WorkerThread(lambda: "done")
+    events = []
+    worker.finished.connect(lambda _result: events.append("result"))
+    worker.thread_finished.connect(lambda: events.append("thread"))
+    worker.start()
+    assert worker.wait(3000)
+    from PySide6.QtWidgets import QApplication
+    QApplication.processEvents()
+    assert events == ["result", "thread"]
+
+
 def test_task_view_model_retains_failed_state():
     vm = TaskViewModel()
     errors = _wait_for_signal(

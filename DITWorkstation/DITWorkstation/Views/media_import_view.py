@@ -763,7 +763,7 @@ class MediaImportView(RefreshOnShowView):
         self.worker.error.connect(self._on_import_error)
         self.worker.progress.connect(self._on_progress)
         # 线程结束后自动释放，避免 QThread 对象泄漏
-        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.thread_finished.connect(self.worker.deleteLater)
         self.worker.start()
 
         self._log("开始导入...")

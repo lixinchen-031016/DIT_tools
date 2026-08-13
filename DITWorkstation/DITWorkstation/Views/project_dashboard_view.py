@@ -480,7 +480,7 @@ class ProjectDashboardView(RefreshOnShowView):
         )
         self.worker.finished.connect(self._on_archive_finished)
         self.worker.error.connect(self._on_task_error)
-        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.thread_finished.connect(self.worker.deleteLater)
         self.worker.start()
 
     @Slot(object)
@@ -540,7 +540,7 @@ class ProjectDashboardView(RefreshOnShowView):
         )
         self.worker.finished.connect(self._on_restore_finished)
         self.worker.error.connect(self._on_task_error)
-        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.thread_finished.connect(self.worker.deleteLater)
         self.worker.start()
 
     @Slot(object)

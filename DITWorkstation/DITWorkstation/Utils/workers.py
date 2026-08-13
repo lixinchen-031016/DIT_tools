@@ -39,6 +39,9 @@ class WorkerThread(QThread):
     """
     progress = Signal(str, float, str)
     finished = Signal(object)
+    # Keep the native QThread lifecycle signal accessible after ``finished``
+    # is overridden by the result signal above.
+    thread_finished = QThread.finished
     error = Signal(str)
     file_completed = Signal(str, object)
     state_changed = Signal(str)
@@ -113,6 +116,7 @@ class WorkerThread(QThread):
 class SimpleWorkerThread(QThread):
     """简单后台工作线程（支持进度回调）"""
     finished = Signal(object)
+    thread_finished = QThread.finished
     error = Signal(str)
     state_changed = Signal(str)
 

@@ -485,8 +485,7 @@ class MainWindow(QMainWindow):
         self.card_automation_worker.progress.connect(self._on_card_automation_progress)
         self.card_automation_worker.finished.connect(self._on_card_automation_finished)
         self.card_automation_worker.error.connect(self._on_card_automation_error)
-        self.card_automation_worker.finished.connect(self.card_automation_worker.deleteLater)
-        self.card_automation_worker.error.connect(self.card_automation_worker.deleteLater)
+        self.card_automation_worker.thread_finished.connect(self.card_automation_worker.deleteLater)
         self.card_automation_worker.start()
         self.status_label_task.setText(f"⚙ 自动处理相机卡: {Path(source_path).name}")
 

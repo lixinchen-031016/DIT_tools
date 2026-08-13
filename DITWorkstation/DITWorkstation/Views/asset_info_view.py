@@ -1112,7 +1112,7 @@ class AssetInfoView(RefreshOnShowView):
         self._batch_worker.finished_batch.connect(self._on_batch_finished)
         self._batch_worker.error.connect(self._on_batch_error)
         # QThread.finished 在线程真正结束时发射，用于自动释放对象避免泄漏
-        self._batch_worker.finished.connect(self._batch_worker.deleteLater)
+        self._batch_worker.thread_finished.connect(self._batch_worker.deleteLater)
         self._batch_worker.start()
 
     def _on_batch_progress(self, current, total, message):

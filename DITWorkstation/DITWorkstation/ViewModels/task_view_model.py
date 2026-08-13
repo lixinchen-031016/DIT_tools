@@ -57,8 +57,11 @@ class TaskViewModel(QObject):
         worker.error.connect(self.error)
         worker.finished.connect(self._on_done)
         worker.error.connect(self._on_done)
-        worker.finished.connect(worker.deleteLater)
-        worker.error.connect(worker.deleteLater)
+        # Delete the QThread wrapper only after the native thread has exited.
+        # The result/error signals are emitted from run() before QThread has
+        # completed its teardown, so using them for deleteLater() can race
+        # with Qt's native thread cleanup.
+        worker.thread_finished.connect(worker.deleteLater)
         worker.start()
         return True
 

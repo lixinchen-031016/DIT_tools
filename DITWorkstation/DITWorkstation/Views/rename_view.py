@@ -254,7 +254,7 @@ class RenameView(QWidget):
         self._worker.finished.connect(self._on_rename_finished)
         self._worker.error.connect(self._on_rename_error)
         # 线程结束后自动释放，避免 QThread 对象泄漏
-        self._worker.finished.connect(self._worker.deleteLater)
+        self._worker.thread_finished.connect(self._worker.deleteLater)
         self._worker.start()
 
     @Slot(int, int, str)

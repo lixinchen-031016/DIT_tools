@@ -175,7 +175,7 @@ class ReportView(RefreshOnShowView):
         self.worker.finished.connect(self._on_finished)
         self.worker.error.connect(self._on_error)
         # 线程结束后自动释放，避免 QThread 对象泄漏
-        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.thread_finished.connect(self.worker.deleteLater)
         self.worker.start()
 
     @Slot(object)
