@@ -196,9 +196,26 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: 安装 MediaInfo（供视频元数据功能打包进 .exe）
-        # 不安装则 spec 找不到 MediaInfo.dll，视频元数据功能受限
-        run: choco install mediainfo --yes
+        # choco 的 mediainfo 包仅把 DLL 放在 chocolatey 的 tools 目录，
+        # 而 spec 只探测 C:\Program Files\MediaInfo\MediaInfo.dll，
+        # 故安装后需复制到该路径，确保 PyInstaller 能把 .dll 打进 .exe；
+        # 同时把 chocolatey bin 加入 PATH，使后续 build 脚本的 where mediainfo 检测通过
         shell: pwsh
+        run: |
+          choco install mediainfo --yes
+          $chocoRoot = if ($env:ChocolateyInstall) { $env:ChocolateyInstall } else { "C:\ProgramData\chocolatey" }
+          # 定位 choco 安装的 MediaInfo.dll 所在目录（通常在 ...\lib\mediainfo\tools\）
+          $dll = Get-ChildItem "$chocoRoot\lib\mediainfo" -Recurse -Filter MediaInfo.dll -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($dll) {
+            # 复制该目录下全部 .dll（MediaInfo.dll 及其依赖，如 libcurl 等），确保运行时可加载
+            New-Item -ItemType Directory -Force -Path "C:\Program Files\MediaInfo" | Out-Null
+            Get-ChildItem $dll.DirectoryName -Filter *.dll | ForEach-Object { Copy-Item $_.FullName "C:\Program Files\MediaInfo\$($_.Name)" }
+            Write-Host "已复制 MediaInfo 相关 DLL -> C:\Program Files\MediaInfo\"
+          } else {
+            Write-Host "警告：安装后仍找不到 MediaInfo.dll，视频元数据功能将受限"
+          }
+          $chocoBin = "$chocoRoot\bin"
+          if (Test-Path $chocoBin) { echo "$chocoBin" >> $env:GITHUB_PATH }
 
       - name: 安装依赖并执行 PyInstaller 打包
         shell: cmd
@@ -283,11 +300,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
+          # 注意：DITWorkstation.app 是目录（app bundle），不能作为 release 资产上传；
+          # .dmg 已内含 .app，故只发布 .dmg（macOS）与 .exe（Windows）
           gh release create "${{ steps.meta.outputs.tag }}" \
             --repo "${{ github.repository }}" \
             --title "${{ steps.meta.outputs.title }}" \
             --generate-notes \
             $([ "${{ steps.meta.outputs.prerelease }}" = "true" ] && echo "--prerelease") \
             "artifacts/macos/DITWorkstation.dmg" \
-            "artifacts/macos/DITWorkstation.app" \
             "artifacts/windows/DITWorkstation.exe"
