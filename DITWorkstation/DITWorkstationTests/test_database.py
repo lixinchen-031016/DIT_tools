@@ -1318,6 +1318,89 @@ class TestWorkspaceManagement(unittest.TestCase):
         hits = self.db.search_assets(project_id=p.project_id, tag="不存在")
         self.assertEqual(hits, [])
 
+    def test_search_assets_fts_and_index_sync(self):
+        """FTS 关键词搜索以及新增、更新、删除时的索引同步。"""
+        if not self.db._fts_available:
+            self.skipTest("当前 SQLite 未启用 FTS5")
+        p = self.db.create_project(name="全文检索项目")
+        asset = MediaAsset(
+            asset_id="fts_001", project_id=p.project_id,
+            file_path="/media/take_001.cr2", file_name="take_001.cr2",
+            notes="closeup hero", tags="hero,day",
+        )
+        self.db.add_media_asset(asset)
+
+        self.assertEqual(
+            [a.asset_id for a in self.db.search_assets(keyword="take")],
+            [asset.asset_id],
+        )
+        self.assertEqual(self.db.count_assets(keyword="hero"), 1)
+
+        self.assertTrue(self.db.update_media_asset(
+            asset.asset_id, file_name="wide_002.cr2", notes="wide shot"
+        ))
+        self.assertEqual(self.db.search_assets(keyword="take"), [])
+        self.assertEqual(
+            [a.asset_id for a in self.db.search_assets(keyword="wide")],
+            [asset.asset_id],
+        )
+
+        self.assertTrue(self.db.delete_media_asset(asset.asset_id))
+        self.assertEqual(self.db.search_assets(keyword="wide"), [])
+
+    def test_asset_path_rename_syncs_fts_filename(self):
+        """专用重命名更新入口也必须同步全文索引中的文件名。"""
+        if not self.db._fts_available:
+            self.skipTest("当前 SQLite 未启用 FTS5")
+        p = self.db.create_project(name="重命名全文检索项目")
+        asset = MediaAsset(
+            asset_id="fts_rename", project_id=p.project_id,
+            file_path="/media/old_name.cr2", file_name="old_name.cr2",
+        )
+        self.db.add_media_asset(asset)
+        self.assertTrue(self.db.update_asset_path(
+            asset.asset_id, "/media/new_name.cr2", "new_name.cr2"
+        ))
+        self.assertEqual(self.db.search_assets(keyword="old_name"), [])
+        self.assertEqual(
+            [a.asset_id for a in self.db.search_assets(keyword="new_name")],
+            [asset.asset_id],
+        )
+
+    def test_search_assets_falls_back_to_like_without_fts(self):
+        """FTS 不可用时仍保留原 LIKE 搜索行为。"""
+        p = self.db.create_project(name="LIKE 回退项目")
+        asset = MediaAsset(
+            asset_id="like_001", project_id=p.project_id,
+            file_path="/media/中文镜头.cr2", file_name="中文镜头.cr2",
+        )
+        self.db.add_media_asset(asset)
+        original = self.db._fts_available
+        self.db._fts_available = False
+        try:
+            hits = self.db.search_assets(keyword="中文镜头")
+        finally:
+            self.db._fts_available = original
+        self.assertEqual([a.asset_id for a in hits], [asset.asset_id])
+
+    def test_iter_search_assets_uses_batch_and_stable_order(self):
+        """迭代查询按小批次返回，并使用 asset_id 作为同时间的稳定排序键。"""
+        p = self.db.create_project(name="迭代查询项目")
+        imported_at = datetime(2026, 1, 1, 12, 0, 0)
+        for asset_id in ("iter_a", "iter_c", "iter_b"):
+            self.db.add_media_asset(MediaAsset(
+                asset_id=asset_id, project_id=p.project_id,
+                file_path=f"/media/{asset_id}.cr2", file_name=f"{asset_id}.cr2",
+                date_imported=imported_at,
+            ))
+
+        rows = list(self.db.iter_search_assets(
+            project_id=p.project_id, batch_size=1
+        ))
+        self.assertEqual([a.asset_id for a in rows], ["iter_c", "iter_b", "iter_a"])
+        page = self.db.search_assets(project_id=p.project_id, limit=2, offset=1)
+        self.assertEqual([a.asset_id for a in page], ["iter_b", "iter_a"])
+
     def test_operation_log_record_and_query(self):
         """操作审计日志可写入并按时间倒序查询"""
         p = self.db.create_project(name="审计项目")

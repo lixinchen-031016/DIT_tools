@@ -17,7 +17,7 @@ from DITWorkstation.Models import ChecksumAlgorithm, BackupJob
 from DITWorkstation.Services.backup_service import BackupService
 from DITWorkstation.Services.media_import_service import MediaImportService
 from DITWorkstation.Utils import (
-    WorkerThread, format_size, safe_slot, get_db_service,
+    format_size, safe_slot, get_db_service,
     pick_directory, pick_save_file, find_overwrite_conflicts, logger,
 )
 from DITWorkstation.App.session_context import get_data_bus
@@ -26,6 +26,7 @@ from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSele
 from DITWorkstation.Views.Widgets.status_panel import StatusPanel
 from DITWorkstation.Views.Widgets.error_dialog import show_error
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS, MONO_FONT_QSS
+from DITWorkstation.ViewModels import TaskViewModel
 
 
 class BackupView(RefreshOnShowView):
@@ -42,7 +43,12 @@ class BackupView(RefreshOnShowView):
         # 复用 db_service 与 checksum_service，与备份共享哈希缓存
         self.import_service = MediaImportService(db_service=self.db_service)
         self.current_job: BackupJob = None
-        self.worker: WorkerThread = None
+        self.task_vm = TaskViewModel(self)
+        self.task_vm.progress.connect(self._on_progress)
+        self.task_vm.file_completed.connect(self._on_file_completed)
+        self.task_vm.finished.connect(self._on_task_finished)
+        self.task_vm.error.connect(self._on_task_error)
+        self._task_kind = None
         # 本次备份关联的项目（在 _start_backup 时锁定，_on_finished 时用于自动导入）
         self._backup_project_id: Optional[str] = None
         # 备份目标路径列表（内联删除按钮式，替代 QListWidget）
@@ -312,7 +318,7 @@ class BackupView(RefreshOnShowView):
         self.history_failed_label.setText(
             "失败文件：选中上方记录后显示（可断点续传 / 重试）"
         )
-        if self.worker and self.worker.isRunning():
+        if self.task_vm.is_running():
             return
         rows = self.history_table.selectionModel().selectedRows()
         if not rows:
@@ -347,7 +353,7 @@ class BackupView(RefreshOnShowView):
     @safe_slot("重试失败文件失败")
     def _retry_failed_files(self):
         """重试选中备份作业的失败文件（断点续传语义）。"""
-        if self.worker and self.worker.isRunning():
+        if self.task_vm.is_running():
             QMessageBox.warning(self, "提示", "已有后台任务正在运行，请稍候")
             return
         rows = self.history_table.selectionModel().selectedRows()
@@ -391,7 +397,8 @@ class BackupView(RefreshOnShowView):
             + (f"，关联项目 {project_id}" if project_id else "")
         )
 
-        self.worker = WorkerThread(
+        self._task_kind = "backup"
+        self.task_vm.start(
             self.backup_service.retry_failed_files,
             job_id,
             project_id=project_id,
@@ -399,11 +406,6 @@ class BackupView(RefreshOnShowView):
             inject_progress=True,
             inject_file_completed=True,
         )
-        self.worker.progress.connect(self._on_progress)
-        self.worker.finished.connect(self._on_finished)
-        self.worker.error.connect(self._on_error)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.worker.start()
 
     def _pick_directory(self, title: str, category: str = "default") -> str:
         """统一的目录选择对话框（委托给共享工具函数，处理打包兼容）。"""
@@ -613,7 +615,8 @@ class BackupView(RefreshOnShowView):
 
         # 显式契约：声明注入 progress / file_completed 信号转发回调，
         # 由 WorkerThread 在 run() 中以关键字参数注入 execute_backup
-        self.worker = WorkerThread(
+        self._task_kind = "backup"
+        self.task_vm.start(
             self.backup_service.execute_backup,
             self.current_job,
             project_id=project_id,
@@ -621,13 +624,6 @@ class BackupView(RefreshOnShowView):
             inject_progress=True,
             inject_file_completed=True,
         )
-        self.worker.progress.connect(self._on_progress)
-        self.worker.finished.connect(self._on_finished)
-        self.worker.error.connect(self._on_error)
-        self.worker.file_completed.connect(self._on_file_completed)
-        # 线程结束后自动释放，避免 QThread 对象泄漏
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.worker.start()
         self.mhl_btn.setEnabled(True)
 
     @safe_slot("校验已有备份失败")
@@ -641,7 +637,7 @@ class BackupView(RefreshOnShowView):
                 "仅当备份时关联了项目，素材的备份位置才会被记录。"
             )
             return
-        if self.worker and self.worker.isRunning():
+        if self.task_vm.is_running():
             QMessageBox.warning(self, "提示", "已有后台任务正在运行，请稍候")
             return
 
@@ -652,16 +648,13 @@ class BackupView(RefreshOnShowView):
         self.status_label.setText("正在校验已有备份…")
         self._log(f"开始校验项目备份完整性: {project_id}")
 
-        self.worker = WorkerThread(
+        self._task_kind = "verify"
+        self.task_vm.start(
             self.backup_service.verify_backup,
             project_id,
-            cancel_check=self.backup_service.is_cancelled,
             progress_callback=lambda cur, tot, msg: self._verify_progress.emit(cur, tot, msg),
+            inject_cancel_check=True,
         )
-        self.worker.finished.connect(self._on_verify_finished)
-        self.worker.error.connect(self._on_error)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.worker.start()
 
     @Slot(int, int, str)
     def _on_verify_progress(self, current: int, total: int, message: str):
@@ -675,7 +668,6 @@ class BackupView(RefreshOnShowView):
         self.cancel_btn.setEnabled(False)
         self.verify_backup_btn.setEnabled(True)
         self.progress_bar.setValue(1000)
-        self.worker = None
         self.status_label.setText("✅ 备份校验完成")
         self._log(
             f"备份校验完成: 检查 {stats['checked']}，一致 {stats['matched']}，"
@@ -711,6 +703,7 @@ class BackupView(RefreshOnShowView):
         self._log(f"✅ MHL 校验清单已导出: {path}")
 
     def _cancel_backup(self):
+        self.task_vm.cancel()
         self.backup_service.cancel()
         self._log("用户取消备份操作")
         self.cancel_btn.setEnabled(False)
@@ -736,7 +729,6 @@ class BackupView(RefreshOnShowView):
         self.cancel_btn.setEnabled(False)
         self.progress_bar.setValue(1000)
         # worker 已连 deleteLater，这里清空引用避免悬挂
-        self.worker = None
 
         job = result
         if job.status.value == "completed":
@@ -838,13 +830,28 @@ class BackupView(RefreshOnShowView):
         self.verify_backup_btn.setEnabled(True)
         self.status_label.setText(f"❌ 错误: {error}")
         self._log(f"错误: {error}")
-        self.worker = None
         show_error(
             title="备份错误",
             description=error,
             details=error,
             parent=self,
         )
+
+    @Slot(object)
+    def _on_task_finished(self, result):
+        """统一任务完成入口，避免每次启动任务重复连接信号。"""
+        task_kind = self._task_kind
+        self._task_kind = None
+        if task_kind == "verify":
+            self._on_verify_finished(result)
+        elif task_kind == "backup":
+            self._on_finished(result)
+
+    @Slot(str)
+    def _on_task_error(self, error: str):
+        """统一任务错误入口，避免重复弹出错误提示。"""
+        self._task_kind = None
+        self._on_error(error)
 
     def _log(self, message: str):
         self.status_panel.log(message)

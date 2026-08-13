@@ -3,6 +3,7 @@ import sqlite3
 import threading
 import uuid
 import shutil
+import re
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,7 @@ class DatabaseService:
         self._conns: dict = {}
         self._conns_lock = threading.Lock()
         self._had_existing_db = self.db_path.exists() and self.db_path.stat().st_size > 0
+        self._fts_available = False
         self._init_db()
 
     def _create_conn(self) -> sqlite3.Connection:
@@ -263,7 +265,7 @@ class DatabaseService:
                 pass
 
     # 当前数据库 schema 版本：每次结构变更 +1，并在 _migrate_db 中补充对应迁移
-    _DB_VERSION = 2
+    _DB_VERSION = 3
 
     def _migrate_db(self):
         """按 PRAGMA user_version 分版本迁移数据库。
@@ -275,6 +277,7 @@ class DatabaseService:
         conn = self._create_conn()
         try:
             version = self._get_user_version(conn)
+            fts_exists = self._fts_table_exists(conn)
             if version < self._DB_VERSION and self._had_existing_db:
                 self._backup_before_migration(conn)
             if version < 1:
@@ -285,6 +288,16 @@ class DatabaseService:
                 self._migrate_v2(conn)
                 self._set_user_version(conn, 2)
                 logger.info("数据库迁移完成: v2")
+            if version < 3:
+                self._migrate_v3(conn)
+                self._set_user_version(conn, 3)
+                logger.info("数据库迁移完成: v3")
+
+            # FTS 创建必须晚于迁移前备份，否则备份会混入新建索引表。
+            # v3 数据库若因中断或旧版本缺失索引，也在这里补建并重建一次。
+            self._fts_available = self._ensure_fts(conn)
+            if self._fts_available and (version < 3 or not fts_exists):
+                conn.execute("INSERT INTO media_assets_fts(media_assets_fts) VALUES ('rebuild')")
 
             # 向后兼容：旧项目（workspace_id 为 NULL）自动归入"默认工作区"
             self._migrate_legacy_projects_to_default_workspace(conn)
@@ -431,6 +444,64 @@ class DatabaseService:
                 ),
             )
             logger.info("数据库迁移 v2: 预置默认项目模板")
+
+    def _migrate_v3(self, conn):
+        """v3：预留素材全文索引版本号。索引在迁移备份后统一创建。"""
+        return None
+
+    @staticmethod
+    def _fts_table_exists(conn) -> bool:
+        return conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("media_assets_fts",),
+        ).fetchone() is not None
+
+    @staticmethod
+    def _ensure_fts(conn) -> bool:
+        """创建 FTS5 索引表；系统 SQLite 未编译 FTS5 时返回 False。"""
+        try:
+            conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS media_assets_fts USING fts5("
+                "asset_id UNINDEXED, file_name, scene, shot, notes, tags, "
+                "tokenize='unicode61')"
+            )
+            return True
+        except sqlite3.OperationalError as exc:
+            logger.warning(f"SQLite 未启用 FTS5，搜索回退 LIKE: {exc}")
+            return False
+
+    @staticmethod
+    def _fts_query(keyword: str) -> Optional[str]:
+        """将简单关键词转换为 FTS5 前缀查询；复杂/非 ASCII 输入走 LIKE。"""
+        if not keyword or not re.fullmatch(r"[A-Za-z0-9_ .-]+", keyword):
+            return None
+        terms = re.findall(r"[A-Za-z0-9_]+", keyword.lower())
+        return " AND ".join(f'"{term}"*' for term in terms) if terms else None
+
+    def _sync_asset_fts(self, conn, asset_id: str, *, file_name="", scene="",
+                        shot="", notes="", tags=""):
+        if not self._fts_available:
+            return
+        conn.execute("DELETE FROM media_assets_fts WHERE asset_id = ?", (asset_id,))
+        conn.execute(
+            "INSERT INTO media_assets_fts(asset_id, file_name, scene, shot, notes, tags) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (asset_id, file_name or "", scene or "", shot or "", notes or "", tags or ""),
+        )
+
+    def _refresh_asset_fts(self, conn, asset_id: str):
+        """从素材主表重新同步单条 FTS 记录（须在事务内调用）。"""
+        if not self._fts_available:
+            return
+        row = conn.execute(
+            "SELECT file_name, scene, shot, notes, tags FROM media_assets "
+            "WHERE asset_id = ?", (asset_id,)
+        ).fetchone()
+        if row:
+            self._sync_asset_fts(
+                conn, asset_id, file_name=row["file_name"], scene=row["scene"],
+                shot=row["shot"], notes=row["notes"], tags=row["tags"],
+            )
 
     @staticmethod
     def _split_tags(tags: str) -> list:
@@ -969,6 +1040,10 @@ class DatabaseService:
                  asset.rating, asset.tags, asset.notes)
             )
             self._sync_asset_tags(conn, asset.asset_id, asset.tags)
+            self._sync_asset_fts(
+                conn, asset.asset_id, file_name=asset.file_name, scene=asset.scene,
+                shot=asset.shot, notes=asset.notes, tags=asset.tags,
+            )
             logger.info(f"添加素材资产: {asset.asset_id} - {asset.file_name}")
         return asset
 
@@ -1003,6 +1078,10 @@ class DatabaseService:
                          asset.rating, asset.tags, asset.notes)
                     )
                     self._sync_asset_tags(conn, asset.asset_id, asset.tags)
+                    self._sync_asset_fts(
+                        conn, asset.asset_id, file_name=asset.file_name, scene=asset.scene,
+                        shot=asset.shot, notes=asset.notes, tags=asset.tags,
+                    )
                 logger.info(f"批量添加素材资产: {len(assets)} 个")
                 return len(assets)
         except Exception as e:
@@ -1013,7 +1092,8 @@ class DatabaseService:
         """获取项目素材"""
         with self._connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM media_assets WHERE project_id = ? ORDER BY date_imported DESC",
+                "SELECT * FROM media_assets WHERE project_id = ? "
+                "ORDER BY date_imported DESC, asset_id DESC",
                 (project_id,)
             ).fetchall()
             return [self._row_to_asset(r) for r in rows]
@@ -1057,6 +1137,7 @@ class DatabaseService:
                 conn.execute(f"UPDATE media_assets SET {', '.join(fields)} WHERE asset_id = ?", params)
                 if tags_updated:
                     self._sync_asset_tags(conn, asset_id, kwargs.get('tags') or '')
+                self._refresh_asset_fts(conn, asset_id)
                 logger.info(f"更新素材资产: {asset_id}")
                 return True
         except Exception as e:
@@ -1067,6 +1148,8 @@ class DatabaseService:
         """删除素材资产"""
         try:
             with self._transaction() as conn:
+                if self._fts_available:
+                    conn.execute("DELETE FROM media_assets_fts WHERE asset_id = ?", (asset_id,))
                 conn.execute("DELETE FROM asset_tags WHERE asset_id = ?", (asset_id,))
                 conn.execute("DELETE FROM media_assets WHERE asset_id = ?", (asset_id,))
                 logger.info(f"删除素材资产: {asset_id}")
@@ -1194,6 +1277,7 @@ class DatabaseService:
                         "UPDATE media_assets SET file_path = ? WHERE asset_id = ?",
                         (new_path, asset_id)
                     )
+                self._refresh_asset_fts(conn, asset_id)
                 logger.info(f"更新素材路径: {asset_id}")
                 return True
         except Exception as e:
@@ -1231,6 +1315,7 @@ class DatabaseService:
                         "UPDATE media_assets SET file_path = ? WHERE asset_id = ?",
                         (new_key, row["asset_id"])
                     )
+                self._refresh_asset_fts(conn, row["asset_id"])
                 logger.info(f"按旧路径同步重命名: {old_key} -> {new_key}")
                 return True
         except Exception as e:
@@ -1272,7 +1357,8 @@ class DatabaseService:
         if date_to:
             query += " AND date_imported <= ?"
             params.append(date_to)
-        if keyword:
+        fts_keyword = self._fts_query(keyword or "")
+        if keyword and not (self._fts_available and fts_keyword):
             query += " AND (file_name LIKE ? OR scene LIKE ? OR shot LIKE ? OR notes LIKE ?)"
             params.extend([f"%{keyword}%"] * 4)
         if log_id:
@@ -1289,6 +1375,58 @@ class DatabaseService:
             params.append(f"%{tag}%")
 
         return query, params
+
+    def _search_sql(self, **filters):
+        """构造带 FTS 条件的素材查询 SQL 与参数。"""
+        keyword = filters.get("keyword") or ""
+        fts_keyword = self._fts_query(keyword)
+        where_sql, params = self._asset_filter_clause(**filters)
+        if keyword and self._fts_available and fts_keyword:
+            where_sql += (
+                " AND asset_id IN (SELECT asset_id FROM media_assets_fts "
+                "WHERE media_assets_fts MATCH ?)"
+            )
+            params.append(fts_keyword)
+        return where_sql, params
+
+    def iter_search_assets(
+        self,
+        project_id: Optional[str] = None,
+        scene: Optional[str] = None,
+        shot: Optional[str] = None,
+        file_type: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        keyword: Optional[str] = None,
+        log_id: Optional[str] = None,
+        rating: Optional[int] = None,
+        tag: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        batch_size: int = 500,
+    ):
+        """按游标批量读取素材，避免导出/批处理一次性加载全部记录。"""
+        filters = dict(
+            project_id=project_id, scene=scene, shot=shot, file_type=file_type,
+            date_from=date_from, date_to=date_to, keyword=keyword,
+            log_id=log_id, rating=rating, tag=tag,
+        )
+        where_sql, params = self._search_sql(**filters)
+        query = f"SELECT * FROM media_assets{where_sql} ORDER BY date_imported DESC, asset_id DESC"
+        if limit is not None and limit > 0:
+            query += " LIMIT ?"
+            params.append(limit)
+            if offset is not None and offset > 0:
+                query += " OFFSET ?"
+                params.append(offset)
+        with self._connection() as conn:
+            cursor = conn.execute(query, params)
+            while True:
+                rows = cursor.fetchmany(max(1, batch_size))
+                if not rows:
+                    break
+                for row in rows:
+                    yield self._row_to_asset(row)
 
     def search_assets(
         self,
@@ -1313,21 +1451,11 @@ class DatabaseService:
             limit: 返回结果上限。None 表示不限制。
             offset: 分页偏移。None 表示从第一条开始。
         """
-        where_sql, params = self._asset_filter_clause(
+        return list(self.iter_search_assets(
             project_id=project_id, scene=scene, shot=shot, file_type=file_type,
             date_from=date_from, date_to=date_to, keyword=keyword,
-            log_id=log_id, rating=rating, tag=tag,
-        )
-        with self._connection() as conn:
-            query = f"SELECT * FROM media_assets{where_sql} ORDER BY date_imported DESC"
-            if limit is not None and limit > 0:
-                query += " LIMIT ?"
-                params.append(limit)
-                if offset is not None and offset > 0:
-                    query += " OFFSET ?"
-                    params.append(offset)
-            rows = conn.execute(query, params).fetchall()
-            return [self._row_to_asset(r) for r in rows]
+            log_id=log_id, rating=rating, tag=tag, limit=limit, offset=offset,
+        ))
 
     def count_assets(
         self,
@@ -1343,11 +1471,12 @@ class DatabaseService:
         tag: Optional[str] = None,
     ) -> int:
         """统计符合条件的素材总数（与 search_assets 同条件）。"""
-        where_sql, params = self._asset_filter_clause(
+        filters = dict(
             project_id=project_id, scene=scene, shot=shot, file_type=file_type,
             date_from=date_from, date_to=date_to, keyword=keyword,
             log_id=log_id, rating=rating, tag=tag,
         )
+        where_sql, params = self._search_sql(**filters)
         with self._connection() as conn:
             row = conn.execute(f"SELECT COUNT(*) FROM media_assets{where_sql}", params).fetchone()
             return row[0]

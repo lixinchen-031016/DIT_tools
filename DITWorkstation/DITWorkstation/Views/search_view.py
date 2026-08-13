@@ -541,11 +541,12 @@ class SearchView(RefreshOnShowView):
         )
         if not path:
             return
-        all_results = self.db_service.search_assets(**self._current_filters)
-        ReportService().export_assets_csv(all_results, path)
+        all_results = self.db_service.iter_search_assets(**self._current_filters)
+        ReportService().export_assets_csv_iter(all_results, path)
+        exported_count = self.db_service.count_assets(**self._current_filters)
         QMessageBox.information(
             self, "导出完成",
-            f"已导出 {len(all_results)} 条素材记录：\n{path}"
+            f"已导出 {exported_count} 条素材记录：\n{path}"
         )
 
     def _refresh_tag_completer(self):

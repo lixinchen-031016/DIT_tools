@@ -312,13 +312,17 @@ class ReportService:
         return format_size(size_bytes)
 
     def export_assets_csv(self, assets: List[MediaAsset], output_path: str) -> str:
+        """导出素材 CSV；兼容旧接口，内部统一使用可迭代数据源。"""
+        return self.export_assets_csv_iter(assets, output_path)
+
+    def export_assets_csv_iter(self, assets, output_path: str) -> str:
         """把素材元数据导出为 CSV 表格。
 
         使用 utf-8-sig（带 BOM）编码，Excel 在 Windows/macOS 上均可直接
         打开且中文不乱码；供编辑、转码交接或外部目录系统导入使用。
 
         Args:
-            assets: 要导出的素材列表
+            assets: 要导出的素材列表或任意素材迭代器
             output_path: 输出 .csv 路径
 
         Returns:
@@ -340,6 +344,7 @@ class ReportService:
         def _dt(value) -> str:
             return value.isoformat() if value else ""
 
+        count = 0
         with open(path, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(headers)
@@ -361,6 +366,7 @@ class ReportService:
                     a.tags, a.notes,
                     _dt(a.date_imported),
                 ])
+                count += 1
 
-        logger.info(f"素材 CSV 导出成功: {path}（{len(assets)} 条）")
+        logger.info(f"素材 CSV 导出成功: {path}（{count} 条）")
         return str(path)

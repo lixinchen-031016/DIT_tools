@@ -95,3 +95,17 @@ def test_export_assets_csv_parent_dir_auto_created(tmp_dir):
     out = tmp_dir / "nested" / "deep" / "list.csv"
     ReportService().export_assets_csv([_asset()], str(out))
     assert out.exists()
+
+
+def test_export_assets_csv_iter_accepts_generator(tmp_dir):
+    """迭代器导出不要求调用方先构造完整列表。"""
+    out = tmp_dir / "iter.csv"
+
+    def assets():
+        yield _asset(file_name="first.cr2")
+        yield _asset(file_name="second.cr2")
+
+    ReportService().export_assets_csv_iter(assets(), str(out))
+    with open(out, encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.reader(f))
+    assert [row[0] for row in rows[1:]] == ["first.cr2", "second.cr2"]
