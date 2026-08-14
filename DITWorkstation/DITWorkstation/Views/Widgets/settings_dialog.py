@@ -11,6 +11,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QProcess
 
 from DITWorkstation.App import config
+from DITWorkstation.App.feature_flags import (
+    UsageMode, get_usage_mode, set_usage_mode, is_enabled,
+)
 from DITWorkstation.Services.thumbnail_service import ThumbnailService
 from DITWorkstation.Utils import (
     format_size, clear_recent_paths, count_recent_paths, open_in_file_manager,
@@ -52,6 +55,28 @@ class SettingsDialog(QDialog):
         subtitle = QLabel("数据存储位置、临时文件清理与运行参数")
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
+
+        # ===== 使用场景（功能模式开关）=====
+        usage_group = QGroupBox("🧭 使用场景")
+        usage_layout = QVBoxLayout(usage_group)
+        usage_row = QHBoxLayout()
+        usage_row.addWidget(QLabel("界面模式:"))
+        self.usage_mode_combo = QComboBox()
+        self.usage_mode_combo.addItem("团队模式（完整 DIT 工作流）", UsageMode.TEAM.value)
+        self.usage_mode_combo.addItem("个人模式（独立创作者）", UsageMode.PERSONAL.value)
+        self.usage_mode_combo.setToolTip(
+            "个人模式隐藏拍摄日志、素材评级、报告、模板、归档等团队功能，\n"
+            "仅保留项目管理、导入、单目标备份、RAW 提取、重命名与检索。\n"
+            "切换后重启应用生效；数据库数据不受影响，可随时切回。"
+        )
+        self.usage_mode_combo.currentIndexChanged.connect(self._on_usage_mode_changed)
+        usage_row.addWidget(self.usage_mode_combo)
+        usage_row.addStretch()
+        usage_layout.addLayout(usage_row)
+        usage_hint = QLabel("模式切换在重启应用后生效")
+        usage_hint.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        usage_layout.addWidget(usage_hint)
+        layout.addWidget(usage_group)
 
         # ===== 数据存储位置 =====
         dir_group = QGroupBox("📂 数据存储位置")
@@ -175,10 +200,26 @@ class SettingsDialog(QDialog):
         self.auto_card_template_combo.currentIndexChanged.connect(
             self._on_auto_card_template_changed
         )
-        volume_form.addRow("自动关联项目:", self.auto_card_project_combo)
-        volume_form.addRow("自动备份方案:", self.auto_card_template_combo)
+        self.auto_card_project_label = QLabel("自动关联项目:")
+        self.auto_card_template_label = QLabel("自动备份方案:")
+        volume_form.addRow(self.auto_card_project_label, self.auto_card_project_combo)
+        volume_form.addRow(self.auto_card_template_label, self.auto_card_template_combo)
         volume_layout.addLayout(volume_form)
         layout.addWidget(volume_group)
+
+        # 个人模式隐藏相机卡自动化配置（个人模式禁止启动自动化流程，
+        # 只保留「检测到存储卡跳转导入」的手动辅助能力）
+        self._automation_widgets = [
+            self.auto_card_automation_check,
+            self.auto_card_import_check,
+            self.auto_card_backup_check,
+            self.auto_card_project_label,
+            self.auto_card_project_combo,
+            self.auto_card_template_label,
+            self.auto_card_template_combo,
+        ]
+        for w in self._automation_widgets:
+            w.setVisible(is_enabled("card_automation"))
 
         layout.addStretch()
         scroll.setWidget(content)
@@ -207,6 +248,13 @@ class SettingsDialog(QDialog):
 
     def _refresh_states(self):
         """刷新各项状态显示。"""
+        # 使用场景：回填当前模式（阻断信号避免误触发保存/重启提示）
+        self.usage_mode_combo.blockSignals(True)
+        self.usage_mode_combo.setCurrentIndex(
+            max(0, self.usage_mode_combo.findData(get_usage_mode().value))
+        )
+        self.usage_mode_combo.blockSignals(False)
+
         self.db_dir_label.setText(str(config.effective_db_dir))
         self.report_dir_label.setText(str(config.report_dir))
         self.log_dir_label.setText(str(config.log_dir))
@@ -257,6 +305,42 @@ class SettingsDialog(QDialog):
         self.auto_card_automation_check.setChecked(config.auto_card_automation_enabled)
         self.auto_card_import_check.setChecked(config.auto_card_import)
         self.auto_card_backup_check.setChecked(config.auto_card_backup)
+
+    # ===== 使用场景（功能模式开关）=====
+
+    def _on_usage_mode_changed(self, index: int):
+        """切换使用场景：立即写入 app_config.usage_mode，提示重启后生效。
+
+        不尝试动态重建已存在的主窗口（设计文档 6.4：模式在启动时确定）。
+        """
+        value = self.usage_mode_combo.itemData(index)
+        try:
+            mode = UsageMode(value)
+        except ValueError:
+            logger.warning(f"非法使用模式值: {value!r}，忽略")
+            return
+        if mode == get_usage_mode():
+            return
+        try:
+            set_usage_mode(mode)
+        except ValueError:
+            logger.warning(f"写入使用模式失败: {value!r}")
+            return
+        mode_text = "团队模式" if mode == UsageMode.TEAM else "个人模式"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle("使用场景已切换")
+        box.setText(
+            f"已切换为{mode_text}，重启应用后生效。\n"
+            "数据库数据不受影响，可随时切回。\n\n"
+            "是否立即重启？"
+        )
+        restart_btn = box.addButton("立即重启", QMessageBox.AcceptRole)
+        later_btn = box.addButton("稍后重启", QMessageBox.RejectRole)
+        box.setDefaultButton(later_btn)
+        box.exec()
+        if box.clickedButton() is restart_btn:
+            self._restart_app()
 
     # ===== 存储位置重设 =====
 

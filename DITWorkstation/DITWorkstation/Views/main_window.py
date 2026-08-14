@@ -40,6 +40,10 @@ from DITWorkstation.Utils.workers import WorkerThread
 # 导航配置（NAV_ITEMS / get_nav_index）已抽离到 App/navigation.py 作为单一事实源，
 # 消除 Views ↔ main_window 的循环依赖。视图跳转请直接从 App.navigation 导入。
 from DITWorkstation.App.navigation import NAV_ITEMS, get_nav_index
+# 功能模式开关：主窗口按「当前激活导航列表」构建（个人模式隐藏 log/report）
+from DITWorkstation.App.feature_flags import (
+    get_active_nav_items, is_nav_enabled, is_enabled,
+)
 
 
 class MainWindow(QMainWindow):
@@ -64,13 +68,14 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # 左侧导航栏（顺序由 NAV_ITEMS 单一事实源决定）
+        # 左侧导航栏（顺序由「当前激活导航列表」决定：个人模式隐藏 log/report）
+        self.active_nav_items = get_active_nav_items()
         self.nav_list = QListWidget()
         self.nav_list.setFixedWidth(200)
         self.nav_list.setIconSize(QSize(24, 24))
         self.nav_list.setSpacing(4)
 
-        for _key, text, tooltip in NAV_ITEMS:
+        for _key, text, tooltip in self.active_nav_items:
             item = QListWidgetItem(text)
             item.setToolTip(tooltip)
             item.setSizeHint(QSize(180, 44))
@@ -79,7 +84,10 @@ class MainWindow(QMainWindow):
         self.nav_list.setCurrentRow(0)
         self.nav_list.currentRowChanged.connect(self._on_nav_changed)
 
-        # 右侧内容区（addWidget 顺序必须与 NAV_ITEMS 顺序保持一致）
+        # 右侧内容区：第一版不做视图懒加载，仍实例化全部视图
+        # （关闭事件、后台 worker、数据总线和跨视图跳转直接引用视图属性，
+        #  不实例化隐藏视图会扩大改动范围并可能遗漏后台任务收尾），
+        # 但只把激活视图加入导航和 QStackedWidget。
         self.stack = QStackedWidget()
         self.dashboard_view = ProjectDashboardView()
         self.import_view = MediaImportView()
@@ -91,17 +99,23 @@ class MainWindow(QMainWindow):
         self.asset_info_view = AssetInfoView()
         self.report_view = ReportView()
 
+        # key → 视图映射：F5 刷新、视图栈填充等索引逻辑统一经由此映射
+        self.view_by_key = {
+            "dashboard": self.dashboard_view,
+            "import": self.import_view,
+            "backup": self.backup_view,
+            "log": self.log_view,
+            "raw": self.raw_view,
+            "rename": self.rename_view,
+            "search": self.search_view,
+            "asset_info": self.asset_info_view,
+            "report": self.report_view,
+        }
+
         # 统一用 QScrollArea 包裹视图，保证内容超出窗口时出现滚动条。
-        # addWidget 顺序必须与 NAV_ITEMS 顺序保持一致。
-        self.stack.addWidget(self._wrap_scrollable(self.dashboard_view))
-        self.stack.addWidget(self._wrap_scrollable(self.import_view))
-        self.stack.addWidget(self._wrap_scrollable(self.backup_view))
-        self.stack.addWidget(self._wrap_scrollable(self.log_view))
-        self.stack.addWidget(self._wrap_scrollable(self.raw_view))
-        self.stack.addWidget(self._wrap_scrollable(self.rename_view))
-        self.stack.addWidget(self._wrap_scrollable(self.search_view))
-        self.stack.addWidget(self._wrap_scrollable(self.asset_info_view))
-        self.stack.addWidget(self._wrap_scrollable(self.report_view))
+        # addWidget 顺序与 active_nav_items 顺序保持一致（索引即导航行号）。
+        for key, _text, _tooltip in self.active_nav_items:
+            self.stack.addWidget(self._wrap_scrollable(self.view_by_key[key]))
 
         # 连接跨视图刷新信号总线
         bus = get_data_bus()
@@ -114,9 +128,11 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+F"), self, activated=self._focus_search)
         QShortcut(QKeySequence("Ctrl+I"), self, activated=self._focus_import)
         QShortcut(QKeySequence("Ctrl+B"), self, activated=self._focus_backup)
-        QShortcut(QKeySequence("Ctrl+L"), self, activated=self._focus_log)
-        # Ctrl+1~9 切换到对应导航页
-        for i in range(1, 10):
+        # Ctrl+L 跳拍摄日志仅团队模式注册（个人模式无日志页）
+        if is_nav_enabled("log"):
+            QShortcut(QKeySequence("Ctrl+L"), self, activated=self._focus_log)
+        # Ctrl+1~N 切换到对应导航页（N = 激活导航项数量，个人模式为 7）
+        for i in range(1, len(self.active_nav_items) + 1):
             QShortcut(QKeySequence(f"Ctrl+{i}"), self,
                       activated=lambda idx=i - 1: self.nav_list.setCurrentRow(idx))
         # F5 刷新当前视图
@@ -183,6 +199,8 @@ class MainWindow(QMainWindow):
         sop_action = help_menu.addAction("SOP 操作链说明...")
         sop_action.setToolTip("查看完整的标准操作流程说明")
         sop_action.triggered.connect(self._show_sop_guide)
+        # 个人模式隐藏 SOP 团队引导（其文案包含日志/报告等团队流程）
+        sop_action.setVisible(is_enabled("sop_guide"))
 
         shortcuts_action = help_menu.addAction("快捷键大全...")
         shortcuts_action.setToolTip("查看所有全局快捷键")
@@ -202,29 +220,34 @@ class MainWindow(QMainWindow):
             set_current_workspace(wizard._created_workspace_id)
         if wizard._created_project_id:
             set_current_project(wizard._created_project_id)
-            try:
-                self.nav_list.setCurrentRow(get_nav_index("import"))
-            except KeyError as e:
-                logger.debug(f"向导后跳转媒体导入失败: {e}")
+            # get_nav_index 在目标页未激活时返回 None，禁止直接传给 setCurrentRow
+            import_idx = get_nav_index("import")
+            if import_idx is not None:
+                self.nav_list.setCurrentRow(import_idx)
 
     def _show_sop_guide(self):
         """弹出 SOP 操作链说明对话框"""
         QMessageBox.information(self, "SOP 操作链说明", _SOP_GUIDE_TEXT)
 
     def _show_shortcuts(self):
-        """弹出快捷键大全对话框"""
-        QMessageBox.information(
-            self, "快捷键大全",
-            "全局快捷键：\n"
-            "• Ctrl+1~9：切换到对应导航页\n"
-            "• Ctrl+F：跳转到素材检索\n"
-            "• Ctrl+I：跳转到媒体导入\n"
-            "• Ctrl+B：跳转到数据备份\n"
-            "• Ctrl+L：跳转到拍摄日志\n"
-            "• Ctrl+Shift+H：重新启动新手向导\n"
-            "• F5：刷新当前视图\n"
-            "• Esc：取消当前后台任务"
-        )
+        """弹出快捷键大全对话框（内容随功能模式裁剪）"""
+        nav_count = len(self.active_nav_items)
+        lines = [
+            "全局快捷键：",
+            f"• Ctrl+1~{nav_count}：切换到对应导航页",
+            "• Ctrl+F：跳转到素材检索",
+            "• Ctrl+I：跳转到媒体导入",
+            "• Ctrl+B：跳转到数据备份",
+        ]
+        # Ctrl+L 跳拍摄日志仅团队模式可用
+        if is_nav_enabled("log"):
+            lines.append("• Ctrl+L：跳转到拍摄日志")
+        lines += [
+            "• Ctrl+Shift+H：重新启动新手向导",
+            "• F5：刷新当前视图",
+            "• Esc：取消当前后台任务",
+        ]
+        QMessageBox.information(self, "快捷键大全", "\n".join(lines))
 
     def _show_about(self):
         """关于对话框"""
@@ -284,22 +307,11 @@ class MainWindow(QMainWindow):
             self.nav_list.setCurrentRow(idx)
 
     def _refresh_current_view(self):
-        """F5: 刷新当前视图"""
+        """F5: 刷新当前视图（索引基于激活导航列表，不会访问隐藏页面）"""
         idx = self.stack.currentIndex()
-        if 0 <= idx < len(NAV_ITEMS):
-            key = NAV_ITEMS[idx][0]
-            view_map = {
-                "dashboard": self.dashboard_view,
-                "import": self.import_view,
-                "backup": self.backup_view,
-                "log": self.log_view,
-                "raw": self.raw_view,
-                "rename": self.rename_view,
-                "search": self.search_view,
-                "asset_info": self.asset_info_view,
-                "report": self.report_view,
-            }
-            view = view_map.get(key)
+        if 0 <= idx < len(self.active_nav_items):
+            key = self.active_nav_items[idx][0]
+            view = self.view_by_key.get(key)
             if view and hasattr(view, "_trigger_refresh_now"):
                 view._trigger_refresh_now()
 
@@ -450,7 +462,10 @@ class MainWindow(QMainWindow):
         if getattr(config, "auto_detect_volume", True):
             self._navigate_to("import")
             self.import_view.set_source_folder(path, auto_scan=True)
-        if getattr(config, "auto_card_automation_enabled", False):
+        # 自动化启动条件必须同时满足配置开关与功能模式开关：
+        # 个人模式下即使用户曾在团队模式开启过自动化配置，也不得启动。
+        if (getattr(config, "auto_card_automation_enabled", False)
+                and is_enabled("card_automation")):
             self._start_card_automation(path)
 
     def _start_card_automation(self, source_path: str):
@@ -524,12 +539,13 @@ class MainWindow(QMainWindow):
         避免单个子视图的刷新异常中断整个广播链路。
 
         注意：视图已被 QScrollArea 包裹，stack.currentWidget() 返回的是
-        QScrollArea 而非视图本身，故用 currentIndex + NAV_ITEMS key 判断。
+        QScrollArea 而非视图本身，故用 currentIndex + 激活导航列表 key 判断。
+        隐藏页面不在视图栈中，其视图属性仍存在（MVP 全量实例化）但不会被访问。
         """
         idx = self.stack.currentIndex()
-        if idx < 0 or idx >= len(NAV_ITEMS):
+        if idx < 0 or idx >= len(self.active_nav_items):
             return
-        key = NAV_ITEMS[idx][0]
+        key = self.active_nav_items[idx][0]
         try:
             if event in ("assets_changed", "all"):
                 # 素材变更：刷新日志关联面板、检索结果、素材信息

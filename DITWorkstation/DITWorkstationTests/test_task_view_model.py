@@ -69,6 +69,36 @@ def test_worker_cleanup_waits_for_native_thread_completion():
     assert events == ["result", "thread"]
 
 
+def test_worker_survives_reference_drop_while_native_thread_running():
+    import threading
+    from PySide6.QtWidgets import QApplication
+
+    entered = threading.Event()
+    release = threading.Event()
+    thread_finished = threading.Event()
+
+    def task():
+        entered.set()
+        release.wait(5)
+        return "done"
+
+    def spawn():
+        worker = WorkerThread(task)
+        worker.thread_finished.connect(lambda: thread_finished.set())
+        worker.start()
+        # worker 引用在此作用域结束时被丢弃；若 QThread 包装对象被提前析构，
+        # Qt 会 abort（"QThread: Destroyed while thread '' is still running"）。
+
+    spawn()
+    assert entered.wait(3)
+    release.set()
+    deadline = time.monotonic() + 3
+    while not thread_finished.is_set() and time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert thread_finished.is_set()
+
+
 def test_task_view_model_retains_failed_state():
     vm = TaskViewModel()
     errors = _wait_for_signal(

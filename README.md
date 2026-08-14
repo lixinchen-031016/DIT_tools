@@ -37,7 +37,7 @@ DIT 工作站围绕 9 大功能模块构建完整的数据管理闭环：
 | 6 | 拍摄日志 | 📋 | 管理场景/镜头/镜次拍摄记录，支持「从代表素材填充 EXIF」，双向关联素材与日志 |
 | 7 | 素材检索 | 🔍 | 按项目/场景/镜头/类型/关键词/日志/评级/日期/标签多维度组合检索（分页展示，每页 500 条），结果可导出 CSV；支持按校验和跨项目查重 |
 | 8 | 素材信息 | ℹ️ | 查看素材 EXIF 与元数据详情，支持缩略图预览、单个/批量重新读取 EXIF，可设置镜次评级，可一键导出项目素材清单 CSV；支持标签/备注编辑与批量评级、批量删除 |
-| 9 | 报告生成 | 📊 | 生成 PDF 数据备份报告与素材统计报告，含镜次评级分布统计，跨平台中文字体支持 |
+| 9 | 报告生成 | 📊 | 生成 PDF 数据备份报告与素材统计报告，含镜次评级分布统计；按平台查找预装中文字体 |
 
 ---
 
@@ -58,6 +58,12 @@ DIT 工作站围绕 9 大功能模块构建完整的数据管理闭环：
 - 首次启动且数据库无项目时自动弹出
 - 5 步引导：欢迎 → 创建工作区 → 创建项目 → SOP 操作链提示 → 完成
 - 完成后自动跳转到「媒体导入」视图
+
+### 使用场景（团队 / 个人模式）
+- 「设置 → 使用场景」可切换团队模式（默认，完整 9 模块工作流）与个人模式（独立创作者）
+- 个人模式精简为 7 个模块：项目概览 / 媒体导入 / 数据备份 / RAW 提取 / 文件重命名 / 素材检索 / 素材信息
+- 个人模式仅做界面与交互裁剪：隐藏工作区操作（项目自动归入默认工作区且全部项目可见）、拍摄日志、素材评级、报告、模板、归档/恢复、审计面板与相机卡自动化；备份限单目标
+- 不删除任何数据库数据，两种模式共享同一数据库格式；切换写入 `settings.json` 的 `app_config.usage_mode`，重启后生效，可随时切回
 
 ### 项目管理（归档 / 恢复）
 - 「项目概览」提供「归档当前项目…」：把项目信息 + 拍摄日志 + 素材元数据打包为 zip，可选附带素材文件副本
@@ -231,7 +237,7 @@ DIT_tools/
     │           ├── status_panel.py               # 进度/状态/日志面板
     │           ├── table_factory.py              # 表格工厂
     │           └── empty_state.py                # 空状态占位
-    ├── DITWorkstationTests/           # 测试套件（291 个测试）
+    ├── DITWorkstationTests/           # 测试套件（322 个测试）
     │   ├── conftest.py                 # 共享 fixture
     │   ├── test_database.py            # 数据库服务测试（65）
     │   ├── test_media_import.py        # 媒体导入测试（28）
@@ -240,14 +246,16 @@ DIT_tools/
     │   ├── test_thumbnail.py           # 缩略图测试（12）
     │   ├── test_backup_resume.py       # 断点续传测试（10）
     │   ├── test_session_context.py     # 会话上下文测试（10）
-    │   ├── test_settings.py            # 设置持久化测试（10）
-    │   ├── test_archive.py             # 归档/恢复测试（9）
+    │   ├── test_settings.py            # 设置持久化测试（12）
+    │   ├── test_archive.py             # 归档/恢复测试（11）
     │   ├── test_raw_extraction.py      # RAW 提取测试（9）
     │   ├── test_tags.py                # 标签测试（9）
     │   ├── test_models.py              # 数据模型测试（8）
     │   ├── test_rename.py             # 重命名测试（7）
-    │   ├── test_checksum.py           # 校验和服务测试（7）
-    │   └── test_workers.py            # 后台线程测试（7）
+    │   ├── test_checksum.py           # 校验和服务测试（11）
+    │   ├── test_workers.py            # 后台线程测试（7）
+    │   ├── test_ui_headless.py        # 无头 UI 与模式切换测试（19）
+    │   └── test_feature_flags.py      # 功能模式开关测试（15）
     └── docs/
         └── 用户手册.md                 # 用户操作手册
 ```
@@ -259,9 +267,11 @@ DIT_tools/
 ### 环境要求
 
 - Python 3.11+（推荐 3.13）
-- macOS / Windows
+- macOS / Windows（提供原生打包脚本）
+- Linux 可从源码运行；当前未提供 Linux 原生打包脚本，也未纳入本地跨平台验证
 - macOS 视频元数据读取需额外安装 MediaInfo（`brew install mediainfo`）
 - Windows 视频元数据读取需从 https://mediaarea.net/en/MediaInfo 下载安装 MediaInfo
+- PDF 报告需要系统中存在可用的中文字体：macOS 推荐 PingFang，Windows 推荐微软雅黑，Linux 推荐文泉驿或 Noto
 
 ### 安装与运行
 
@@ -289,7 +299,7 @@ python DITWorkstation/main.py
 
 ## 🧪 测试
 
-项目包含 290+ 个单元测试，覆盖全部核心服务的业务逻辑、工具函数、会话上下文、数据模型、后台任务、缩略图与无头 UI 交互。
+项目包含 322 个测试，覆盖核心服务业务逻辑、工具函数、会话上下文、数据模型、后台任务、缩略图、功能模式和无头 UI 交互。
 
 ```bash
 # 激活虚拟环境后
@@ -309,25 +319,28 @@ pytest DITWorkstationTests/ -v
 | `test_checksum.py` | 校验和服务 | 11 |
 | `test_backup_resume.py` | 备份断点续传 / 失败重试 | 10 |
 | `test_session_context.py` | EventBus + 全局项目/工作区状态联动 | 10 |
-| `test_settings.py` | 应用设置持久化 | 10 |
-| `test_archive.py` | 项目归档 / 恢复（含安全防护） | 9 |
+| `test_settings.py` | 应用设置持久化 | 12 |
+| `test_archive.py` | 项目归档 / 恢复（含安全防护） | 11 |
 | `test_raw_extraction.py` | RAW 提取服务 | 9 |
 | `test_tags.py` | 素材标签关联表与检索 | 9 |
 | `test_models.py` | 数据模型（AssetRating / RATING_LABELS） | 8 |
 | `test_rename.py` | 重命名服务 | 7 |
-| `test_ui_headless.py` | 无头 UI：布局/分页/设置/模板入口 | 7 |
+| `test_ui_headless.py` | 无头 UI：布局/分页/设置/模板入口/模式切换 | 19 |
 | `test_volume_monitor.py` | 存储卡识别 | 7 |
 | `test_workers.py` | 后台线程 WorkerThread | 7 |
 | `test_templates.py` | 项目模板 CRUD 与默认模板 | 6 |
 | `test_workspace_selector.py` | 工作区-项目选择控件 | 6 |
 | `test_report.py` | 报告生成服务 | 5 |
-| `test_task_view_model.py` | TaskViewModel 状态机 | 5 |
+| `test_task_view_model.py` | TaskViewModel 状态机与线程生命周期 | 7 |
 | `test_backup_import_closure.py` | 备份回写导入联动 | 4 |
 | `test_backup_templates.py` | 备份方案模板 | 2 |
 | `test_card_automation.py` | 相机卡自动化 | 1 |
-| **合计** | | **291** |
+| `test_feature_flags.py` | 团队/个人模式功能开关 | 15 |
+| **合计** | | **322** |
 
 测试共享 fixture（`conftest.py`）提供隔离的数据库实例、临时目录与工厂函数，保证测试间互不干扰。
+
+当前本地验证环境为 macOS arm64、Python 3.13、PySide6 6.11.1，执行结果为 `322 passed`。测试使用 Qt `offscreen` 平台，不能替代 Windows/Linux 原生 GUI、文件系统和打包产物验证。
 
 ---
 
@@ -365,7 +378,12 @@ build\build_windows.bat
 
 > **跨平台说明**：PyInstaller 不支持交叉编译，需在目标平台上分别执行对应脚本原生构建
 > （macOS 上运行 `build/build_macos.sh`，Windows 上运行 `build/build_windows.bat`）；
-> 可选依赖 `rawpy` 由脚本单独宽容安装，无预编译 wheel 的平台会自动降级，不影响打包。
+> Linux 当前仅支持源码运行，尚无专用打包脚本。可选依赖 `rawpy` 由脚本单独宽容安装，
+> 无预编译 wheel 的平台会自动降级，不影响核心导入与备份流程。
+
+> **运行时依赖说明**：视频元数据读取依赖 MediaInfo 动态库；视频缩略图按顺序尝试
+> `ffmpeg`、macOS QuickLook、PyAV 和 OpenCV。若这些依赖不可用，视频仍可导入，但缩略图或详细视频元数据可能为空。
+> PDF 报告会自动查找系统中文字体；若系统没有可用的中文字体，当前版本可能无法生成 PDF。
 
 ---
 
@@ -420,13 +438,14 @@ App（配置/会话）→ Models（数据模型）→ Services（业务逻辑）
 
 ### 存储路径
 
-| 用途 | 开发模式 | 打包后（macOS） | 打包后（Windows） |
-|------|----------|-----------------|-------------------|
-| 数据库文件 | `data/dit_workstation.db` | `~/Library/Application Support/DITWorkstation/` | `%APPDATA%\DITWorkstation\` |
-| 日志目录 | `~/.dit_workstation/logs/` | 同左 | 同左 |
-| 报告输出 | `~/Documents/DIT_Reports/` | 同左 | 同左 |
+| 用途 | 开发模式 | 打包后（macOS） | 打包后（Windows） | 打包后（Linux） |
+|------|----------|-----------------|-------------------|-----------------|
+| 数据库文件 | `data/dit_workstation.db` | `~/Library/Application Support/DITWorkstation/` | `%APPDATA%\DITWorkstation\` | `~/.local/share/DITWorkstation/` |
+| 日志目录 | `~/.dit_workstation/logs/` | 同左 | 同左 | 同左 |
+| 报告输出 | `~/Documents/DIT_Reports/` | 同左 | 同左 | 同左 |
 
-> 若默认数据目录不可写（如 macOS TCC 权限拒绝），自动回退到 `~/.ditworkstation/`。
+> 若数据库、设置或报告目录不可写（如 macOS TCC 权限拒绝），应用会尝试回退到 `~/.ditworkstation/`，最后回退到系统临时目录。
+> 日志目录初始化失败时应用仍可运行并输出控制台日志；通过设置重新指定可写日志目录后，文件日志可以恢复。
 
 ### 数据库结构
 

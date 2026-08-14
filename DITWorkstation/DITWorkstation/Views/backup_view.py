@@ -22,6 +22,7 @@ from DITWorkstation.Utils import (
 )
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.App.navigation import get_nav_index
+from DITWorkstation.App.feature_flags import is_enabled
 from DITWorkstation.Views.Widgets import (
     RefreshOnShowView, WorkspaceProjectSelector, edit_backup_template,
 )
@@ -140,13 +141,13 @@ class BackupView(RefreshOnShowView):
         target_layout.addWidget(self.target_empty_label)
 
         target_btn_layout = QHBoxLayout()
-        add_target_btn = QPushButton("+ 添加目标")
-        add_target_btn.setToolTip("添加一个备份目标目录")
-        add_target_btn.clicked.connect(self._add_target)
+        self.add_target_btn = QPushButton("+ 添加目标")
+        self.add_target_btn.setToolTip("添加一个备份目标目录")
+        self.add_target_btn.clicked.connect(self._add_target)
         clear_target_btn = QPushButton("清空全部")
         clear_target_btn.setToolTip("清空所有备份目标")
         clear_target_btn.clicked.connect(self._clear_targets)
-        target_btn_layout.addWidget(add_target_btn)
+        target_btn_layout.addWidget(self.add_target_btn)
         target_btn_layout.addWidget(clear_target_btn)
         target_btn_layout.addStretch()
         target_layout.addLayout(target_btn_layout)
@@ -154,7 +155,8 @@ class BackupView(RefreshOnShowView):
 
         # 备份方案模板
         template_row = QHBoxLayout()
-        template_row.addWidget(QLabel("备份方案:"))
+        self.template_label = QLabel("备份方案:")
+        template_row.addWidget(self.template_label)
         self.template_combo = QComboBox()
         self.template_combo.setMinimumWidth(240)
         self.template_combo.currentIndexChanged.connect(self._apply_selected_template)
@@ -168,6 +170,13 @@ class BackupView(RefreshOnShowView):
         template_row.addWidget(self.delete_template_btn)
         template_row.addStretch()
         config_layout.addLayout(template_row)
+
+        # 个人模式：隐藏备份方案模板控件（模板可能包含多目标配置，
+        # 与个人模式单目标语义冲突）。对象仍创建，仅不可见。
+        if not is_enabled("backup_templates"):
+            for w in (self.template_label, self.template_combo,
+                      self.save_template_btn, self.delete_template_btn):
+                w.setVisible(False)
 
         # 配置选项（内联，不再单独 GroupBox）
         config_row = QHBoxLayout()
@@ -219,6 +228,11 @@ class BackupView(RefreshOnShowView):
         btn_layout.addWidget(self.verify_backup_btn)
         btn_layout.addStretch()
         config_layout.addLayout(btn_layout)
+
+        # 个人模式：隐藏 MHL 导出按钮（基础校验仍保留）；
+        # 多目标限制在 _add_target / _rebuild_target_rows 中生效
+        if not is_enabled("mhl_export"):
+            self.mhl_btn.setVisible(False)
 
         config_layout.addStretch()
         layout.addWidget(config_widget)
@@ -522,6 +536,15 @@ class BackupView(RefreshOnShowView):
                 self._log(f"扫描失败: {e}")
 
     def _add_target(self):
+        # 个人模式：仅允许单目标备份（保留添加第一个目标的能力，
+        # 已存在一个目标后禁止继续添加，数据库历史记录不受影响）
+        if not is_enabled("multi_target_backup") and len(self._target_paths) >= 1:
+            QMessageBox.information(
+                self, "提示",
+                "个人模式仅支持单目标备份。\n"
+                "如需更换目标，请先移除现有目标再添加。",
+            )
+            return
         path = self._pick_directory("选择备份目标路径", category="backup_target")
         if path:
             self._target_paths.append(path)
@@ -553,6 +576,11 @@ class BackupView(RefreshOnShowView):
         has_targets = len(self._target_paths) > 0
         self.target_scroll.setVisible(has_targets)
         self.target_empty_label.setVisible(not has_targets)
+
+        # 个人模式单目标限制：已有一个目标后禁用「添加目标」（双重保护，
+        # 与 _add_target 内的拦截共同保证 UI 状态直观一致）
+        if not is_enabled("multi_target_backup"):
+            self.add_target_btn.setEnabled(not has_targets)
 
         for i, path in enumerate(self._target_paths):
             row = QWidget()
@@ -895,22 +923,26 @@ class BackupView(RefreshOnShowView):
             except Exception as e:
                 self._log(f"通知其他视图失败（不影响备份结果）: {e}")
 
-        # 备份完成提示，提供跳转拍摄日志的快捷入口
+        # 备份完成提示；团队模式提供跳转拍摄日志的快捷入口（个人模式隐藏）
         if job.status.value in ("completed", "partial"):
             status_text = "所有目标验证通过" if job.status.value == "completed" else "部分目标未完成，请检查失败目标"
             msg_box = QMessageBox(self)
             msg_box.setIcon(QMessageBox.Information)
             msg_box.setWindowTitle("备份完成")
             msg_box.setText(f"备份完成！\n\n{status_text}")
-            goto_log_btn = msg_box.addButton("去拍摄日志", QMessageBox.AcceptRole)
+            goto_log_btn = None
+            if is_enabled("shooting_log"):
+                goto_log_btn = msg_box.addButton("去拍摄日志", QMessageBox.AcceptRole)
             ok_btn = msg_box.addButton("确定", QMessageBox.RejectRole)
             msg_box.setDefaultButton(ok_btn)
             msg_box.exec()
-            if msg_box.clickedButton() is goto_log_btn:
+            if goto_log_btn is not None and msg_box.clickedButton() is goto_log_btn:
                 try:
                     main_window = self.window()
-                    if hasattr(main_window, 'nav_list'):
-                        main_window.nav_list.setCurrentRow(get_nav_index("log"))
+                    log_idx = get_nav_index("log")
+                    # 目标页未激活时 get_nav_index 返回 None，禁止传给 setCurrentRow
+                    if hasattr(main_window, 'nav_list') and log_idx is not None:
+                        main_window.nav_list.setCurrentRow(log_idx)
                 except Exception as e:
                     logger.warning(f"跳转日志视图失败: {e}")
 

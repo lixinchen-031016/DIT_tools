@@ -13,6 +13,7 @@ from PySide6.QtCore import Qt, QThread, Signal, Slot
 from PySide6.QtGui import QPixmap
 
 from DITWorkstation.App.session_context import get_data_bus
+from DITWorkstation.App.feature_flags import is_enabled
 from DITWorkstation.Models import RATING_LABELS
 from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Services.thumbnail_service import ThumbnailService, SIZE_LARGE
@@ -297,7 +298,8 @@ class AssetInfoView(RefreshOnShowView):
         # 批量操作栏：多选后可批量评级 / 批量删除
         batch_row = QHBoxLayout()
         batch_row.setSpacing(6)
-        batch_row.addWidget(QLabel("批量:"))
+        self.batch_label = QLabel("批量:")
+        batch_row.addWidget(self.batch_label)
         self.batch_rating_buttons = []
         for value, text in sorted(RATING_LABELS.items()):
             btn = QPushButton(text)
@@ -338,6 +340,12 @@ class AssetInfoView(RefreshOnShowView):
         batch_row.addWidget(self.batch_selected_label)
         batch_row.addStretch()
         left_layout.addLayout(batch_row)
+
+        # 个人模式：隐藏批量评级按钮（评级为团队功能；删除操作保留）
+        if not is_enabled("ratings"):
+            self.batch_label.setVisible(False)
+            for btn in self.batch_rating_buttons:
+                btn.setVisible(False)
 
         refresh_btn = QPushButton("🔄 刷新列表")
         refresh_btn.clicked.connect(self._load_assets)
@@ -410,9 +418,9 @@ class AssetInfoView(RefreshOnShowView):
     def _setup_rating_row(self, props_layout):
         # 镜次评级快捷按钮（评级值与标签来自 Models.RATING_LABELS 单一事实源）
         rating_row = QHBoxLayout()
-        rating_label = QLabel("⭐ 镜次评级")
-        rating_label.setStyleSheet(f"font-size: {FONT_SIZE.BASE}px; font-weight: 600; color: {COLOR.TEXT_PRIMARY}; padding: 4px 0;")
-        rating_row.addWidget(rating_label)
+        self.rating_label = QLabel("⭐ 镜次评级")
+        self.rating_label.setStyleSheet(f"font-size: {FONT_SIZE.BASE}px; font-weight: 600; color: {COLOR.TEXT_PRIMARY}; padding: 4px 0;")
+        rating_row.addWidget(self.rating_label)
         rating_row.addStretch()
 
         self._rating_buttons = []
@@ -442,6 +450,12 @@ class AssetInfoView(RefreshOnShowView):
             self._rating_buttons.append((value, btn))
             rating_row.addWidget(btn)
         props_layout.addLayout(rating_row)
+
+        # 个人模式：隐藏镜次评级行（评级数据字段保留，仅不提供操作入口）
+        if not is_enabled("ratings"):
+            self.rating_label.setVisible(False)
+            for _value, btn in self._rating_buttons:
+                btn.setVisible(False)
 
     def _setup_tags_group(self, props_layout):
         """标签与备注编辑分组（可保存到素材记录）"""

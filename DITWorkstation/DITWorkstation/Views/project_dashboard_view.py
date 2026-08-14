@@ -13,6 +13,7 @@ from DITWorkstation.Utils import (
     pick_save_file, pick_open_file, pick_directory, WorkerThread,
 )
 from DITWorkstation.App.navigation import get_nav_index
+from DITWorkstation.App.feature_flags import is_enabled
 from DITWorkstation.App.session_context import (
     get_data_bus, get_current_workspace_id, set_current_project,
 )
@@ -199,11 +200,11 @@ class ProjectDashboardView(RefreshOnShowView):
         layout.addWidget(self.sop_hint)
 
         # 项目管理（归档 / 恢复）
-        manage_label = QLabel("🗜 项目管理")
-        manage_label.setStyleSheet(
+        self.manage_label = QLabel("🗜 项目管理")
+        self.manage_label.setStyleSheet(
             f"font-size: {FONT_SIZE.LG}px; font-weight: 600; color: {COLOR.TEXT_PRIMARY}; margin-top: 8px;"
         )
-        layout.addWidget(manage_label)
+        layout.addWidget(self.manage_label)
 
         manage_layout = QHBoxLayout()
         manage_layout.setSpacing(8)
@@ -249,11 +250,11 @@ class ProjectDashboardView(RefreshOnShowView):
         layout.addWidget(self.task_progress)
 
         # 最近操作（审计日志摘要）
-        recent_label = QLabel("🕘 最近操作")
-        recent_label.setStyleSheet(
+        self.recent_label = QLabel("🕘 最近操作")
+        self.recent_label.setStyleSheet(
             f"font-size: {FONT_SIZE.LG}px; font-weight: 600; color: {COLOR.TEXT_PRIMARY}; margin-top: 8px;"
         )
-        layout.addWidget(recent_label)
+        layout.addWidget(self.recent_label)
         self.recent_ops_label = QLabel("暂无操作记录")
         self.recent_ops_label.setWordWrap(True)
         self.recent_ops_label.setStyleSheet(
@@ -264,6 +265,33 @@ class ProjectDashboardView(RefreshOnShowView):
         layout.addWidget(self.recent_ops_label)
 
         layout.addStretch()
+
+        self._apply_usage_mode_visibility()
+
+    def _apply_usage_mode_visibility(self):
+        """按功能模式隐藏团队向组件。
+
+        控件对象始终创建（保证 _refresh 等逻辑引用安全），仅设置不可见；
+        数据表与服务层不受影响，切回团队模式后功能完整恢复。
+        """
+        if not is_enabled("shooting_log"):
+            # 拍摄日志统计卡与日志快捷按钮
+            self.card_logs.setVisible(False)
+            self.btn_log.setVisible(False)
+        if not is_enabled("report"):
+            # 报告快捷按钮
+            self.btn_report.setVisible(False)
+        if not is_enabled("archive_restore"):
+            self.manage_label.setVisible(False)
+            self.btn_archive.setVisible(False)
+            self.btn_restore.setVisible(False)
+        if not is_enabled("project_templates"):
+            self.btn_template.setVisible(False)
+            self.btn_save_template.setVisible(False)
+        if not is_enabled("audit_panel"):
+            # 最近操作审计面板
+            self.recent_label.setVisible(False)
+            self.recent_ops_label.setVisible(False)
 
     @safe_slot("从模板新建项目失败")
     def _create_from_template(self):
@@ -317,17 +345,24 @@ class ProjectDashboardView(RefreshOnShowView):
 
     def _refresh(self):
         """根据当前项目刷新统计卡片与 SOP 提示"""
-        self._refresh_recent_operations()
+        if is_enabled("audit_panel"):
+            self._refresh_recent_operations()
         project_id = self.selector.get_current_project_id()
         if not project_id:
             self.card_assets.set_value("—", "未选择项目")
             self.card_backups.set_value("—", "")
             self.card_logs.set_value("—", "")
             self.card_size.set_value("—", "")
-            self.sop_hint.setText(
-                "💡 请先选择或创建项目。可在「媒体导入」或「拍摄日志」视图新建项目，"
-                "也可在此下拉中选择已有项目。"
-            )
+            if is_enabled("shooting_log"):
+                self.sop_hint.setText(
+                    "💡 请先选择或创建项目。可在「媒体导入」或「拍摄日志」视图新建项目，"
+                    "也可在此下拉中选择已有项目。"
+                )
+            else:
+                self.sop_hint.setText(
+                    "💡 请先选择或创建项目。可在上方「+ 新建项目」创建，"
+                    "或在此下拉中选择已有项目。"
+                )
             self._set_guide_enabled(False)
             return
 
@@ -408,6 +443,9 @@ class ProjectDashboardView(RefreshOnShowView):
     def _build_sop_hint(self, asset_count: int, backed_up: int,
                         log_count: int, backup_job_count: int) -> str:
         """根据当前进度生成 SOP 下一步建议"""
+        if not is_enabled("sop_guide"):
+            # 个人模式：简化引导，不出现日志/报告等团队流程
+            return self._build_sop_hint_personal(asset_count, backed_up, backup_job_count)
         if asset_count == 0:
             return ("① 下一步：去「媒体导入」扫描存储卡并导入素材到当前项目。\n"
                     "  提示：导入前可先去「数据备份」做存储卡的多目标安全备份。")
@@ -427,12 +465,33 @@ class ProjectDashboardView(RefreshOnShowView):
         return ("④ 下一步：去「报告生成」生成项目数据管理与 QC 报告。\n"
                 "  完成后可去「素材检索」复核全部数据。")
 
+    def _build_sop_hint_personal(self, asset_count: int, backed_up: int,
+                                 backup_job_count: int) -> str:
+        """个人模式的简化下一步建议（仅导入 → 备份 → 检索主流程）"""
+        if asset_count == 0:
+            return ("① 下一步：去「媒体导入」扫描存储卡并导入素材到当前项目。\n"
+                    "  提示：导入前可先去「数据备份」为存储卡做一次安全备份。")
+        if backed_up == 0 and backup_job_count == 0:
+            return ("② 下一步：去「数据备份」为素材做安全备份（会自动回写备份位置）。\n"
+                    "  提示：备份时记得在「关联项目」下拉选中当前项目。")
+        if backed_up < asset_count:
+            return (f"⚠ 部分素材（{asset_count - backed_up} 个）尚未备份。\n"
+                    "  下一步：去「数据备份」继续备份未覆盖的文件。")
+        return ("✅ 素材已全部完成备份。\n"
+                "  可在「素材检索」定位素材，或用「RAW提取」「文件重命名」继续整理。")
+
     def _set_guide_enabled(self, enabled: bool):
         for btn in (self.btn_import, self.btn_backup, self.btn_log, self.btn_report):
             btn.setEnabled(enabled)
 
-    def _jump_to(self, view_index: int):
-        """跳转到指定导航视图（通过 MainWindow 的 nav_list 切换）"""
+    def _jump_to(self, view_index):
+        """跳转到指定导航视图（通过 MainWindow 的 nav_list 切换）。
+
+        view_index 为 None 表示目标页在当前模式下未激活（如个人模式的日志/报告），
+        直接忽略，禁止把 None 传给 setCurrentRow()。
+        """
+        if view_index is None:
+            return
         try:
             main_window = self.window()
             if hasattr(main_window, "nav_list"):

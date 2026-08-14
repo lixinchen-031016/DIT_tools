@@ -53,10 +53,10 @@ class TaskViewModel(QObject):
         worker.state_changed.connect(self.state_changed)
         worker.progress.connect(self.progress)
         worker.file_completed.connect(self.file_completed)
-        worker.finished.connect(self.finished)
-        worker.error.connect(self.error)
-        worker.finished.connect(self._on_done)
-        worker.error.connect(self._on_done)
+        # 先在主线程完成内部清理，再向外转发终态信号，避免调用方收到
+        # finished/error 时仍观察到已结束的 worker。
+        worker.finished.connect(self._on_finished)
+        worker.error.connect(self._on_error)
         # Delete the QThread wrapper only after the native thread has exited.
         # The result/error signals are emitted from run() before QThread has
         # completed its teardown, so using them for deleteLater() can race
@@ -73,8 +73,15 @@ class TaskViewModel(QObject):
     def is_running(self) -> bool:
         return self.worker is not None and self.worker.isRunning()
 
-    def _on_done(self, _value):
-        # 保留 worker 引用到信号处理结束，避免 finished/error 信号触发期间悬空。
+    def _clear_worker(self):
         if self.worker is not None:
             self._last_state = self.worker.state
         self.worker = None
+
+    def _on_finished(self, value):
+        self._clear_worker()
+        self.finished.emit(value)
+
+    def _on_error(self, message):
+        self._clear_worker()
+        self.error.emit(message)

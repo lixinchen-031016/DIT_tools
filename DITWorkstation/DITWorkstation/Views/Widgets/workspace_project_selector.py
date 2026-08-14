@@ -18,6 +18,7 @@ from DITWorkstation.App.session_context import (
     get_data_bus, get_current_workspace_id, get_current_project_id,
     set_current_workspace, set_current_project
 )
+from DITWorkstation.App.feature_flags import is_enabled
 from DITWorkstation.Models import Workspace, Project
 from DITWorkstation.Utils import get_db_service, safe_slot, logger
 from DITWorkstation.Views.Widgets.workspace_dialog import WorkspaceDialog
@@ -53,6 +54,7 @@ class WorkspaceProjectSelector(QWidget):
                  show_edit_workspace: bool = False,
                  show_new_project: bool = True,
                  show_delete_project: bool = False,
+                 show_workspace: Optional[bool] = None,
                  none_label: str = "（未选择项目）",
                  broadcast_none: bool = True,
                  buttons_below: bool = False,
@@ -63,6 +65,9 @@ class WorkspaceProjectSelector(QWidget):
             show_edit_workspace: 是否显示"编辑工作区"按钮
             show_new_project: 是否显示"新建项目"按钮
             show_delete_project: 是否显示"删除项目"按钮
+            show_workspace: 是否显示工作区相关控件（标签/下拉/新建/编辑）。
+                None 时按功能模式自动决定：个人模式隐藏工作区控件，
+                项目列表显示全部项目，新建项目归入数据库 default 工作区。
             none_label: None 项的显示文本（如"不关联项目""全部项目"）
             broadcast_none: 选中 None 项时是否广播 set_current_project(None)。
                 False 适用于"不关联/全部"语义（备份/RAW提取/检索），避免清空全局项目。
@@ -76,14 +81,30 @@ class WorkspaceProjectSelector(QWidget):
         self._show_edit_workspace = show_edit_workspace
         self._show_new_project = show_new_project
         self._show_delete_project = show_delete_project
+        # 个人模式默认隐藏工作区控件（功能模式开关统一裁决）
+        self._show_workspace = (
+            is_enabled("workspace_selector") if show_workspace is None else show_workspace
+        )
         self._none_label = none_label
         self._broadcast_none = broadcast_none
         self._buttons_below = buttons_below
         # 内部标志：避免全局信号回环触发再次广播
         self._suppress_broadcast = False
+        # 工作区相关控件引用（个人模式下统一隐藏）
+        self._ws_widgets = []
 
         self._setup_ui()
+        self._apply_workspace_visibility()
         self._connect_global_signals()
+
+    def _apply_workspace_visibility(self):
+        """按功能模式隐藏/显示工作区相关控件。
+
+        控件对象始终创建（保证内部逻辑引用安全），仅设置不可见；
+        项目过滤与新建项目的工作区解析由 _show_workspace 分支控制。
+        """
+        for w in self._ws_widgets:
+            w.setVisible(self._show_workspace)
 
     def _setup_ui(self):
         if self._project_widget_type == "combo":
@@ -103,13 +124,16 @@ class WorkspaceProjectSelector(QWidget):
         layout.setVerticalSpacing(4)
 
         # 第一行：工作区 + 项目 下拉框
-        layout.addWidget(QLabel("工作区:"), 0, 0)
+        ws_label = QLabel("工作区:")
+        layout.addWidget(ws_label, 0, 0)
         self.workspace_combo = QComboBox()
         self.workspace_combo.setMinimumWidth(180)
         self.workspace_combo.addItem("（全部工作区）", None)
         self.workspace_combo.currentIndexChanged.connect(self._on_workspace_changed)
         layout.addWidget(self.workspace_combo, 0, 1)
         layout.setColumnStretch(1, 1)
+        self._ws_widgets.append(ws_label)
+        self._ws_widgets.append(self.workspace_combo)
 
         layout.addWidget(QLabel("项目:"), 0, 2)
         self.project_combo = QComboBox()
@@ -124,11 +148,13 @@ class WorkspaceProjectSelector(QWidget):
         new_ws_btn = QPushButton("+ 新建工作区")
         new_ws_btn.clicked.connect(self._create_workspace)
         ws_btn_row.addWidget(new_ws_btn)
+        self._ws_widgets.append(new_ws_btn)
         if self._show_edit_workspace:
             self._edit_ws_btn = QPushButton("编辑")
             self._edit_ws_btn.clicked.connect(self._edit_workspace)
             self._edit_ws_btn.setEnabled(False)
             ws_btn_row.addWidget(self._edit_ws_btn)
+            self._ws_widgets.append(self._edit_ws_btn)
         ws_btn_row.addStretch()
         layout.addLayout(ws_btn_row, 1, 1)
 
@@ -155,22 +181,26 @@ class WorkspaceProjectSelector(QWidget):
         ws_label = QLabel("工作区")
         ws_label.setStyleSheet("font-weight: bold;")
         layout.addWidget(ws_label)
+        self._ws_widgets.append(ws_label)
 
         self.workspace_combo = QComboBox()
         self.workspace_combo.addItem("（全部工作区）", None)
         self.workspace_combo.currentIndexChanged.connect(self._on_workspace_changed)
         layout.addWidget(self.workspace_combo)
+        self._ws_widgets.append(self.workspace_combo)
 
         ws_btn_layout = QHBoxLayout()
         new_ws_btn = QPushButton("+ 新建工作区")
         new_ws_btn.clicked.connect(self._create_workspace)
         ws_btn_layout.addWidget(new_ws_btn)
+        self._ws_widgets.append(new_ws_btn)
 
         if self._show_edit_workspace:
             self._edit_ws_btn = QPushButton("编辑")
             self._edit_ws_btn.clicked.connect(self._edit_workspace)
             self._edit_ws_btn.setEnabled(False)
             ws_btn_layout.addWidget(self._edit_ws_btn)
+            self._ws_widgets.append(self._edit_ws_btn)
 
         layout.addLayout(ws_btn_layout)
 
@@ -205,22 +235,27 @@ class WorkspaceProjectSelector(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        layout.addWidget(QLabel("工作区:"))
+        ws_label = QLabel("工作区:")
+        layout.addWidget(ws_label)
         self.workspace_combo = QComboBox()
         self.workspace_combo.setMinimumWidth(180)
         self.workspace_combo.addItem("（全部工作区）", None)
         self.workspace_combo.currentIndexChanged.connect(self._on_workspace_changed)
         layout.addWidget(self.workspace_combo)
+        self._ws_widgets.append(ws_label)
+        self._ws_widgets.append(self.workspace_combo)
 
         new_ws_btn = QPushButton("+ 新建工作区")
         new_ws_btn.clicked.connect(self._create_workspace)
         layout.addWidget(new_ws_btn)
+        self._ws_widgets.append(new_ws_btn)
 
         if self._show_edit_workspace:
             self._edit_ws_btn = QPushButton("编辑")
             self._edit_ws_btn.clicked.connect(self._edit_workspace)
             self._edit_ws_btn.setEnabled(False)
             layout.addWidget(self._edit_ws_btn)
+            self._ws_widgets.append(self._edit_ws_btn)
 
         layout.addWidget(QLabel("项目:"))
         self.project_combo = QComboBox()
@@ -286,14 +321,23 @@ class WorkspaceProjectSelector(QWidget):
         if self._show_edit_workspace:
             self._edit_ws_btn.setEnabled(target_index > 0)
         if self._show_new_project:
-            self.new_proj_btn.setEnabled(len(workspaces) > 0)
+            if self._show_workspace:
+                self.new_proj_btn.setEnabled(len(workspaces) > 0)
+            else:
+                # 个人模式：新建项目由数据库归入 default 工作区，始终可用
+                self.new_proj_btn.setEnabled(True)
 
     def _load_projects(self):
-        """加载项目下拉，按当前选中工作区过滤"""
+        """加载项目下拉，按当前选中工作区过滤（个人模式显示全部项目）"""
         prev_pid = get_current_project_id()
-        ws_id = self.workspace_combo.currentData()
-        if ws_id is None:
-            ws_id = get_current_workspace_id()
+        if self._show_workspace:
+            ws_id = self.workspace_combo.currentData()
+            if ws_id is None:
+                ws_id = get_current_workspace_id()
+        else:
+            # 个人模式：不按工作区过滤，全部项目均可见；
+            # 不强制把会话工作区设为 default，避免旧项目被过滤而暂时不可见
+            ws_id = None
 
         try:
             projects = self._db_service.get_projects(workspace_id=ws_id)
@@ -330,7 +374,7 @@ class WorkspaceProjectSelector(QWidget):
         # 同步按钮启用状态
         if self._show_edit_workspace:
             self._edit_ws_btn.setEnabled(ws_id is not None)
-        if self._show_new_project:
+        if self._show_new_project and self._show_workspace:
             self.new_proj_btn.setEnabled(self.workspace_combo.count() > 1)
         # 通知宿主视图
         self.workspace_changed.emit(ws_id)
@@ -345,11 +389,14 @@ class WorkspaceProjectSelector(QWidget):
         self._broadcast_project_changed(project_id)
 
     def _sync_delete_project_btn(self, project_id):
-        """同步删除项目按钮启用状态：需同时选中工作区和项目"""
+        """同步删除项目按钮启用状态：团队模式需同时选中工作区和项目；
+        个人模式（隐藏工作区控件）只需选中项目。"""
         if not self._show_delete_project:
             return
         ws_id = self.workspace_combo.currentData()
-        self.del_proj_btn.setEnabled(bool(ws_id and project_id))
+        self.del_proj_btn.setEnabled(
+            bool(project_id) and (bool(ws_id) or not self._show_workspace)
+        )
 
     def _broadcast_project_changed(self, project_id):
         """广播项目切换到全局并通知宿主。
@@ -392,7 +439,7 @@ class WorkspaceProjectSelector(QWidget):
         self._load_projects()
         if self._show_edit_workspace:
             self._edit_ws_btn.setEnabled(workspace_id is not None)
-        if self._show_new_project:
+        if self._show_new_project and self._show_workspace:
             self.new_proj_btn.setEnabled(self.workspace_combo.count() > 1)
 
     @Slot(object)
@@ -457,20 +504,25 @@ class WorkspaceProjectSelector(QWidget):
 
     @safe_slot("新建项目失败")
     def _create_project(self):
-        """打开新建项目对话框（自动确定目标工作区）"""
-        ws_id = self._resolve_project_workspace()
-        if ws_id is None:
-            return
-        # 下拉停在「全部工作区」时切到目标工作区，保证新建后列表过滤一致
-        if self.workspace_combo.currentData() != ws_id:
-            self._suppress_broadcast = True
-            self.workspace_combo.blockSignals(True)
-            for i in range(self.workspace_combo.count()):
-                if self.workspace_combo.itemData(i) == ws_id:
-                    self.workspace_combo.setCurrentIndex(i)
-                    break
-            self.workspace_combo.blockSignals(False)
-            self._suppress_broadcast = False
+        """打开新建项目对话框（自动确定目标工作区；个人模式归入 default 工作区）"""
+        if self._show_workspace:
+            ws_id = self._resolve_project_workspace()
+            if ws_id is None:
+                return
+            # 下拉停在「全部工作区」时切到目标工作区，保证新建后列表过滤一致
+            if self.workspace_combo.currentData() != ws_id:
+                self._suppress_broadcast = True
+                self.workspace_combo.blockSignals(True)
+                for i in range(self.workspace_combo.count()):
+                    if self.workspace_combo.itemData(i) == ws_id:
+                        self.workspace_combo.setCurrentIndex(i)
+                        break
+                self.workspace_combo.blockSignals(False)
+                self._suppress_broadcast = False
+        else:
+            # 个人模式：传入 workspace_id=None，由数据库自动创建/使用 default 工作区；
+            # 不修改已有项目的 workspace_id
+            ws_id = None
         name, ok = QInputDialog.getText(self, "新建项目", "项目名称:")
         if not (ok and name):
             return

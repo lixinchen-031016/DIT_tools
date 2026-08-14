@@ -112,6 +112,10 @@ class AppConfig:
     auto_card_template_id: str = ""
     auto_card_project_id: str = ""
 
+    # 功能模式（设备级配置）：team=团队版（完整 DIT 工作流），personal=个人版
+    # （隐藏团队向入口）。修改后重启生效；读取/校验逻辑见 App/feature_flags.py。
+    usage_mode: str = "team"
+
     # 检索分页
     search_page_size: int = 500  # 素材检索每页显示的条数
 

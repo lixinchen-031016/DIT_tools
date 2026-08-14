@@ -15,6 +15,7 @@ from PySide6.QtCore import Qt, Slot, QDateTime, Signal
 from PySide6.QtGui import QPixmap
 
 from DITWorkstation.App.navigation import get_nav_index
+from DITWorkstation.App.feature_flags import is_enabled
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import Project
 from DITWorkstation.Services.media_import_service import MediaImportService
@@ -282,7 +283,8 @@ class MediaImportView(RefreshOnShowView):
         options_layout.addLayout(opt_row1)
 
         opt_row2 = QHBoxLayout()
-        opt_row2.addWidget(QLabel("关联拍摄日志:"))
+        self.log_label = QLabel("关联拍摄日志:")
+        opt_row2.addWidget(self.log_label)
         self.log_combo = QComboBox()
         self.log_combo.addItem("不关联", None)
         self.log_combo.setEnabled(False)
@@ -290,6 +292,12 @@ class MediaImportView(RefreshOnShowView):
         opt_row2.addWidget(self.log_combo)
         opt_row2.addStretch()
         options_layout.addLayout(opt_row2)
+
+        # 个人模式：隐藏「关联拍摄日志」选项（对象仍创建，
+        # _start_import 中日志关联值固定为空，不依赖控件状态）
+        if not is_enabled("shooting_log"):
+            self.log_label.setVisible(False)
+            self.log_combo.setVisible(False)
 
         bottom_layout.addWidget(options_group)
 
@@ -732,7 +740,8 @@ class MediaImportView(RefreshOnShowView):
             except Exception as e:
                 self._log(f"（警告）覆盖冲突检测失败: {e}")
 
-        log_id = self.log_combo.currentData()
+        # 个人模式固定不关联拍摄日志（不依赖已隐藏控件的取值）
+        log_id = self.log_combo.currentData() if is_enabled("shooting_log") else None
         scene = ""
         shot = ""
         if log_id:
@@ -832,8 +841,10 @@ class MediaImportView(RefreshOnShowView):
         if msg_box.clickedButton() is goto_backup_btn:
             try:
                 main_window = self.window()
-                if hasattr(main_window, 'nav_list'):
-                    main_window.nav_list.setCurrentRow(get_nav_index("backup"))
+                backup_idx = get_nav_index("backup")
+                # 目标页未激活时 get_nav_index 返回 None，禁止传给 setCurrentRow
+                if hasattr(main_window, 'nav_list') and backup_idx is not None:
+                    main_window.nav_list.setCurrentRow(backup_idx)
             except Exception as e:
                 logger.warning(f"跳转备份视图失败: {e}")
 

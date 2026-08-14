@@ -138,3 +138,27 @@ def test_log_files_summary_missing_dir(tmp_path, monkeypatch):
     from DITWorkstation.App import config
     monkeypatch.setattr(config, "log_dir", tmp_path / "no_such_dir")
     assert common.log_files_summary() == (0, 0)
+
+
+# ===== 使用场景（功能模式开关）持久化 =====
+
+def test_apply_saved_config_restores_usage_mode(tmp_path, monkeypatch):
+    """usage_mode 保存到 app_config 后，apply_saved_config 能恢复到 AppConfig。"""
+    _patch_settings_path(monkeypatch, tmp_path)
+    from DITWorkstation.App import config as _config
+    monkeypatch.setattr(_config, "usage_mode", "team")
+    common.save_app_settings(usage_mode="personal")
+    common.apply_saved_config()
+    assert _config.usage_mode == "personal"
+
+
+def test_invalid_usage_mode_falls_back_to_team_on_read(tmp_path, monkeypatch):
+    """apply_saved_config 原样恢复存储值；非法值由 feature_flags 读取时回退团队模式。"""
+    _patch_settings_path(monkeypatch, tmp_path)
+    from DITWorkstation.App import config as _config
+    monkeypatch.setattr(_config, "usage_mode", "team")
+    common.save_app_settings(usage_mode="foo")
+    common.apply_saved_config()
+    assert _config.usage_mode == "foo"  # 持久化层不做校验，原样恢复
+    from DITWorkstation.App import feature_flags
+    assert feature_flags.get_usage_mode() == feature_flags.UsageMode.TEAM

@@ -1,8 +1,18 @@
 """后台工作线程工具"""
-from PySide6.QtCore import QThread, Signal, QObject
+from PySide6.QtCore import QThread, Signal, QObject, QTimer
 from typing import Callable
 from enum import Enum
 import threading
+
+
+# 已 start() 的线程注册表（强引用）。PySide6 会在 Python 包装对象的最后一个
+# 强引用被释放时立即析构底层 C++ QThread 对象；而 finished/error 结果信号是
+# 在 run() 返回前（原生线程仍在运行）发射的，调用方一收到结果就会清空自己的
+# 引用（如 TaskViewModel._clear_worker 的 self.worker = None）。若此时析构 QThread，
+# Qt 会直接 abort（"QThread: Destroyed while thread '' is still running"）。
+# 因此 start() 过的 worker 先在这里登记，等 QThread.finished（原生线程已退出）
+# 投递到主线程后再释放，保证任何调用方都能安全地提前丢弃引用。
+_running_workers = set()
 
 
 class TaskState(str, Enum):
@@ -65,6 +75,17 @@ class WorkerThread(QThread):
         self._result = None
         self._state = TaskState.IDLE
         self._cancel_event = threading.Event()
+        self.thread_finished.connect(self._on_native_finished)
+
+    def start(self, priority=QThread.Priority.InheritPriority):
+        """启动线程；原生线程退出前保持 Python 包装对象存活。"""
+        _running_workers.add(self)
+        super().start(priority)
+
+    def _on_native_finished(self):
+        # QThread.finished 的其他监听者可能还未处理；延后一轮事件循环，避免
+        # 调用方已丢弃引用时先释放 self，导致后续 thread_finished 槽位丢失。
+        QTimer.singleShot(0, lambda: _running_workers.discard(self))
 
     @property
     def state(self) -> TaskState:
@@ -128,6 +149,15 @@ class SimpleWorkerThread(QThread):
         self._inject_cancel_check = inject_cancel_check
         self._state = TaskState.IDLE
         self._cancel_event = threading.Event()
+        self.thread_finished.connect(self._on_native_finished)
+
+    def start(self, priority=QThread.Priority.InheritPriority):
+        """启动线程；原生线程退出前保持 Python 包装对象存活。"""
+        _running_workers.add(self)
+        super().start(priority)
+
+    def _on_native_finished(self):
+        QTimer.singleShot(0, lambda: _running_workers.discard(self))
 
     @property
     def state(self) -> TaskState:

@@ -13,6 +13,7 @@ from DITWorkstation.Utils import (
     open_in_file_manager, pick_save_file,
 )
 from DITWorkstation.App import config
+from DITWorkstation.App.feature_flags import is_enabled
 from DITWorkstation.Models import RATING_LABELS, AssetRating
 from DITWorkstation.App.session_context import get_data_bus, get_current_workspace_id
 from DITWorkstation.Views.Widgets import RefreshOnShowView
@@ -51,6 +52,9 @@ class DuplicateResultsDialog(QDialog):
             ["项目", "文件名", "类型", "大小", "场景", "镜头", "评级", "校验和"],
             sortable=True,
         )
+        # 个人模式隐藏评级列（与检索结果表保持一致）
+        if not is_enabled("ratings"):
+            self.table.setColumnHidden(6, True)
         self.table.doubleClicked.connect(self._on_double_clicked)
         layout.addWidget(self.table)
 
@@ -186,7 +190,8 @@ class SearchView(RefreshOnShowView):
         self.log_combo.addItem("全部日志", None)
         self.log_combo.setEnabled(False)
         self.log_combo.setMinimumWidth(250)
-        row3.addWidget(QLabel("拍摄日志:"))
+        self.log_filter_label = QLabel("拍摄日志:")
+        row3.addWidget(self.log_filter_label)
         row3.addWidget(self.log_combo)
 
         self.rating_combo = QComboBox()
@@ -195,7 +200,8 @@ class SearchView(RefreshOnShowView):
         self.rating_combo.addItem(f"{RATING_LABELS[AssetRating.USABLE.value]} 及以上", AssetRating.USABLE.value)
         self.rating_combo.addItem(f"{RATING_LABELS[AssetRating.BACKUP.value]} 及以上", AssetRating.BACKUP.value)
         self.rating_combo.addItem(RATING_LABELS[AssetRating.PREFERRED.value], AssetRating.PREFERRED.value)
-        row3.addWidget(QLabel("评级:"))
+        self.rating_filter_label = QLabel("评级:")
+        row3.addWidget(self.rating_filter_label)
         row3.addWidget(self.rating_combo)
         self.tag_edit = QLineEdit()
         self.tag_edit.setPlaceholderText("标签关键字")
@@ -226,6 +232,15 @@ class SearchView(RefreshOnShowView):
         search_layout.addRow("", row4)
 
         config_layout.addWidget(search_group)
+
+        # 个人模式：隐藏拍摄日志/评级筛选控件（对象仍创建，
+        # _collect_filters 中显式传入 log_id=None / rating=None，不依赖控件取值）
+        if not is_enabled("shooting_log"):
+            self.log_filter_label.setVisible(False)
+            self.log_combo.setVisible(False)
+        if not is_enabled("ratings"):
+            self.rating_filter_label.setVisible(False)
+            self.rating_combo.setVisible(False)
 
         # 搜索按钮
         btn_layout = QHBoxLayout()
@@ -264,6 +279,11 @@ class SearchView(RefreshOnShowView):
             ["文件名", "类型", "大小", "场景", "镜头", "关联日志", "评级", "校验和", "导入时间"],
             sortable=True,
         )
+        # 个人模式：隐藏「关联日志」「评级」列（数据字段保留，仅不展示）
+        if not is_enabled("shooting_log"):
+            self.result_table.setColumnHidden(5, True)
+        if not is_enabled("ratings"):
+            self.result_table.setColumnHidden(6, True)
         # 双击打开所在目录
         self.result_table.doubleClicked.connect(self._on_result_double_clicked)
         self.result_table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -431,8 +451,10 @@ class SearchView(RefreshOnShowView):
         scene = self.scene_edit.text() or None
         shot = self.shot_edit.text() or None
         keyword = self.keyword_edit.text() or None
-        log_id = self.log_combo.currentData() or None
-        rating = self.rating_combo.currentData()
+        # 个人模式显式传入 log_id=None / rating=None，
+        # 不假定已隐藏的界面控件存在有效值
+        log_id = (self.log_combo.currentData() or None) if is_enabled("shooting_log") else None
+        rating = self.rating_combo.currentData() if is_enabled("ratings") else None
         tag = self.tag_edit.text().strip() or None
 
         file_type = None

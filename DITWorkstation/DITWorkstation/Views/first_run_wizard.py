@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from DITWorkstation.Utils import get_db_service, logger, pick_directory
+from DITWorkstation.App.feature_flags import is_team_mode
 
 
 # ===== 常量 =====
@@ -79,6 +80,21 @@ _PROJECT_HINT = (
     "该项目将归属于上一步创建的工作区。"
 )
 
+# 个人模式：无工作区概念，项目由数据库自动归入 default 工作区
+_PROJECT_HINT_PERSONAL = (
+    "为本次拍摄任务创建一个项目，例如「2026 春季外拍」。\n"
+    "项目是单次拍摄任务的素材集合，创建后即可开始导入素材。"
+)
+
+_FINISH_TEXT_PERSONAL = (
+    "✓ 项目初始化完成。\n\n"
+    "后续工作流建议：\n"
+    "  • 去「媒体导入」扫描存储卡并导入素材\n"
+    "  • 去「数据备份」为素材做一个目标的安全备份\n"
+    "  • 用「素材检索」按关键词/类型/日期快速定位素材\n\n"
+    "点击「完成」进入主界面。"
+)
+
 # 合并后的 SOP 提示（原 3 页内容整合为 1 页，避免向导页数过多）
 _SOP_GUIDE_TEXT = (
     "点击「下一步」后将自动跳转到「媒体导入」视图。\n\n"
@@ -124,11 +140,15 @@ class FirstRunWizard(QWizard):
         self._created_workspace_path = ""  # 工作区物理目录（用于后续默认复制路径）
         self._created_project_id = None
 
-        # 页面顺序：欢迎 → 创建工作区 → 在工作区内创建项目 → SOP 提示 → 完成
+        # 页面顺序按功能模式裁剪：
+        #   团队模式：欢迎 → 创建工作区 → 创建项目 → SOP 提示 → 完成
+        #   个人模式：欢迎 → 创建项目 → 完成（数据库自动准备 default 工作区）
         self.addPage(_WelcomePage())
-        self.addPage(_CreateWorkspacePage(self))
+        if is_team_mode():
+            self.addPage(_CreateWorkspacePage(self))
         self.addPage(_CreateProjectPage(self))
-        self.addPage(_SopGuidePage())
+        if is_team_mode():
+            self.addPage(_SopGuidePage())
         self.addPage(_FinishPage())
 
         self.setStyleSheet(_WIZARD_QSS)
@@ -217,10 +237,16 @@ class _CreateProjectPage(QWizardPage):
     def __init__(self, wizard: "FirstRunWizard"):
         super().__init__()
         self._wizard = wizard
-        self.setTitle("在工作区内创建第一个项目")
+        if is_team_mode():
+            self.setTitle("在工作区内创建第一个项目")
+            hint_text = _PROJECT_HINT
+        else:
+            # 个人模式：无工作区步骤，项目由数据库自动归入 default 工作区
+            self.setTitle("创建第一个项目")
+            hint_text = _PROJECT_HINT_PERSONAL
         layout = QVBoxLayout(self)
 
-        hint = QLabel(_PROJECT_HINT)
+        hint = QLabel(hint_text)
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
@@ -281,7 +307,8 @@ class _FinishPage(QWizardPage):
         super().__init__()
         self.setTitle("完成")
         layout = QVBoxLayout(self)
-        text = QLabel(_FINISH_TEXT)
+        # 个人模式不展示日志/报告等团队流程建议
+        text = QLabel(_FINISH_TEXT if is_team_mode() else _FINISH_TEXT_PERSONAL)
         text.setWordWrap(True)
         layout.addWidget(text)
 
