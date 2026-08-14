@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from DITWorkstation.Utils import get_db_service, logger, pick_directory
-from DITWorkstation.App.feature_flags import is_team_mode
+from DITWorkstation.App.feature_flags import is_team_mode, ensure_personal_default_workspace_path
 
 
 # ===== 常量 =====
@@ -335,4 +335,10 @@ def maybe_show_wizard(parent=None) -> Optional[FirstRunWizard]:
         return None
     wizard = FirstRunWizard(parent)
     wizard.exec()
+    # 个人模式跳过「创建工作区」步骤，default 工作区 path 初始为空；
+    # 在此统一补齐默认物理路径，保证「复制到工作区」开箱即用（兼容旧库）。
+    try:
+        ensure_personal_default_workspace_path(get_db_service())
+    except Exception as e:
+        logger.debug(f"首启向导后确保个人模式默认工作区路径失败: {e}")
     return wizard

@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QProgressBar, QGroupBox,
     QTextEdit, QCheckBox, QTableWidget,
     QTableWidgetItem, QHeaderView, QMessageBox,
-    QComboBox, QDateTimeEdit, QMenu, QApplication
+    QComboBox, QDateTimeEdit, QMenu, QApplication, QFileDialog
 )
 from PySide6.QtCore import Qt, Slot, QDateTime, Signal
 from PySide6.QtGui import QPixmap
@@ -20,7 +20,11 @@ from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import Project
 from DITWorkstation.Services.media_import_service import MediaImportService
 from DITWorkstation.Services.thumbnail_service import ThumbnailService, SIZE_LARGE
-from DITWorkstation.Utils import format_size, WorkerThread, get_db_service, pick_directory, find_overwrite_conflicts, open_in_file_manager, logger
+from DITWorkstation.Utils import (
+    format_size, WorkerThread, get_db_service, pick_directory,
+    find_overwrite_conflicts, open_in_file_manager, is_writable_directory,
+    logger,
+)
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 from DITWorkstation.Views.Widgets.error_dialog import show_error
@@ -280,6 +284,15 @@ class MediaImportView(RefreshOnShowView):
         self.copy_mode_check.toggled.connect(self._on_copy_check_toggled)
         opt_row1.addWidget(self.copy_dest_label, 1)
 
+        # 工作区未设置本地目录时出现的「选择目录…」按钮：
+        # 个人模式常见（default 工作区初始 path 为空），此时不再禁用复选框，
+        # 而是允许用户即时选择目标根目录（步骤2）。
+        self.path_picker_btn = QPushButton("选择目录…")
+        self.path_picker_btn.setToolTip("为当前工作区选择本地目录，作为「复制到工作区」的目标根")
+        self.path_picker_btn.clicked.connect(self._on_pick_workspace_path)
+        self.path_picker_btn.setVisible(False)
+        opt_row1.addWidget(self.path_picker_btn)
+
         options_layout.addLayout(opt_row1)
 
         opt_row2 = QHBoxLayout()
@@ -376,15 +389,24 @@ class MediaImportView(RefreshOnShowView):
             self._update_copy_dest_label()
 
     def _get_current_workspace(self):
-        """返回当前选中的工作区对象（委托给选择控件）"""
+        """返回当前项目所属工作区，个人模式下不依赖隐藏的工作区下拉框。"""
+        if not is_enabled("workspace_selector"):
+            if self.current_project and self.current_project.workspace_id:
+                workspace = self.db_service.get_workspace(
+                    self.current_project.workspace_id
+                )
+                if workspace is not None:
+                    return workspace
+            return self.db_service.get_or_create_default_workspace()
         return self.selector.get_current_workspace()
 
     def _sync_copy_check_state(self):
-        """根据当前工作区是否有 path，启用/禁用「复制到工作区」复选框。
+        """根据当前工作区是否有 path，调整「复制到工作区」复选框与目录选择入口。
 
         - 未选具体工作区：禁用（无目标目录）
-        - 工作区 path 为空：禁用并提示用户去编辑工作区补充目录
-        - 工作区 path 非空：启用
+        - 工作区 path 为空：不再禁用复选框，而是允许用户勾选后即时选择目录
+          （个人模式 default 工作区初始 path 为空，需提供设置入口而非卡死）
+        - 工作区 path 非空：启用并提示目标路径
         """
         if not hasattr(self, 'copy_mode_check'):
             return
@@ -392,18 +414,59 @@ class MediaImportView(RefreshOnShowView):
         if ws is None:
             self.copy_mode_check.setEnabled(False)
             self.copy_mode_check.setChecked(False)
-            self.copy_mode_check.setToolTip("请先选择具体工作区")
+            self.copy_mode_check.setToolTip("请先选择具体项目/工作区")
+            self._show_path_picker_button(False)
         elif not ws.path:
-            self.copy_mode_check.setEnabled(False)
-            self.copy_mode_check.setChecked(False)
+            # 个人模式常见情形：工作区尚未绑定本地目录。
+            # 不再直接禁用复选框，而是允许勾选并即时选择目录，避免导入界面卡死。
+            self.copy_mode_check.setEnabled(True)
             self.copy_mode_check.setToolTip(
-                "当前工作区未设置目录，请到「项目概览」看板编辑工作区补充目录"
+                "当前工作区未设置目录，勾选后点击「选择目录…」指定复制目标根"
             )
+            self._show_path_picker_button(True)
         else:
             self.copy_mode_check.setEnabled(True)
             self.copy_mode_check.setToolTip(
                 f"勾选后将素材复制到：{ws.path}/<项目名>/ 下"
             )
+            self._show_path_picker_button(False)
+        # 同步复制目标提示
+        self._update_copy_dest_label()
+
+    def _show_path_picker_button(self, visible: bool):
+        """显示/隐藏「选择目录…」按钮（仅当工作区无本地目录时需要）"""
+        if hasattr(self, 'path_picker_btn'):
+            self.path_picker_btn.setVisible(visible)
+
+    def _choose_workspace_path(self, ws, title: str) -> bool:
+        """选择、校验并持久化工作区目录；成功后更新传入的工作区对象。"""
+        path = QFileDialog.getExistingDirectory(
+            self, title, ws.path or str(Path.home())
+        )
+        if not path:
+            return False
+        if not is_writable_directory(path, create=True):
+            QMessageBox.warning(self, "无法写入", f"所选目录不可写：\n{path}")
+            return False
+        if not self.db_service.update_workspace(ws.workspace_id, path=path):
+            QMessageBox.warning(self, "保存失败", "工作区目录未能保存，请重试。")
+            return False
+        ws.path = path
+        self._log(f"已设置工作区目录: {path}")
+        self._sync_copy_check_state()
+        return True
+
+    def _on_pick_workspace_path(self):
+        """为当前工作区选择一个本地目录，作为「复制到工作区」的目标根。
+
+        选择后写回工作区并持久化，后续导入即可复制到 <目录>/<项目名>/ 下。
+        选择前校验目录可写性，失败时给出明确提示而非静默失败（注意事项要求）。
+        """
+        ws = self._get_current_workspace()
+        if ws is None:
+            QMessageBox.warning(self, "提示", "请先选择项目/工作区")
+            return
+        self._choose_workspace_path(ws, "选择工作区目录")
 
     def _load_logs(self, project_id: str):
         self.log_combo.clear()
@@ -450,7 +513,7 @@ class MediaImportView(RefreshOnShowView):
             return
         ws = self._get_current_workspace()
         if ws is None or not ws.path:
-            self.copy_dest_label.setText("（未选择有效工作区或工作区无目录）")
+            self.copy_dest_label.setText("（请点击「选择目录…」指定复制目标根）")
             self.copy_dest_label.setStyleSheet(f"color: {COLOR.DANGER}; font-size: {FONT_SIZE.SM}px;")
             return
         if self.current_project:
@@ -714,12 +777,14 @@ class MediaImportView(RefreshOnShowView):
         if copy_to_workspace:
             # 复制目录自动基于当前工作区.path / 项目名
             ws = self._get_current_workspace()
-            if ws is None or not ws.path:
-                QMessageBox.warning(
-                    self, "提示",
-                    "当前工作区未设置目录，请到「项目概览」看板编辑工作区补充目录后再勾选复制模式"
-                )
+            if ws is None:
+                QMessageBox.warning(self, "提示", "请先选择项目/工作区")
                 return
+            # 工作区未设置本地目录：在导入时直接弹目录选择（一次性补齐），
+            # 选择成功后继续；用户取消则放弃本次导入，不影响其他操作。
+            if not ws.path or not is_writable_directory(ws.path):
+                if not self._choose_workspace_path(ws, "选择工作区目录（复制到此处）"):
+                    return
             workspace_dir = str(Path(ws.path) / self.current_project.name)
 
             # 覆盖确认：检查工作区目标目录中是否已存在同名文件

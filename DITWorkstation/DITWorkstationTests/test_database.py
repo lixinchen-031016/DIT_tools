@@ -1424,5 +1424,64 @@ class TestWorkspaceManagement(unittest.TestCase):
         self.assertTrue(all(o["project_id"] == p.project_id for o in by_project))
 
 
+class TestMissingFileDetection(unittest.TestCase):
+    """文件存在性验证与批量删除失效记录（对应素材信息模块的丢失检测功能）"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        db_path = Path(self.temp_dir) / "test.db"
+        self.db = DatabaseService(db_path=db_path)
+        self.project = self.db.create_project(name="丢失检测测试")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _make_asset(self, asset_id, file_path):
+        return MediaAsset(
+            asset_id=asset_id, project_id=self.project.project_id,
+            file_path=file_path, file_name=Path(file_path).name,
+            file_size=1024, file_type=".cr2",
+        )
+
+    def test_get_missing_file_asset_ids_detects_missing_and_present(self):
+        """存在的文件不计入丢失，不存在/空路径计入丢失"""
+        real = Path(self.temp_dir) / "real.cr2"
+        real.write_text("data", encoding="utf-8")
+        present = self.db.add_media_asset(self._make_asset("a_present", str(real)))
+        missing = self.db.add_media_asset(self._make_asset("a_missing", "/no/such/file.cr2"))
+        empty = self.db.add_media_asset(self._make_asset("a_empty", ""))
+
+        missing_ids = self.db.get_missing_file_asset_ids(self.project.project_id)
+        self.assertIn(missing.asset_id, missing_ids)
+        self.assertIn(empty.asset_id, missing_ids)
+        self.assertNotIn(present.asset_id, missing_ids)
+        self.assertEqual(len(missing_ids), 2)
+
+    def test_get_missing_file_asset_ids_empty_project(self):
+        proj2 = self.db.create_project(name="空项目")
+        self.assertEqual(self.db.get_missing_file_asset_ids(proj2.project_id), [])
+
+    def test_delete_media_assets_batch(self):
+        """批量删除仅移除数据库记录，返回成功条数，不影响磁盘文件"""
+        real = Path(self.temp_dir) / "real.cr2"
+        real.write_text("data", encoding="utf-8")
+        missing = self.db.add_media_asset(self._make_asset("a_missing", "/no/such/file.cr2"))
+        present = self.db.add_media_asset(self._make_asset("a_present", str(real)))
+
+        deleted = self.db.delete_media_assets([missing.asset_id, present.asset_id])
+        self.assertEqual(deleted, 2)
+        self.assertIsNone(self.db.get_media_asset(missing.asset_id))
+        self.assertIsNone(self.db.get_media_asset(present.asset_id))
+        # 磁盘文件不受影响
+        self.assertTrue(real.exists())
+
+    def test_delete_media_assets_tolerates_unknown_ids(self):
+        """传入不存在的 id 不抛异常，已存在的记录仍被正确删除"""
+        ok = self.db.add_media_asset(self._make_asset("a_ok", "/no/such/file.cr2"))
+        deleted = self.db.delete_media_assets([ok.asset_id, "nonexistent", ok.asset_id])
+        self.assertEqual(deleted, 1)
+        self.assertIsNone(self.db.get_media_asset(ok.asset_id))
+
+
 if __name__ == "__main__":
     unittest.main()

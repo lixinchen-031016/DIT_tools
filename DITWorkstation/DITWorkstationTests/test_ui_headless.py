@@ -432,6 +432,109 @@ def test_asset_info_view_personal_hides_ratings(tmp_dir, monkeypatch):
         reset_singletons(); reset_session_state()
 
 
+# ===== 素材信息页：文件存在性验证 + 批量清理丢失素材 =====
+
+def test_asset_info_view_marks_and_cleans_missing_files(tmp_dir, monkeypatch):
+    """素材信息页自动校验文件存在性并标识/清理「文件已丢失」记录（含二次确认）"""
+    import PySide6.QtWidgets as QW
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from DITWorkstation.App import config
+    from DITWorkstation.Models import MediaAsset
+    from DITWorkstation.Utils import common, reset_singletons
+    from DITWorkstation.App.session_context import reset_session_state
+    from DITWorkstation.Views.asset_info_view import AssetInfoView
+
+    reset_singletons(); reset_session_state()
+    monkeypatch.setattr(config, "usage_mode", "personal")
+    db = DatabaseService(db_path=tmp_dir / "test.db")
+    common._shared_db_service = db
+    project = db.create_project(name="丢失检测项目")
+
+    real = tmp_dir / "real.cr2"
+    real.write_text("data", encoding="utf-8")
+    db.add_media_asset(MediaAsset(
+        asset_id="a_present", project_id=project.project_id,
+        file_path=str(real), file_name="real.cr2",
+    ))
+    db.add_media_asset(MediaAsset(
+        asset_id="a_missing", project_id=project.project_id,
+        file_path="/no/such/file.cr2", file_name="lost.cr2",
+    ))
+    try:
+        view = AssetInfoView()
+        # 让选择器返回测试项目（避免依赖全局会话状态）
+        monkeypatch.setattr(
+            view.selector, "get_current_project_id",
+            lambda: project.project_id,
+        )
+        view._load_assets()
+
+        def wait_until(predicate, timeout_ms=2000):
+            elapsed = 0
+            while elapsed < timeout_ms and not predicate():
+                QTest.qWait(20)
+                elapsed += 20
+            assert predicate()
+
+        wait_until(lambda: not view._missing_scan_pending)
+
+        # 1) 列表渲染：共 2 行，状态列正确标识
+        assert view.asset_table.rowCount() == 2
+        status_by_id = {}
+        for r in range(view.asset_table.rowCount()):
+            aid = view.asset_table.item(r, 0).data(Qt.UserRole)
+            status_by_id[aid] = view.asset_table.item(r, 4).text()
+        assert status_by_id["a_present"] == "✓ 正常"
+        assert status_by_id["a_missing"] == "⚠ 文件已丢失"
+        # 计数文案包含丢失提示，清理按钮启用
+        assert "文件已丢失" in view.asset_count_label.text()
+        assert view.cleanup_missing_btn.isEnabled()
+
+        # 2) 选中丢失素材：详情面板显示警告横幅（不触发缩略图生成）
+        missing_row = next(
+            r for r in range(view.asset_table.rowCount())
+            if view.asset_table.item(r, 0).data(Qt.UserRole) == "a_missing"
+        )
+        view.asset_table.selectRow(missing_row)
+        view._on_asset_selected()
+        assert not view.missing_banner.isHidden()
+        assert "文件已丢失" in view.missing_banner.text()
+
+        # 3) 一键清理：二次确认拦截默认 No；确认 Yes 后仅删除丢失记录
+        monkeypatch.setattr(
+            QW.QMessageBox, "question",
+            staticmethod(lambda *a, **k: QW.QMessageBox.No),
+        )
+        monkeypatch.setattr(QW.QMessageBox, "information", lambda *a, **k: None)
+        view._batch_cleanup_missing()
+        wait_until(lambda: not view._missing_scan_pending)
+        # 默认 No：记录仍在
+        assert db.get_media_asset("a_missing") is not None
+
+        monkeypatch.setattr(
+            QW.QMessageBox, "question",
+            staticmethod(lambda *a, **k: QW.QMessageBox.Yes),
+        )
+        view._batch_cleanup_missing()
+        wait_until(
+            lambda: db.get_media_asset("a_missing") is None
+            and not view._missing_scan_pending
+        )
+        # 完成后：丢失记录删除，正常记录保留
+        assert db.get_media_asset("a_missing") is None
+        assert db.get_media_asset("a_present") is not None
+        assert view.asset_table.rowCount() == 1
+        assert not view.cleanup_missing_btn.isEnabled()
+        # 磁盘真实文件不受影响
+        assert real.exists()
+
+        view.close()
+        view.deleteLater()
+    finally:
+        reset_singletons(); reset_session_state()
+
+
 # ===== 功能模式：设置对话框入口 =====
 
 def test_settings_dialog_usage_mode_switch(tmp_dir, monkeypatch):
@@ -504,3 +607,126 @@ def test_personal_mode_keeps_team_data_readable(tmp_dir, monkeypatch):
     assert "个人期项目" in names
     assert "兼容项目" in names
     assert db.get_shooting_log("log-1") is not None
+
+
+# ===== 个人模式：默认工作区路径（对应优化方案步骤1/步骤4）=====
+
+def test_ensure_personal_default_workspace_path(tmp_dir, monkeypatch):
+    """个人模式：确保 default 工作区拥有合法物理路径（引用配置项、创建目录）"""
+    from DITWorkstation.App import config
+    from DITWorkstation.App.feature_flags import (
+        ensure_personal_default_workspace_path,
+    )
+    monkeypatch.setattr(config, "usage_mode", "personal")
+    default_dir = tmp_dir / "DIT_Projects"
+    monkeypatch.setattr(config, "personal_default_workspace_path", default_dir)
+    db = DatabaseService(db_path=tmp_dir / "test.db")
+    result = ensure_personal_default_workspace_path(db)
+    assert result == str(default_dir)
+    assert default_dir.exists()
+    ws = db.get_workspace("default")
+    assert ws is not None
+    assert ws.path == str(default_dir)
+
+
+def test_ensure_personal_fills_existing_empty_default(tmp_dir, monkeypatch):
+    """个人模式：旧库 default 工作区 path 为空时自动补填默认路径"""
+    from DITWorkstation.App import config
+    from DITWorkstation.App.feature_flags import (
+        ensure_personal_default_workspace_path,
+    )
+    monkeypatch.setattr(config, "usage_mode", "personal")
+    default_dir = tmp_dir / "DIT_Projects"
+    monkeypatch.setattr(config, "personal_default_workspace_path", default_dir)
+    db = DatabaseService(db_path=tmp_dir / "test.db")
+    # 模拟旧库：default 工作区已存在但 path 为空
+    db.create_project(name="旧项目")  # 触发 default 工作区创建（path=""）
+    assert db.get_workspace("default").path == ""
+    result = ensure_personal_default_workspace_path(db)
+    assert result == str(default_dir)
+    assert db.get_workspace("default").path == str(default_dir)
+
+
+def test_ensure_personal_default_workspace_path_team_noop(tmp_dir, monkeypatch):
+    """团队模式：ensure 直接跳过，不影响其工作区管理"""
+    from DITWorkstation.App import config
+    from DITWorkstation.App.feature_flags import (
+        ensure_personal_default_workspace_path,
+    )
+    monkeypatch.setattr(config, "usage_mode", "team")
+    db = DatabaseService(db_path=tmp_dir / "test.db")
+    assert ensure_personal_default_workspace_path(db) is None
+
+
+def test_writable_directory_preserves_existing_probe_file(tmp_dir):
+    """可写性检查不能删除目录中原有的同名文件"""
+    from DITWorkstation.Utils import is_writable_directory
+
+    probe = tmp_dir / ".write_test"
+    probe.write_text("keep", encoding="utf-8")
+    assert is_writable_directory(tmp_dir)
+    assert probe.read_text(encoding="utf-8") == "keep"
+
+
+# ===== 个人模式：导入界面路径选择（对应优化方案步骤2/步骤3）=====
+
+def test_import_view_copy_check_enabled_when_ws_path_empty(tmp_dir, monkeypatch):
+    """导入界面：工作区 path 为空时不禁用复选框，并显示「选择目录…」按钮"""
+    from DITWorkstation.App import config
+    from DITWorkstation.Utils import common, reset_singletons
+    from DITWorkstation.App.session_context import reset_session_state
+    from DITWorkstation.Views.media_import_view import MediaImportView
+    reset_singletons(); reset_session_state()
+    monkeypatch.setattr(config, "usage_mode", "personal")
+    db = DatabaseService(db_path=tmp_dir / "test.db")
+    common._shared_db_service = db
+    try:
+        view = MediaImportView()
+        # 当前工作区 path 为空（个人模式 default 工作区初始情形）
+        empty_ws = db.get_or_create_default_workspace()  # path=""
+        view._get_current_workspace = lambda: empty_ws
+        view.show()
+        view._sync_copy_check_state()
+        assert view.copy_mode_check.isEnabled()
+        assert view.path_picker_btn.isVisible()
+        # 补上 path 后重新同步：复选框仍可用，按钮隐藏
+        empty_ws.path = str(tmp_dir / "ws")
+        view._sync_copy_check_state()
+        assert view.copy_mode_check.isEnabled()
+        assert not view.path_picker_btn.isVisible()
+        view.close()
+        view.deleteLater()
+    finally:
+        reset_singletons(); reset_session_state()
+
+
+def test_import_view_picker_sets_workspace_path(tmp_dir, monkeypatch):
+    """导入界面：点击「选择目录…」写回工作区路径并持久化（mock 文件对话框）"""
+    import PySide6.QtWidgets as QW
+    from DITWorkstation.App import config
+    from DITWorkstation.Utils import common, reset_singletons
+    from DITWorkstation.App.session_context import reset_session_state
+    from DITWorkstation.Views.media_import_view import MediaImportView
+    reset_singletons(); reset_session_state()
+    monkeypatch.setattr(config, "usage_mode", "personal")
+    db = DatabaseService(db_path=tmp_dir / "test.db")
+    common._shared_db_service = db
+    try:
+        view = MediaImportView()
+        empty_ws = db.get_or_create_default_workspace()  # path=""
+        view._get_current_workspace = lambda: empty_ws
+        view.show()
+        picked = str(tmp_dir / "picked_ws")
+        monkeypatch.setattr(
+            QW.QFileDialog, "getExistingDirectory",
+            staticmethod(lambda *a, **k: picked),
+        )
+        view._on_pick_workspace_path()
+        # 路径写回并持久化
+        assert empty_ws.path == picked
+        assert db.get_workspace("default").path == picked
+        assert view.path_picker_btn.isHidden()
+        view.close()
+        view.deleteLater()
+    finally:
+        reset_singletons(); reset_session_state()

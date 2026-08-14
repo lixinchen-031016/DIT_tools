@@ -640,6 +640,26 @@ class DatabaseService:
             ).fetchone()
             return self._row_to_workspace(row) if row else None
 
+    def get_or_create_default_workspace(self) -> Workspace:
+        """获取或创建 id='default' 的默认工作区。
+
+        个人模式不显式创建工作区，项目（workspace_id=None）自动归入此处；
+        首启向导与启动兼容检查依赖本方法确保该工作区一定存在（path 可能为空）。
+        """
+        now = datetime.now().isoformat()
+        with self._transaction() as conn:
+            conn.execute(
+                "INSERT INTO workspaces "
+                "(workspace_id, name, path, description, created_at, updated_at) "
+                "VALUES ('default', ?, ?, ?, ?, ?) "
+                "ON CONFLICT(workspace_id) DO NOTHING",
+                ("默认工作区", "", "默认工作区", now, now),
+            )
+        workspace = self.get_workspace("default")
+        if workspace is None:
+            raise RuntimeError("创建默认工作区后仍无法读取")
+        return workspace
+
     def update_workspace(self, workspace_id: str, **kwargs) -> bool:
         """更新工作区（支持 name / path / description）"""
         if not kwargs:
@@ -658,7 +678,13 @@ class DatabaseService:
 
         try:
             with self._transaction() as conn:
-                conn.execute(f"UPDATE workspaces SET {', '.join(fields)} WHERE workspace_id = ?", params)
+                cursor = conn.execute(
+                    f"UPDATE workspaces SET {', '.join(fields)} WHERE workspace_id = ?",
+                    params,
+                )
+                if cursor.rowcount != 1:
+                    logger.warning(f"工作区不存在，未更新: {workspace_id}")
+                    return False
                 logger.info(f"更新工作区: {workspace_id}")
                 return True
         except Exception as e:
@@ -739,19 +765,7 @@ class DatabaseService:
         # 兜底：未指定 workspace_id，或显式指定 default 但旧库尚未建默认工作区时，
         # 都确保默认工作区存在。
         if workspace_id is None or workspace_id == "default":
-            ws = self.get_workspace("default")
-            if ws is None:
-                # 数据库刚初始化且无任何工作区时，先建默认工作区
-                now = datetime.now().isoformat()
-                with self._transaction() as conn:
-                    conn.execute(
-                        "INSERT INTO workspaces "
-                        "(workspace_id, name, path, description, created_at, updated_at) "
-                        "VALUES ('default', ?, '', ?, ?, ?)",
-                        ("默认工作区", "默认工作区", now, now),
-                    )
-                ws = self.get_workspace("default")
-            workspace_id = ws.workspace_id
+            workspace_id = self.get_or_create_default_workspace().workspace_id
 
         project = Project(
             project_id=str(uuid.uuid4())[:8],
@@ -1292,6 +1306,12 @@ class DatabaseService:
         """删除素材资产"""
         try:
             with self._transaction() as conn:
+                exists = conn.execute(
+                    "SELECT 1 FROM media_assets WHERE asset_id = ?", (asset_id,)
+                ).fetchone()
+                if exists is None:
+                    logger.warning(f"素材资产不存在，未删除: {asset_id}")
+                    return False
                 if self._fts_available:
                     conn.execute("DELETE FROM media_assets_fts WHERE asset_id = ?", (asset_id,))
                 conn.execute("DELETE FROM asset_tags WHERE asset_id = ?", (asset_id,))
@@ -1301,6 +1321,67 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"删除素材资产失败 {asset_id}: {e}")
             return False
+
+    def delete_media_assets(self, asset_ids: List[str]) -> int:
+        """批量删除素材资产记录（不触碰磁盘文件），返回成功删除的条数。
+
+        用于「清理文件已丢失的素材」场景：仅移除数据库中失效的路径记录，
+        保持数据库与实际文件系统一致，绝不删除磁盘上的源文件。
+
+        Args:
+            asset_ids: 待删除素材的 asset_id 列表
+
+        Returns:
+            实际删除的记录数量；重复或不存在的 ID 不重复计数。
+        """
+        unique_ids = list(dict.fromkeys(aid for aid in asset_ids if aid))
+        if not unique_ids:
+            return 0
+
+        deleted = 0
+        try:
+            # SQLite 参数数量存在上限，分块但保持在同一事务中，避免 N 次提交。
+            with self._transaction() as conn:
+                for chunk in _chunked(unique_ids, 500):
+                    placeholders = ", ".join("?" for _ in chunk)
+                    params = tuple(chunk)
+                    if self._fts_available:
+                        conn.execute(
+                            f"DELETE FROM media_assets_fts WHERE asset_id IN ({placeholders})",
+                            params,
+                        )
+                    conn.execute(
+                        f"DELETE FROM asset_tags WHERE asset_id IN ({placeholders})",
+                        params,
+                    )
+                    cursor = conn.execute(
+                        f"DELETE FROM media_assets WHERE asset_id IN ({placeholders})",
+                        params,
+                    )
+                    deleted += max(cursor.rowcount, 0)
+        except Exception as e:
+            logger.error(f"批量删除素材资产失败: {e}")
+            return 0
+        logger.info(f"批量删除素材资产: 成功 {deleted}/{len(asset_ids)}")
+        return deleted
+
+    def get_missing_file_asset_ids(self, project_id: str) -> List[str]:
+        """返回当前项目中文件已丢失（路径为空或磁盘上不存在）的素材 asset_id 列表。
+
+        实时扫描磁盘，是「文件存在性验证」的事实来源，供素材信息列表的
+        “文件已丢失”标识与「一键清理丢失素材」功能共用，确保二者结论一致。
+
+        Args:
+            project_id: 项目 ID
+
+        Returns:
+            文件已丢失的素材 asset_id 列表（按项目素材默认排序）
+        """
+        missing = []
+        for asset in self.get_media_assets(project_id):
+            if not asset.file_path or not Path(asset.file_path).exists():
+                missing.append(asset.asset_id)
+        return missing
 
     def asset_exists_by_path(self, project_id: str, file_path: str) -> bool:
         """按文件路径查重"""

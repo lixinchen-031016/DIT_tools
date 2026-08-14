@@ -36,7 +36,7 @@ DIT 工作站围绕 9 大功能模块构建完整的数据管理闭环：
 | 5 | 文件重命名 | ✏️ | 按场景/镜头/镜次规则批量重命名，支持模板变量，预览确认后执行，自动防覆盖 |
 | 6 | 拍摄日志 | 📋 | 管理场景/镜头/镜次拍摄记录，支持「从代表素材填充 EXIF」，双向关联素材与日志 |
 | 7 | 素材检索 | 🔍 | 按项目/场景/镜头/类型/关键词/日志/评级/日期/标签多维度组合检索（分页展示，每页 500 条），结果可导出 CSV；支持按校验和跨项目查重 |
-| 8 | 素材信息 | ℹ️ | 查看素材 EXIF 与元数据详情，支持缩略图预览、单个/批量重新读取 EXIF，可设置镜次评级，可一键导出项目素材清单 CSV；支持标签/备注编辑与批量评级、批量删除 |
+| 8 | 素材信息 | ℹ️ | 查看素材 EXIF 与元数据详情，支持缩略图预览、单个/批量重新读取 EXIF，可设置镜次评级，可一键导出项目素材清单 CSV；支持标签/备注编辑、批量评级、批量删除和丢失文件检测/清理 |
 | 9 | 报告生成 | 📊 | 生成 PDF 数据备份报告与素材统计报告，含镜次评级分布统计；按平台查找预装中文字体 |
 
 ---
@@ -87,6 +87,8 @@ DIT 工作站围绕 9 大功能模块构建完整的数据管理闭环：
 ### 批量操作
 - 「素材信息」素材表格支持多选（Ctrl/Shift），可批量设置评级（★ 可用 / ★★ 备选 / ★★★ 优选 / 未评级）
 - 可批量从项目移除素材记录（仅删除数据库记录，不动磁盘文件）
+- 素材列表会在后台检查文件是否仍存在，状态列显示「✓ 正常」或「⚠ 文件已丢失」；检查期间不会阻塞界面
+- 「清理丢失素材」只删除数据库中的失效素材记录，不删除任何磁盘文件，执行前会再次后台复查并要求确认
 
 ### 操作审计与设置
 - 新增 `operation_logs` 操作审计日志：导入、备份、RAW 提取、重命名、评级、标签更新等关键操作自动留痕
@@ -237,7 +239,7 @@ DIT_tools/
     │           ├── status_panel.py               # 进度/状态/日志面板
     │           ├── table_factory.py              # 表格工厂
     │           └── empty_state.py                # 空状态占位
-    ├── DITWorkstationTests/           # 测试套件（322 个测试）
+    ├── DITWorkstationTests/           # 测试套件（当前 335 个测试）
     │   ├── conftest.py                 # 共享 fixture
     │   ├── test_database.py            # 数据库服务测试（65）
     │   ├── test_media_import.py        # 媒体导入测试（28）
@@ -299,7 +301,7 @@ python DITWorkstation/main.py
 
 ## 🧪 测试
 
-项目包含 322 个测试，覆盖核心服务业务逻辑、工具函数、会话上下文、数据模型、后台任务、缩略图、功能模式和无头 UI 交互。
+项目包含 335 个测试，覆盖核心服务业务逻辑、工具函数、会话上下文、数据模型、后台任务、缩略图、功能模式、文件状态扫描和无头 UI 交互。
 
 ```bash
 # 激活虚拟环境后
@@ -311,9 +313,9 @@ pytest DITWorkstationTests/ -v
 
 | 测试文件 | 覆盖范围 | 测试数量 |
 |----------|----------|----------|
-| `test_database.py` | 数据库服务（9 张表 CRUD + 版本化迁移 + FTS5 + 连接池） | 65 |
+| `test_database.py` | 数据库服务（9 张表 CRUD + 版本化迁移 + FTS5 + 连接池） | 69 |
 | `test_utils.py` | 工具函数（format_size / sanitize_filename 等） | 36 |
-| `test_media_import.py` | 媒体导入服务 | 28 |
+| `test_media_import.py` | 媒体导入服务 | 30 |
 | `test_backup.py` | 备份服务 | 15 |
 | `test_thumbnail.py` | 缩略图服务 | 12 |
 | `test_checksum.py` | 校验和服务 | 11 |
@@ -325,7 +327,7 @@ pytest DITWorkstationTests/ -v
 | `test_tags.py` | 素材标签关联表与检索 | 9 |
 | `test_models.py` | 数据模型（AssetRating / RATING_LABELS） | 8 |
 | `test_rename.py` | 重命名服务 | 7 |
-| `test_ui_headless.py` | 无头 UI：布局/分页/设置/模板入口/模式切换 | 19 |
+| `test_ui_headless.py` | 无头 UI：布局/分页/设置/模板入口/模式切换/文件状态扫描 | 26 |
 | `test_volume_monitor.py` | 存储卡识别 | 7 |
 | `test_workers.py` | 后台线程 WorkerThread | 7 |
 | `test_templates.py` | 项目模板 CRUD 与默认模板 | 6 |
@@ -336,11 +338,11 @@ pytest DITWorkstationTests/ -v
 | `test_backup_templates.py` | 备份方案模板 | 2 |
 | `test_card_automation.py` | 相机卡自动化 | 1 |
 | `test_feature_flags.py` | 团队/个人模式功能开关 | 15 |
-| **合计** | | **322** |
+| **合计** | | **335** |
 
 测试共享 fixture（`conftest.py`）提供隔离的数据库实例、临时目录与工厂函数，保证测试间互不干扰。
 
-当前本地验证环境为 macOS arm64、Python 3.13、PySide6 6.11.1，执行结果为 `322 passed`。测试使用 Qt `offscreen` 平台，不能替代 Windows/Linux 原生 GUI、文件系统和打包产物验证。
+当前本地验证环境为 macOS arm64、Python 3.13、PySide6 6.11.1，执行结果为 `335 passed`。测试使用 Qt `offscreen` 平台，不能替代 Windows/Linux 原生 GUI、文件系统和打包产物验证。
 
 ---
 

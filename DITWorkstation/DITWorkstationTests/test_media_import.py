@@ -177,6 +177,43 @@ class TestMediaImportService:
         assert f1.exists()
         assert Path(assets[0].file_path).exists()
 
+    def test_copy_to_workspace_does_not_nest_project_name(self, temp_db, tmp_path):
+        """回归：复制目标目录已由调用方含项目名，服务不再追加，避免 <ws>/<项目>/<项目>/file"""
+        db_service, _ = temp_db
+        svc = MediaImportService(db_service=db_service)
+        src = tmp_path / "src"
+        src.mkdir()
+        f = src / "a.cr2"
+        f.write_bytes(b"x")
+        # 调用方构造的「完整目标目录」（已含项目名子文件夹）
+        target = tmp_path / "WS" / "项目A"
+        dest = svc._copy_to_workspace(Path(f), str(target))
+        assert dest == target / "a.cr2"
+        assert dest.exists()
+        # 不应出现 <WS>/项目A/项目A/a.cr2 的嵌套
+        assert not (target / "项目A").exists()
+
+    def test_import_assets_copy_uses_given_workspace_dir(self, temp_db, tmp_path):
+        """集成：import_assets 复制到调用方指定的完整目录，不再拼接项目名"""
+        db_service, _ = temp_db
+        svc = MediaImportService(db_service=db_service)
+        project = db_service.create_project(name="项目A")
+        src = tmp_path / "src"
+        src.mkdir()
+        f = src / "a.cr2"
+        f.write_bytes(b"x")
+        # 调用方已拼接好 <ws.path>/<项目名>
+        workspace_dir = str(tmp_path / "WS" / "项目A")
+        result = svc.import_assets(
+            project.project_id, [str(f)], compute_checksum=False,
+            copy_to_workspace=True, workspace_dir=workspace_dir,
+        )
+        assert result["imported"] == 1
+        asset = db_service.get_media_assets(project.project_id)[0]
+        assert asset.file_path == str(Path(workspace_dir) / "a.cr2")
+        # 不存在重复嵌套的项目名目录
+        assert not (tmp_path / "WS" / "项目A" / "项目A").exists()
+
     def test_import_skip_duplicates(self, import_service, temp_db, tmp_path):
         """测试导入时跳过重复文件"""
         db_service, _ = temp_db

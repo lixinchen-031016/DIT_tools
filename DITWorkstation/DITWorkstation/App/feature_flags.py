@@ -142,3 +142,43 @@ def is_enabled(feature: str) -> bool:
     if is_team_mode():
         return True
     return feature not in _TEAM_ONLY_FEATURES
+
+
+def ensure_personal_default_workspace_path(db_service) -> Optional[str]:
+    """个人模式：确保 default 工作区拥有合法物理路径（步骤1）。
+
+    设计文档指出个人模式无「创建工作区」步骤，default 工作区 path 初始为空，
+    导致导入时「复制到工作区」被禁用、且没有任何入口设置目录。
+
+    本函数在两个时机调用：
+    - 应用启动时（main.py，兼容旧库：已有个人模式用户的 default 工作区 path 可能仍为空）
+    - 首启向导完成后（first_run_wizard.py，个人模式跳过工作区创建步骤的场景）
+
+    团队模式直接跳过（默认工作区由其显式创建工作区逻辑管理，本函数不干预）。
+
+    Args:
+        db_service: DatabaseService 实例（调用方负责提供，保持单例一致）
+
+    Returns:
+        实际生效的 default 工作区目录路径；非个人模式、目录不可写或失败时返回 None。
+    """
+    if is_team_mode():
+        return None
+    try:
+        from DITWorkstation.Utils import is_writable_directory, logger
+        ws = db_service.get_or_create_default_workspace()
+        if ws.path:
+            if is_writable_directory(ws.path):
+                return ws.path
+            logger.warning(f"个人模式默认工作区目录不可写: {ws.path}")
+            return None
+        # 引用配置项（步骤4），不再硬编码路径，支持环境变量覆盖
+        target = config.personal_default_workspace_path
+        if not is_writable_directory(target, create=True):
+            logger.warning(f"个人模式默认工作区目录不可写: {target}")
+            return None
+        if db_service.update_workspace("default", path=str(target)):
+            return str(target)
+    except Exception as e:
+        logger.warning(f"确保个人模式默认工作区路径失败: {e}")
+    return None

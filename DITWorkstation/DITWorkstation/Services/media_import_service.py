@@ -198,10 +198,6 @@ class MediaImportService:
             return {"total": 0, "imported": 0, "skipped": 0, "failed": 0,
                     "cancelled": False, "details": []}
 
-        # 查询项目名称，用于在工作区下创建项目子文件夹
-        project = self.db_service.get_project(project_id)
-        project_name = project.name if project else project_id
-
         # 批量查重：一次查询拿回全部已存在路径（N+1 优化）
         existing_paths = self.db_service.existing_asset_paths(project_id, file_paths)
 
@@ -235,7 +231,9 @@ class MediaImportService:
                     if copy_to_workspace:
                         if not workspace_dir:
                             raise ValueError("复制模式需要指定工作区目录")
-                        dest_path = self._copy_to_workspace(path, workspace_dir, project_name)
+                        # workspace_dir 已由调用方构造为完整目标目录（含项目名），
+                        # 此处只做复制，不再拼接项目名（避免重复嵌套）。
+                        dest_path = self._copy_to_workspace(path, workspace_dir)
                         final_path = str(dest_path)
                         is_copy = True
                         original_path = str(path)
@@ -437,24 +435,24 @@ class MediaImportService:
 
         return asset
 
-    def _copy_to_workspace(self, source_path: Path, workspace_dir: str, project_name: str = "") -> Path:
+    def _copy_to_workspace(self, source_path: Path, workspace_dir: str) -> Path:
         """
-        复制文件到工作区（在工作区下创建项目名子文件夹）
+        复制文件到工作区目标目录。
+
+        注意：workspace_dir 由调用方构造为「完整目标目录」（已含项目名子文件夹，
+        如 <ws.path>/<项目名>/）。本方法只负责把源文件复制进去，不再拼接项目名，
+        避免调用方与这里重复拼接导致 <ws>/<项目>/<项目>/file 的嵌套问题。
 
         Args:
             source_path: 源文件路径
-            workspace_dir: 工作区目录
-            project_name: 项目名称（用于创建子文件夹）
+            workspace_dir: 完整目标目录（调用方已含项目名）
 
         Returns:
             目标文件路径
         """
         workspace = Path(workspace_dir)
-        # 在工作区下创建项目名子文件夹
         with self._copy_lock:
             # 锁内完成选名，避免并发导入同目录时唯一命名竞态
-            if project_name:
-                workspace = workspace / project_name
             workspace.mkdir(parents=True, exist_ok=True)
             dest = workspace / source_path.name
             if dest.exists():

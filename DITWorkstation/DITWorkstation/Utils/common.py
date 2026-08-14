@@ -5,6 +5,7 @@ import logging
 import functools
 import threading
 import traceback
+import tempfile
 import unicodedata
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -82,6 +83,25 @@ def ensure_directory(path: str) -> bool:
         Path(path).mkdir(parents=True, exist_ok=True)
         return True
     except Exception:
+        return False
+
+
+def is_writable_directory(path, *, create: bool = False) -> bool:
+    """验证目录实际可写；可选地先创建不存在的目录。"""
+    try:
+        target = Path(path)
+        if not target.exists():
+            if not create:
+                return False
+            target.mkdir(parents=True, exist_ok=True)
+        if not target.is_dir():
+            return False
+        with tempfile.NamedTemporaryFile(
+            dir=str(target), prefix=".dit-write-", delete=True
+        ):
+            pass
+        return True
+    except (OSError, TypeError, ValueError):
         return False
 
 

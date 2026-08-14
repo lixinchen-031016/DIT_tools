@@ -45,6 +45,15 @@ def _resolve_log_dir() -> Path:
     return Path.home() / ".dit_workstation" / "logs"
 
 
+def _resolve_personal_workspace_dir() -> Path:
+    """解析个人模式默认工作区；优先使用显式环境变量覆盖。"""
+    override = os.environ.get("DIT_PERSONAL_WS_PATH", "").strip()
+    if override:
+        return Path(override)
+    # 与数据库使用同一应用数据根，避免打包后写入只读的 app bundle/安装目录。
+    return _resolve_data_dir() / "DIT_Projects"
+
+
 @dataclass
 class AppConfig:
     """应用全局配置"""
@@ -85,9 +94,10 @@ class AppConfig:
             try:
                 cand.mkdir(parents=True, exist_ok=True)
                 # 测试是否真的可写
-                test_file = cand / ".write_test"
-                test_file.touch()
-                test_file.unlink()
+                with tempfile.NamedTemporaryFile(
+                    dir=str(cand), prefix=".dit-write-", delete=True
+                ):
+                    pass
                 return cand
             except (PermissionError, OSError):
                 continue
@@ -115,6 +125,12 @@ class AppConfig:
     # 功能模式（设备级配置）：team=团队版（完整 DIT 工作流），personal=个人版
     # （隐藏团队向入口）。修改后重启生效；读取/校验逻辑见 App/feature_flags.py。
     usage_mode: str = "team"
+
+    # 个人模式默认工作区目录：应用数据目录下的 DIT_Projects 子文件夹。
+    # 个人模式不显式创建带目录的工作区，default 工作区需要一个合法物理路径，
+    # 作为「复制到工作区」的目标根（<path>/<项目名>/）。
+    # 可通过环境变量 DIT_PERSONAL_WS_PATH 覆盖，便于自定义默认路径（步骤4）。
+    personal_default_workspace_path: Path = field(default_factory=_resolve_personal_workspace_dir)
 
     # 检索分页
     search_page_size: int = 500  # 素材检索每页显示的条数

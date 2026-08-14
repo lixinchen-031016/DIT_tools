@@ -15,7 +15,8 @@ from PySide6.QtGui import QFont, QFontDatabase, QIcon, QPainter, QPixmap, QColor
 
 from DITWorkstation.App import config
 from DITWorkstation.App.navigation import get_nav_index
-from DITWorkstation.Utils import apply_saved_config
+from DITWorkstation.Utils import apply_saved_config, logger, get_db_service
+from DITWorkstation.App.feature_flags import ensure_personal_default_workspace_path
 from DITWorkstation.Views.main_window import (
     MainWindow, set_current_project, set_current_workspace
 )
@@ -117,6 +118,15 @@ def main():
 
     # 恢复上次保存的应用设置（备份默认验证、存储卡自动识别等）
     apply_saved_config()
+
+    # 个人模式启动兼容：确保 default 工作区拥有合法物理路径
+    # （旧库或个人模式首启前，default 工作区 path 可能仍为空字符串，
+    #  导致「复制到工作区」被禁用且无入口设置目录）。
+    # 团队模式由 ensure 内部直接跳过，不受影响。
+    try:
+        ensure_personal_default_workspace_path(get_db_service())
+    except Exception as e:
+        logger.warning(f"确保个人模式默认工作区路径失败: {e}")
 
     # 高DPI支持
     QApplication.setHighDpiScaleFactorRoundingPolicy(

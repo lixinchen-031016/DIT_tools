@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QTextEdit,
 )
 from PySide6.QtCore import Qt, QThread, Signal, Slot
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QColor
 
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.App.feature_flags import is_enabled
@@ -18,7 +18,7 @@ from DITWorkstation.Models import RATING_LABELS
 from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Services.thumbnail_service import ThumbnailService, SIZE_LARGE
 from DITWorkstation.Utils import (
-    format_size, get_db_service, safe_slot, logger,
+    format_size, get_db_service, safe_slot, logger, WorkerThread,
     open_in_file_manager, pick_save_file,
 )
 from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
@@ -160,7 +160,11 @@ class AssetInfoView(RefreshOnShowView):
         self.thumbnail_service.thumbnail_ready.connect(self._on_thumbnail_ready)
         self.current_asset = None
         self._batch_worker = None
+        self._missing_scan_worker = None
+        self._missing_scan_generation = 0
+        self._missing_scan_pending = False
         self._assets = []
+        self._missing_ids = set()  # 当前项目文件已丢失的素材 asset_id 集合
         self._setup_ui()
         # 项目切换由共享控件广播到全局，本视图仅需监听后刷新素材列表
         self.selector.project_changed.connect(self._on_project_changed)
@@ -241,6 +245,25 @@ class AssetInfoView(RefreshOnShowView):
         self.export_csv_btn.clicked.connect(self._export_csv)
         header.addWidget(self.export_csv_btn)
 
+        # 批量清理已丢失文件对应的素材记录
+        self.cleanup_missing_btn = QPushButton("🧹 清理丢失素材")
+        self.cleanup_missing_btn.setToolTip("一键删除数据库中所有「文件已丢失」的素材记录（不删除磁盘文件）")
+        self.cleanup_missing_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR.DANGER_HOVER};
+                color: white;
+                border: none;
+                border-radius: {RADIUS.BUTTON}px;
+                padding: 8px 16px;
+                font-size: {FONT_SIZE.BASE}px;
+            }}
+            QPushButton:hover {{ background-color: {COLOR.DANGER}; }}
+            QPushButton:disabled {{ background-color: {COLOR.DISABLED}; }}
+        """)
+        self.cleanup_missing_btn.clicked.connect(self._batch_cleanup_missing)
+        self.cleanup_missing_btn.setEnabled(False)
+        header.addWidget(self.cleanup_missing_btn)
+
         layout.addLayout(header)
 
     def _setup_content(self):
@@ -281,9 +304,9 @@ class AssetInfoView(RefreshOnShowView):
         left_layout.addWidget(self.asset_count_label)
 
         self.asset_table = make_table(
-            ["文件名", "类型", "大小", "EXIF"],
+            ["文件名", "类型", "大小", "EXIF", "状态"],
             sortable=True,
-            resize_to_contents_cols=[1, 2, 3],
+            resize_to_contents_cols=[1, 2, 3, 4],
             selection_mode=QAbstractItemView.ExtendedSelection,
         )
         # 表格全局样式由 main.py 注入的 GLOBAL_QSS 统一控制，不再单独 setStyleSheet
@@ -367,6 +390,7 @@ class AssetInfoView(RefreshOnShowView):
         props_layout.setSpacing(0)
 
         self._setup_props_file_header(props_layout)
+        self._setup_missing_banner(props_layout)
         self._setup_rating_row(props_layout)
         self._setup_props_groups(props_layout)
         self._setup_tags_group(props_layout)
@@ -414,6 +438,24 @@ class AssetInfoView(RefreshOnShowView):
         single_refresh_row.addWidget(self.refresh_exif_btn)
         single_refresh_row.addStretch()
         props_layout.addLayout(single_refresh_row)
+
+    def _setup_missing_banner(self, props_layout):
+        """文件已丢失警告横幅（默认隐藏，选中「文件已丢失」素材时显示）。"""
+        self.missing_banner = QLabel("")
+        self.missing_banner.setWordWrap(True)
+        self.missing_banner.setStyleSheet(f"""
+            QLabel {{
+                background-color: {COLOR.BANNER_WARNING_BG};
+                color: {COLOR.BANNER_WARNING_FG};
+                border: 1px solid {COLOR.BANNER_WARNING_BORDER};
+                border-radius: {RADIUS.INPUT}px;
+                padding: 8px 10px;
+                font-size: {FONT_SIZE.SM}px;
+                font-weight: 600;
+            }}
+        """)
+        self.missing_banner.setVisible(False)
+        props_layout.addWidget(self.missing_banner)
 
     def _setup_rating_row(self, props_layout):
         # 镜次评级快捷按钮（评级值与标签来自 Models.RATING_LABELS 单一事实源）
@@ -651,22 +693,26 @@ class AssetInfoView(RefreshOnShowView):
 
     def _load_assets(self):
         project_id = self.selector.get_current_project_id()
+        self._missing_scan_generation += 1
         self.asset_table.setRowCount(0)
         sync_empty_state(self.asset_table)
         self._update_batch_state()
         self.current_file_label.setText("请选择左侧素材查看详情")
         self.refresh_exif_btn.setEnabled(False)
         self._clear_properties()
+        self.missing_banner.setVisible(False)
+        self._missing_ids = set()
+        self._missing_scan_pending = bool(project_id)
         if not project_id:
             self.batch_exif_btn.setEnabled(False)
-            self.asset_count_label.setText("")
+            self._assets = []
+            self._refresh_missing_summary()
             return
 
         assets = self.db_service.get_media_assets(project_id)
         self._assets = assets
         self.asset_table.setRowCount(len(assets))
         sync_empty_state(self.asset_table)
-        self.asset_count_label.setText(f"共 {len(assets)} 个素材")
         self.batch_exif_btn.setEnabled(len(assets) > 0)
 
         for i, asset in enumerate(assets):
@@ -679,10 +725,95 @@ class AssetInfoView(RefreshOnShowView):
             has_exif = bool(asset.camera_make or asset.camera_model or asset.lens_model)
             exif_item = QTableWidgetItem("✓ 有" if has_exif else "— 无")
             if has_exif:
-                exif_item.setForeground(Qt.darkGreen)
+                exif_item.setForeground(QColor(COLOR.SUCCESS))
             else:
-                exif_item.setForeground(Qt.gray)
+                exif_item.setForeground(QColor(COLOR.TEXT_SECONDARY))
             self.asset_table.setItem(i, 3, exif_item)
+
+            # 文件存在性校验：自动触发，将失效条目标识为「文件已丢失」
+            status_item = QTableWidgetItem("检查中…")
+            status_item.setForeground(QColor(COLOR.TEXT_SECONDARY))
+            self.asset_table.setItem(i, 4, status_item)
+
+        self._refresh_missing_summary()
+        self._start_missing_file_scan(project_id)
+
+    def _refresh_missing_summary(self):
+        """依据 self._missing_ids 刷新素材计数文案与「清理丢失素材」按钮可用状态。"""
+        missing_count = len(self._missing_ids)
+        text = f"共 {len(self._assets)} 个素材"
+        if missing_count:
+            text += f"（{missing_count} 个文件已丢失）"
+        self.asset_count_label.setText(text)
+        # 仅当存在丢失素材时才允许一键清理，避免误触空操作
+        self.cleanup_missing_btn.setEnabled(
+            missing_count > 0 and not self._missing_scan_pending
+        )
+
+    def _start_missing_file_scan(self, project_id: str, for_cleanup: bool = False):
+        """在后台扫描文件存在性；刷新序号用于丢弃过期扫描结果。"""
+        generation = self._missing_scan_generation
+        worker = WorkerThread(
+            self.db_service.get_missing_file_asset_ids, project_id
+        )
+        worker._missing_project_id = project_id
+        worker._missing_generation = generation
+        worker._missing_for_cleanup = for_cleanup
+        worker.finished.connect(self._on_missing_scan_finished)
+        worker.error.connect(self._on_missing_scan_error)
+        worker.thread_finished.connect(worker.deleteLater)
+        self._missing_scan_worker = worker
+        worker.start()
+
+    @Slot(object)
+    def _on_missing_scan_finished(self, missing_ids):
+        """接收后台扫描结果并在主线程更新状态列。"""
+        worker = self.sender()
+        if worker is None:
+            return
+        project_id = getattr(worker, "_missing_project_id", None)
+        generation = getattr(worker, "_missing_generation", -1)
+        if generation != self._missing_scan_generation:
+            return
+        if self.selector.get_current_project_id() != project_id:
+            return
+
+        self._missing_scan_pending = False
+        self._missing_ids = set(missing_ids or [])
+        for row in range(self.asset_table.rowCount()):
+            item = self.asset_table.item(row, 0)
+            status_item = self.asset_table.item(row, 4)
+            if item is None or status_item is None:
+                continue
+            is_missing = item.data(Qt.UserRole) in self._missing_ids
+            status_item.setText("⚠ 文件已丢失" if is_missing else "✓ 正常")
+            status_item.setForeground(
+                QColor(COLOR.DANGER) if is_missing else QColor(COLOR.SUCCESS)
+            )
+        self._refresh_missing_summary()
+        if self.current_asset:
+            self._on_asset_selected()
+
+        if getattr(worker, "_missing_for_cleanup", False):
+            self._confirm_cleanup_missing(project_id)
+
+    @Slot(str)
+    def _on_missing_scan_error(self, error: str):
+        """扫描失败时恢复按钮状态并保留明确的状态提示。"""
+        worker = self.sender()
+        if worker is None:
+            return
+        generation = getattr(worker, "_missing_generation", -1)
+        if generation != self._missing_scan_generation:
+            return
+        self._missing_scan_pending = False
+        self.cleanup_missing_btn.setEnabled(False)
+        for row in range(self.asset_table.rowCount()):
+            status_item = self.asset_table.item(row, 4)
+            if status_item is not None:
+                status_item.setText("⚠ 检查失败")
+                status_item.setForeground(QColor(COLOR.DANGER))
+        logger.warning(f"文件存在性扫描失败: {error}")
 
     def _on_asset_selected(self):
         row = self.asset_table.currentRow()
@@ -693,16 +824,29 @@ class AssetInfoView(RefreshOnShowView):
             self.current_file_label.setText("请选择左侧素材查看详情")
             self.thumbnail_label.setPixmap(QPixmap())
             self.thumbnail_label.setText("🖼 选择素材后显示缩略图")
+            self.missing_banner.setVisible(False)
             self._clear_properties()
             return
         asset_id = self.asset_table.item(row, 0).data(Qt.UserRole)
         self.current_asset = self.db_service.get_media_asset(asset_id)
         if self.current_asset:
+            # 使用最近一次后台扫描结果，避免在 UI 线程访问磁盘。
+            is_missing = asset_id in self._missing_ids
+            self._set_asset_missing(row, asset_id, is_missing)
             self.refresh_exif_btn.setEnabled(True)
             self._sync_rating_buttons(self.current_asset.rating)
             self.current_file_label.setText(self.current_asset.file_name)
             self._display_properties(self.current_asset)
-            self._request_thumbnail(self.current_asset)
+            if is_missing:
+                self.missing_banner.setText(
+                    "⚠ 文件已丢失：该素材在磁盘上不存在，可能已被移动或删除。"
+                )
+                self.missing_banner.setVisible(True)
+                self.thumbnail_label.setPixmap(QPixmap())
+                self.thumbnail_label.setText("🚫 文件已丢失，无法生成缩略图")
+            else:
+                self.missing_banner.setVisible(False)
+                self._request_thumbnail(self.current_asset)
         self._update_batch_state()
 
     # ===== 批量操作 =====
@@ -726,6 +870,23 @@ class AssetInfoView(RefreshOnShowView):
             btn.setEnabled(enabled)
         self.batch_delete_btn.setEnabled(enabled)
         self.batch_selected_label.setText(f"已选 {count} 个" if count else "")
+
+    def _set_asset_missing(self, row: int, asset_id: str, is_missing: bool):
+        """同步某条素材的「文件已丢失」状态到内存集合、表格状态列与汇总文案。
+
+        选中素材时根据最近一次后台扫描结果同步列表与详情面板状态。
+        """
+        if is_missing:
+            self._missing_ids.add(asset_id)
+        else:
+            self._missing_ids.discard(asset_id)
+        status_item = self.asset_table.item(row, 4)
+        if status_item is not None:
+            status_item.setText("⚠ 文件已丢失" if is_missing else "✓ 正常")
+            status_item.setForeground(
+                QColor(COLOR.DANGER) if is_missing else QColor(COLOR.SUCCESS)
+            )
+        self._refresh_missing_summary()
 
     @safe_slot("批量评级失败")
     def _batch_set_rating(self, rating: int):
@@ -760,13 +921,61 @@ class AssetInfoView(RefreshOnShowView):
         )
         if reply != QMessageBox.Yes:
             return
-        ok = 0
-        for aid in ids:
-            if self.db_service.delete_media_asset(aid):
-                ok += 1
+        ok = self.db_service.delete_media_assets(ids)
         self._load_assets()
         QMessageBox.information(
             self, "删除完成", f"已移除 {ok}/{len(ids)} 条素材记录"
+        )
+        try:
+            get_data_bus().emit_data_changed("assets_changed")
+        except Exception as e:
+            logger.warning(f"广播 assets_changed 失败: {e}")
+
+    @safe_slot("清理丢失素材失败")
+    def _batch_cleanup_missing(self):
+        """一键删除当前项目所有「文件已丢失」的素材记录（二次确认防误删）。
+
+        仅移除数据库中的失效路径记录，保持数据库与实际文件系统一致，
+        绝不删除磁盘上的任何文件；删除前弹出二次确认，避免误删有效数据。
+        """
+        project_id = self.selector.get_current_project_id()
+        if not project_id:
+            return
+        if self._missing_scan_pending:
+            QMessageBox.information(self, "正在检查", "正在检查文件状态，请稍后再试。")
+            return
+
+        # 删除前重新扫描，但扫描在后台执行，避免阻塞界面。
+        self._missing_scan_pending = True
+        self._refresh_missing_summary()
+        self._start_missing_file_scan(project_id, for_cleanup=True)
+
+    def _confirm_cleanup_missing(self, project_id: str):
+        """在后台复查完成后确认并执行丢失素材清理。"""
+        if self.selector.get_current_project_id() != project_id:
+            return
+        missing_ids = sorted(self._missing_ids)
+        if not missing_ids:
+            QMessageBox.information(self, "无丢失素材", "当前项目没有文件已丢失的素材记录。")
+            return
+
+        # 二次确认：明确仅删除失效记录、不影响正常素材、操作不可撤销
+        reply = QMessageBox.question(
+            self, "确认清理丢失素材",
+            f"即将删除 {len(missing_ids)} 条「文件已丢失」的素材记录。\n\n"
+            "• 仅移除数据库中的素材记录，不会删除磁盘上的任何文件\n"
+            "• 仅影响文件已丢失的无效记录，正常素材不会被改动\n"
+            "• 此操作不可撤销\n\n"
+            "确定要清理吗？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        deleted = self.db_service.delete_media_assets(missing_ids)
+        self._load_assets()
+        QMessageBox.information(
+            self, "清理完成", f"已删除 {deleted}/{len(missing_ids)} 条丢失素材记录。"
         )
         try:
             get_data_bus().emit_data_changed("assets_changed")
