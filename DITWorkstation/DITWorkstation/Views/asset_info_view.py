@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView,
     QGroupBox, QFormLayout, QScrollArea,
     QMessageBox, QAbstractItemView, QProgressBar, QFrame, QSizePolicy,
-    QLineEdit, QTextEdit,
+    QComboBox, QDialog, QDialogButtonBox, QLineEdit, QTextEdit,
 )
 from PySide6.QtCore import Qt, QThread, Signal, Slot
 from PySide6.QtGui import QPixmap, QColor
@@ -17,9 +17,10 @@ from DITWorkstation.App.feature_flags import is_enabled
 from DITWorkstation.Models import RATING_LABELS
 from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Services.thumbnail_service import ThumbnailService, SIZE_LARGE
+from DITWorkstation.Services.asset_relink_service import AssetRelinkService
 from DITWorkstation.Utils import (
     format_size, get_db_service, safe_slot, logger, WorkerThread,
-    open_in_file_manager, pick_save_file,
+    open_in_file_manager, pick_directory, pick_save_file,
 )
 from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
@@ -244,6 +245,12 @@ class AssetInfoView(RefreshOnShowView):
         """)
         self.export_csv_btn.clicked.connect(self._export_csv)
         header.addWidget(self.export_csv_btn)
+
+        self.relink_missing_btn = QPushButton("🔗 重新链接丢失素材")
+        self.relink_missing_btn.setToolTip("选择新根目录，预览并回写可唯一匹配的移动后素材路径")
+        self.relink_missing_btn.clicked.connect(self._relink_missing_assets)
+        self.relink_missing_btn.setEnabled(False)
+        header.addWidget(self.relink_missing_btn)
 
         # 批量清理已丢失文件对应的素材记录
         self.cleanup_missing_btn = QPushButton("🧹 清理丢失素材")
@@ -749,6 +756,9 @@ class AssetInfoView(RefreshOnShowView):
         self.cleanup_missing_btn.setEnabled(
             missing_count > 0 and not self._missing_scan_pending
         )
+        self.relink_missing_btn.setEnabled(
+            missing_count > 0 and not self._missing_scan_pending
+        )
 
     def _start_missing_file_scan(self, project_id: str, for_cleanup: bool = False):
         """在后台扫描文件存在性；刷新序号用于丢弃过期扫描结果。"""
@@ -808,6 +818,7 @@ class AssetInfoView(RefreshOnShowView):
             return
         self._missing_scan_pending = False
         self.cleanup_missing_btn.setEnabled(False)
+        self.relink_missing_btn.setEnabled(False)
         for row in range(self.asset_table.rowCount()):
             status_item = self.asset_table.item(row, 4)
             if status_item is not None:
@@ -916,7 +927,8 @@ class AssetInfoView(RefreshOnShowView):
         reply = QMessageBox.question(
             self, "确认删除",
             f"确定从项目移除 {len(ids)} 条素材记录？\n\n"
-            "仅移除数据库记录，不会删除磁盘上的源文件。",
+            "仅移除数据库记录，不会删除磁盘上的源文件。\n"
+            "记录将在回收站保留 30 天，可恢复其元数据。",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         if reply != QMessageBox.Yes:
@@ -965,7 +977,7 @@ class AssetInfoView(RefreshOnShowView):
             f"即将删除 {len(missing_ids)} 条「文件已丢失」的素材记录。\n\n"
             "• 仅移除数据库中的素材记录，不会删除磁盘上的任何文件\n"
             "• 仅影响文件已丢失的无效记录，正常素材不会被改动\n"
-            "• 此操作不可撤销\n\n"
+            "• 记录将在回收站保留 30 天，可恢复其元数据\n\n"
             "确定要清理吗？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
@@ -981,6 +993,77 @@ class AssetInfoView(RefreshOnShowView):
             get_data_bus().emit_data_changed("assets_changed")
         except Exception as e:
             logger.warning(f"广播 assets_changed 失败: {e}")
+
+    @safe_slot("重新链接丢失素材失败")
+    def _relink_missing_assets(self):
+        """让用户选择新根目录，先展示预览摘要再提交唯一匹配。"""
+        project_id = self.selector.get_current_project_id()
+        if not project_id:
+            return
+        root = pick_directory(self, "选择素材的新根目录", category="relink_root")
+        if not root:
+            return
+        service = AssetRelinkService(self.db_service)
+        preview = service.preview(project_id, root)
+        if preview.matched_count == 0:
+            QMessageBox.information(
+                self, "未找到可重新链接的素材",
+                f"未匹配 {preview.unmatched_count} 个素材；存在冲突 {preview.conflict_count} 个。",
+            )
+            return
+        selections = self._show_relink_preview(preview)
+        if selections is None:
+            return
+        result = service.apply(preview, selections)
+        if not result:
+            QMessageBox.warning(self, "重新链接未完成", result.message)
+            return
+        self._load_assets()
+        QMessageBox.information(self, "重新链接完成", f"已重新链接 {result.affected_count} 个素材。")
+        get_data_bus().emit_data_changed("assets_changed")
+
+    def _show_relink_preview(self, preview):
+        """展示重新链接预览，并让用户对重名冲突选择候选文件。"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("预览重新链接")
+        dialog.resize(920, 520)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(
+            f"唯一匹配 {preview.matched_count} 个，冲突 {preview.conflict_count} 个，"
+            f"未匹配 {preview.unmatched_count} 个。选择后将批量回写数据库路径。"
+        ))
+        table = QTableWidget(len(preview.matches), 4)
+        table.setHorizontalHeaderLabels(["原始文件", "匹配方式", "状态", "目标文件"])
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        selections = {}
+        for row, match in enumerate(preview.matches):
+            table.setItem(row, 0, QTableWidgetItem(Path(match.old_path).name))
+            table.setItem(row, 1, QTableWidgetItem(match.match_method))
+            status = "冲突" if match.is_conflict else "可链接" if match.selected_path else "未匹配"
+            table.setItem(row, 2, QTableWidgetItem(status))
+            combo = QComboBox(table)
+            combo.addItem("跳过", "")
+            for candidate in match.candidate_paths:
+                combo.addItem(candidate, candidate)
+            if match.selected_path:
+                combo.setCurrentIndex(1)
+            combo.setEnabled(bool(match.candidate_paths))
+            table.setCellWidget(row, 3, combo)
+            selections[match.asset_id] = combo
+        layout.addWidget(table)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.Accepted:
+            return None
+        return [
+            (asset_id, combo.currentData())
+            for asset_id, combo in selections.items() if combo.currentData()
+        ]
 
     def _on_asset_double_clicked(self, index):
         """双击素材 → 打开所在目录（通过 item 的 UserRole 取 asset_id，排序安全）"""

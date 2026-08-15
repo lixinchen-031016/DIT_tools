@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 from datetime import datetime
 
-from DITWorkstation.Models import RenameRule
+from DITWorkstation.Models import OperationResult, OperationStatus, RenameRule
 
 
 class RenameService:
@@ -136,8 +136,52 @@ class RenameService:
             all_results.extend(results)
         return all_results
 
+    def rollback_rename(
+        self,
+        db_service,
+        rename_id: str,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> OperationResult:
+        """回退一次已记录的重命名。
+
+        只有全部新路径仍存在、旧路径仍为空且该记录未回退时才执行，避免覆盖
+        用户在此后创建或再次重命名的文件。
+        """
+        history = db_service.get_rename_history(rename_id)
+        if not history:
+            return history
+        mappings = history.value["mappings"]
+        for old_path, new_path in mappings:
+            old, new = Path(old_path), Path(new_path)
+            if not new.is_file():
+                return OperationResult(OperationStatus.CONFLICT, f"无法回退，重命名后的文件已变化: {new}")
+            if old.exists():
+                return OperationResult(OperationStatus.CONFLICT, f"无法回退，原路径已被占用: {old}")
+
+        reverted = []
+        try:
+            total = len(mappings)
+            for index, (old_path, new_path) in enumerate(mappings, start=1):
+                Path(new_path).rename(old_path)
+                reverted.append((old_path, new_path))
+                if progress_callback:
+                    progress_callback(index, total, Path(old_path).name)
+        except OSError as exc:
+            for old_path, new_path in reversed(reverted):
+                try:
+                    Path(old_path).rename(new_path)
+                except OSError:
+                    pass
+            return OperationResult(OperationStatus.ERROR, f"文件回退失败: {exc}")
+
+        for old_path, new_path in mappings:
+            db_service.update_asset_path_by_old_path(new_path, old_path, Path(old_path).name)
+        marked = db_service.mark_rename_history_reverted(rename_id)
+        if not marked:
+            return marked
+        return OperationResult(OperationStatus.SUCCESS, affected_count=len(mappings), recovery_id=rename_id)
+
 
 # 向后兼容：MetadataService 已拆离到 metadata_service.py
 # 现有代码 `from rename_service import MetadataService` 仍可用
 from DITWorkstation.Services.metadata_service import MetadataService  # noqa: E402,F401
-

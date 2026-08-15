@@ -2,7 +2,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional, List
+from typing import Any, Optional, List
 
 
 class ChecksumAlgorithm(Enum):
@@ -37,6 +37,33 @@ class BackupStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     PARTIAL = "partial"  # 部分成功
+
+
+class OperationStatus(str, Enum):
+    """写操作的稳定结果分类，供服务与 UI 使用。"""
+    SUCCESS = "success"
+    NOT_FOUND = "not_found"
+    CONFLICT = "conflict"
+    INVALID = "invalid"
+    ERROR = "error"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class OperationResult:
+    """服务写操作的结构化结果；布尔值兼容原有调用方。"""
+    status: OperationStatus
+    message: str = ""
+    value: Any = None
+    affected_count: int = 0
+    recovery_id: Optional[str] = None
+
+    @property
+    def succeeded(self) -> bool:
+        return self.status == OperationStatus.SUCCESS
+
+    def __bool__(self) -> bool:
+        return self.succeeded
 
 
 class AssetRating(Enum):

@@ -2,6 +2,7 @@
 import re
 import json
 import logging
+import os
 import functools
 import threading
 import traceback
@@ -174,6 +175,94 @@ def calculate_speed(elapsed_seconds: float, bytes_transferred: int) -> float:
 # ===== 最近使用路径管理 =====
 _RECENT_PATHS_KEY = "recent_directories"
 _MAX_RECENT = 10
+_APP_SETTINGS_KEY = "app_config"
+_PATH_CONFIG_FIELDS = {"db_dir", "report_dir", "log_dir", "thumbnail_cache_dir"}
+_POSITIVE_INT_CONFIG_FIELDS = {
+    "checksum_buffer_size", "max_parallel_copies", "search_page_size", "max_import_workers",
+}
+_settings_load_issue: str | None = None
+
+
+def _corrupt_settings_path(path: Path) -> Path:
+    """Return an unused evidence-preserving filename for a bad settings file."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    candidate = path.with_name(f"{path.name}.corrupt.{timestamp}")
+    suffix = 1
+    while candidate.exists():
+        candidate = path.with_name(f"{path.name}.corrupt.{timestamp}.{suffix}")
+        suffix += 1
+    return candidate
+
+
+def _quarantine_corrupt_settings(path: Path, reason: str) -> None:
+    """Keep unreadable settings as evidence instead of silently overwriting them."""
+    global _settings_load_issue
+    try:
+        quarantined = _corrupt_settings_path(path)
+        os.replace(path, quarantined)
+        _settings_load_issue = str(quarantined)
+        logger.warning(f"settings.json 无法读取，已保留为 {quarantined}：{reason}")
+    except OSError as exc:
+        _settings_load_issue = str(path)
+        logger.warning(f"settings.json 无法读取，且隔离失败 {path}：{exc}")
+
+
+def _validate_settings(settings: object) -> dict:
+    """Validate the persisted settings envelope before application code consumes it.
+
+    Unknown top-level keys remain for forward compatibility. Known sections must use
+    the shapes their consumers expect so a malformed value cannot fail later in UI
+    code after a successful JSON parse.
+    """
+    if not isinstance(settings, dict):
+        raise ValueError("settings.json 根节点必须是对象")
+
+    validated = dict(settings)
+    app_config = validated.get(_APP_SETTINGS_KEY)
+    if app_config is not None and not isinstance(app_config, dict):
+        logger.warning("settings.json 的 app_config 不是对象，已回退为默认配置")
+        validated.pop(_APP_SETTINGS_KEY, None)
+    elif isinstance(app_config, dict):
+        validated[_APP_SETTINGS_KEY] = _validate_app_config(app_config)
+
+    for key, value in list(validated.items()):
+        if key.startswith(f"{_RECENT_PATHS_KEY}_"):
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                logger.warning(f"settings.json 的最近路径 {key} 格式无效，已忽略")
+                validated.pop(key, None)
+            else:
+                validated[key] = value[:_MAX_RECENT]
+    return validated
+
+
+def _validate_app_config(app_config: dict) -> dict:
+    """Discard malformed known AppConfig values while retaining future fields."""
+    validated = {}
+    for key, value in app_config.items():
+        if not hasattr(config, key):
+            validated[key] = value
+            continue
+        if key in _PATH_CONFIG_FIELDS:
+            valid = isinstance(value, str) or (key == "thumbnail_cache_dir" and value is None)
+        else:
+            default = getattr(config, key)
+            if isinstance(default, bool):
+                valid = isinstance(value, bool)
+            elif isinstance(default, int):
+                valid = isinstance(value, int) and not isinstance(value, bool)
+                if key in _POSITIVE_INT_CONFIG_FIELDS:
+                    valid = valid and value > 0
+            elif isinstance(default, str):
+                valid = isinstance(value, str)
+            elif isinstance(default, list):
+                valid = isinstance(value, list) and all(isinstance(item, str) for item in value)
+            else:
+                valid = True
+        if valid:
+            validated[key] = value
+        else:
+            logger.warning(f"settings.json 的配置字段 {key} 类型或取值无效，已回退默认值")
+    return validated
 
 
 def _get_settings_path() -> Path:
@@ -185,26 +274,46 @@ def _get_settings_path() -> Path:
     return Path(config.effective_settings_dir) / "settings.json"
 
 def _load_settings() -> dict:
-    """加载 settings.json"""
+    """加载并校验 settings.json；损坏文件会隔离后回退默认值。"""
+    global _settings_load_issue
+    _settings_load_issue = None
     path = _get_settings_path()
     if not path.exists():
         return {}
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
+            return _validate_settings(json.load(f))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        _quarantine_corrupt_settings(path, str(exc))
         return {}
 
 
-def _save_settings(settings: dict):
-    """保存 settings.json"""
+def _save_settings(settings: dict) -> bool:
+    """原子保存 settings.json，避免进程中断留下半写入文件。"""
     path = _get_settings_path()
+    temporary_path = None
     try:
+        settings = _validate_settings(settings)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent,
+            prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as f:
+            temporary_path = Path(f.name)
             json.dump(settings, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.warning(f"保存 settings.json 失败: {e}")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary_path, path)
+        return True
+    except (OSError, TypeError, ValueError) as exc:
+        logger.warning(f"保存 settings.json 失败: {exc}")
+        return False
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def add_recent_path(path: str, category: str = "default"):
@@ -273,7 +382,6 @@ def count_recent_paths() -> int:
 
 
 # ===== 应用配置持久化 =====
-_APP_SETTINGS_KEY = "app_config"
 
 
 def load_app_settings() -> dict:
@@ -311,6 +419,7 @@ def apply_saved_config():
             if key in _PATH_FIELDS and isinstance(value, str):
                 value = Path(value)
             setattr(config, key, value)
+    return _settings_load_issue
 
 
 def _show_recent_paths_dialog(parent, title: str, recent_paths: list) -> str:

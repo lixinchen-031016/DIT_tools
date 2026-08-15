@@ -6,14 +6,14 @@ import shutil
 import re
 import json
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from DITWorkstation.App import config
 from DITWorkstation.Models import (
     Project, ProjectTemplate, BackupTemplate, ShootingLog, MediaAsset, Workspace,
-    ChecksumAlgorithm,
+    ChecksumAlgorithm, OperationResult, OperationStatus,
 )
 from DITWorkstation.Utils import logger, normalize_path
 
@@ -225,11 +225,35 @@ class DatabaseService:
                     project_id TEXT,
                     event TEXT NOT NULL,
                     detail TEXT DEFAULT '',
+                    result_status TEXT DEFAULT 'success',
+                    object_type TEXT DEFAULT '',
+                    object_id TEXT DEFAULT '',
+                    recovery_id TEXT DEFAULT '',
                     created_at TEXT NOT NULL
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_operation_logs_project ON operation_logs(project_id);
                 CREATE INDEX IF NOT EXISTS idx_operation_logs_created ON operation_logs(created_at);
+
+                CREATE TABLE IF NOT EXISTS recycle_bin (
+                    recycle_id TEXT PRIMARY KEY,
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    project_id TEXT,
+                    snapshot_json TEXT NOT NULL,
+                    deleted_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_recycle_bin_expires ON recycle_bin(expires_at);
+
+                CREATE TABLE IF NOT EXISTS rename_history (
+                    rename_id TEXT PRIMARY KEY,
+                    project_id TEXT,
+                    mappings_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    reverted_at TEXT
+                );
 
                 CREATE TABLE IF NOT EXISTS project_templates (
                     template_id TEXT PRIMARY KEY,
@@ -283,7 +307,7 @@ class DatabaseService:
                 pass
 
     # 当前数据库 schema 版本：每次结构变更 +1，并在 _migrate_db 中补充对应迁移
-    _DB_VERSION = 4
+    _DB_VERSION = 5
 
     def _migrate_db(self):
         """按 PRAGMA user_version 分版本迁移数据库。
@@ -314,6 +338,10 @@ class DatabaseService:
                 self._migrate_v4(conn)
                 self._set_user_version(conn, 4)
                 logger.info("数据库迁移完成: v4")
+            if version < 5:
+                self._migrate_v5(conn)
+                self._set_user_version(conn, 5)
+                logger.info("数据库迁移完成: v5")
 
             # FTS 创建必须晚于迁移前备份，否则备份会混入新建索引表。
             # v3 数据库若因中断或旧版本缺失索引，也在这里补建并重建一次。
@@ -488,6 +516,39 @@ class DatabaseService:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_backup_templates_created "
             "ON backup_templates(created_at)"
+        )
+
+    def _migrate_v5(self, conn):
+        """v5：回收站、重命名回退记录和可诊断审计字段。"""
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(operation_logs)")}
+        for name, definition in (
+            ("result_status", "TEXT DEFAULT 'success'"),
+            ("object_type", "TEXT DEFAULT ''"),
+            ("object_id", "TEXT DEFAULT ''"),
+            ("recovery_id", "TEXT DEFAULT ''"),
+        ):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE operation_logs ADD COLUMN {name} {definition}")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS recycle_bin (
+                recycle_id TEXT PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                project_id TEXT,
+                snapshot_json TEXT NOT NULL,
+                deleted_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )"""
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_recycle_bin_expires ON recycle_bin(expires_at)")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS rename_history (
+                rename_id TEXT PRIMARY KEY,
+                project_id TEXT,
+                mappings_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                reverted_at TEXT
+            )"""
         )
 
     @staticmethod
@@ -806,7 +867,7 @@ class DatabaseService:
             row = conn.execute("SELECT * FROM projects WHERE project_id = ?", (project_id,)).fetchone()
             return self._row_to_project(row) if row else None
 
-    def update_project(self, project_id: str, **kwargs) -> bool:
+    def _legacy_update_project(self, project_id: str, **kwargs) -> bool:
         """更新项目"""
         if not kwargs:
             return False
@@ -830,7 +891,7 @@ class DatabaseService:
             logger.error(f"更新项目失败 {project_id}: {e}")
             return False
 
-    def delete_project(self, project_id: str):
+    def _legacy_delete_project(self, project_id: str):
         """删除项目（事务级联清理 media_assets + shooting_logs + projects）
 
         注意：backup_jobs 表无 project_id 外键，保留备份历史记录不级联删除。
@@ -850,6 +911,71 @@ class DatabaseService:
             conn.execute("DELETE FROM shooting_logs WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
             logger.info(f"删除项目: {project_id}")
+
+    def update_project_result(self, project_id: str, **kwargs) -> OperationResult:
+        fields, params = [], []
+        for key, value in kwargs.items():
+            if key in {'name', 'description', 'base_path', 'workspace_id'}:
+                fields.append(f"{key} = ?")
+                params.append(value)
+        if not fields:
+            return OperationResult(OperationStatus.INVALID, "没有可更新的项目字段")
+        fields.append("updated_at = ?")
+        params.append(datetime.now().isoformat())
+        try:
+            with self._transaction() as conn:
+                if conn.execute("SELECT 1 FROM projects WHERE project_id = ?", (project_id,)).fetchone() is None:
+                    return OperationResult(OperationStatus.NOT_FOUND, f"项目不存在: {project_id}")
+                conn.execute(f"UPDATE projects SET {', '.join(fields)} WHERE project_id = ?", (*params, project_id))
+                self._record_operation_in_transaction(
+                    conn, "更新项目", project_id=project_id, object_type="project", object_id=project_id,
+                )
+            return OperationResult(OperationStatus.SUCCESS, affected_count=1)
+        except sqlite3.Error as exc:
+            logger.error(f"更新项目失败 {project_id}: {exc}")
+            return OperationResult(OperationStatus.ERROR, str(exc))
+
+    def update_project(self, project_id: str, **kwargs) -> bool:
+        return bool(self.update_project_result(project_id, **kwargs))
+
+    def delete_project_result(self, project_id: str, retention_days: int = 30) -> OperationResult:
+        """软删除项目，保留素材、标签、日志和备份关联快照。"""
+        try:
+            with self._transaction() as conn:
+                project = conn.execute("SELECT * FROM projects WHERE project_id = ?", (project_id,)).fetchone()
+                if project is None:
+                    return OperationResult(OperationStatus.NOT_FOUND, f"项目不存在: {project_id}")
+                asset_rows = conn.execute(
+                    "SELECT * FROM media_assets WHERE project_id = ?", (project_id,)
+                ).fetchall()
+                snapshot = {
+                    "project": dict(project),
+                    "assets": [self._asset_snapshot(conn, row) for row in asset_rows],
+                    "shooting_logs": [dict(row) for row in conn.execute(
+                        "SELECT * FROM shooting_logs WHERE project_id = ?", (project_id,)
+                    )],
+                    "backup_job_ids": [row["job_id"] for row in conn.execute(
+                        "SELECT job_id FROM backup_jobs WHERE project_id = ?", (project_id,)
+                    )],
+                }
+                recovery_id = self._store_recycle_snapshot(
+                    conn, "project", project_id, project_id, snapshot, retention_days,
+                )
+                conn.execute("UPDATE backup_jobs SET project_id = NULL WHERE project_id = ?", (project_id,))
+                self._delete_asset_rows(conn, [row["asset_id"] for row in asset_rows])
+                conn.execute("DELETE FROM shooting_logs WHERE project_id = ?", (project_id,))
+                conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
+                self._record_operation_in_transaction(
+                    conn, "删除项目", "项目记录已移入回收站", project_id,
+                    object_type="project", object_id=project_id, recovery_id=recovery_id,
+                )
+            return OperationResult(OperationStatus.SUCCESS, affected_count=1, recovery_id=recovery_id)
+        except sqlite3.Error as exc:
+            logger.error(f"软删除项目失败 {project_id}: {exc}")
+            return OperationResult(OperationStatus.ERROR, str(exc))
+
+    def delete_project(self, project_id: str) -> bool:
+        return bool(self.delete_project_result(project_id))
 
     # ===== 项目模板 =====
 
@@ -1262,7 +1388,7 @@ class DatabaseService:
             row = conn.execute("SELECT * FROM media_assets WHERE asset_id = ?", (asset_id,)).fetchone()
             return self._row_to_asset(row) if row else None
 
-    def update_media_asset(self, asset_id: str, **kwargs) -> bool:
+    def _legacy_update_media_asset(self, asset_id: str, **kwargs) -> bool:
         """更新素材资产"""
         if not kwargs:
             return False
@@ -1302,7 +1428,7 @@ class DatabaseService:
             logger.error(f"更新素材资产失败 {asset_id}: {e}")
             return False
 
-    def delete_media_asset(self, asset_id: str) -> bool:
+    def _legacy_delete_media_asset(self, asset_id: str) -> bool:
         """删除素材资产"""
         try:
             with self._transaction() as conn:
@@ -1322,7 +1448,7 @@ class DatabaseService:
             logger.error(f"删除素材资产失败 {asset_id}: {e}")
             return False
 
-    def delete_media_assets(self, asset_ids: List[str]) -> int:
+    def _legacy_delete_media_assets(self, asset_ids: List[str]) -> int:
         """批量删除素材资产记录（不触碰磁盘文件），返回成功删除的条数。
 
         用于「清理文件已丢失的素材」场景：仅移除数据库中失效的路径记录，
@@ -1364,6 +1490,344 @@ class DatabaseService:
             return 0
         logger.info(f"批量删除素材资产: 成功 {deleted}/{len(asset_ids)}")
         return deleted
+
+    _ASSET_WRITABLE_FIELDS = {
+        'file_path', 'file_name', 'file_size', 'file_type', 'asset_type',
+        'checksum_algorithm', 'checksum_value', 'scene', 'shot', 'take',
+        'date_taken', 'camera_make', 'camera_model', 'backup_locations',
+        'log_id', 'is_working_copy', 'original_path', 'width', 'height',
+        'duration_seconds', 'lens_model', 'focal_length', 'video_metadata',
+        'rating', 'tags', 'notes',
+    }
+
+    def _record_operation_in_transaction(
+        self, conn, event: str, detail: str = "", project_id: Optional[str] = None,
+        status: str = OperationStatus.SUCCESS.value, object_type: str = "",
+        object_id: str = "", recovery_id: str = "",
+    ) -> str:
+        log_id = str(uuid.uuid4())[:8]
+        conn.execute(
+            "INSERT INTO operation_logs "
+            "(log_id, project_id, event, detail, result_status, object_type, object_id, recovery_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (log_id, project_id, event, detail, status, object_type, object_id,
+             recovery_id, datetime.now().isoformat()),
+        )
+        return log_id
+
+    def _store_recycle_snapshot(
+        self, conn, entity_type: str, entity_id: str, project_id: Optional[str], snapshot: dict,
+        retention_days: int = 30,
+    ) -> str:
+        recycle_id = str(uuid.uuid4())
+        now = datetime.now()
+        conn.execute(
+            "INSERT INTO recycle_bin "
+            "(recycle_id, entity_type, entity_id, project_id, snapshot_json, deleted_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (recycle_id, entity_type, entity_id, project_id,
+             json.dumps(snapshot, ensure_ascii=False), now.isoformat(),
+             (now + timedelta(days=retention_days)).isoformat()),
+        )
+        return recycle_id
+
+    def _asset_snapshot(self, conn, row: sqlite3.Row) -> dict:
+        tags = [item["tag"] for item in conn.execute(
+            "SELECT tag FROM asset_tags WHERE asset_id = ? ORDER BY tag", (row["asset_id"],)
+        )]
+        return {"asset": dict(row), "tags": tags}
+
+    def _delete_asset_rows(self, conn, asset_ids: List[str]) -> None:
+        for chunk in _chunked(asset_ids, 500):
+            placeholders = ", ".join("?" for _ in chunk)
+            if self._fts_available:
+                conn.execute(f"DELETE FROM media_assets_fts WHERE asset_id IN ({placeholders})", chunk)
+            conn.execute(f"DELETE FROM asset_tags WHERE asset_id IN ({placeholders})", chunk)
+            conn.execute(f"DELETE FROM media_assets WHERE asset_id IN ({placeholders})", chunk)
+
+    def update_media_asset_result(self, asset_id: str, **kwargs) -> OperationResult:
+        """更新素材并区分参数、未找到与数据库错误。"""
+        fields, params = [], []
+        for key, value in kwargs.items():
+            if key not in self._ASSET_WRITABLE_FIELDS:
+                continue
+            if key == 'backup_locations' and isinstance(value, list):
+                value = "|".join(value)
+            elif key == 'is_working_copy' and isinstance(value, bool):
+                value = int(value)
+            elif key == 'date_taken' and hasattr(value, 'isoformat'):
+                value = value.isoformat()
+            fields.append(f"{key} = ?")
+            params.append(value)
+        if not fields:
+            return OperationResult(OperationStatus.INVALID, "没有可更新的素材字段")
+        try:
+            with self._transaction() as conn:
+                exists = conn.execute("SELECT 1 FROM media_assets WHERE asset_id = ?", (asset_id,)).fetchone()
+                if exists is None:
+                    return OperationResult(OperationStatus.NOT_FOUND, f"素材不存在: {asset_id}")
+                conn.execute(f"UPDATE media_assets SET {', '.join(fields)} WHERE asset_id = ?", (*params, asset_id))
+                if 'tags' in kwargs:
+                    self._sync_asset_tags(conn, asset_id, kwargs.get('tags') or '')
+                self._refresh_asset_fts(conn, asset_id)
+                self._record_operation_in_transaction(
+                    conn, "更新素材", project_id=None, object_type="asset", object_id=asset_id,
+                )
+            return OperationResult(OperationStatus.SUCCESS, affected_count=1)
+        except sqlite3.Error as exc:
+            logger.error(f"更新素材资产失败 {asset_id}: {exc}")
+            return OperationResult(OperationStatus.ERROR, str(exc))
+
+    def update_media_asset(self, asset_id: str, **kwargs) -> bool:
+        """兼容旧调用方的布尔更新接口。"""
+        return bool(self.update_media_asset_result(asset_id, **kwargs))
+
+    def delete_media_asset_result(self, asset_id: str, retention_days: int = 30) -> OperationResult:
+        return self.delete_media_assets_result([asset_id], retention_days=retention_days)
+
+    def delete_media_assets_result(self, asset_ids: List[str], retention_days: int = 30) -> OperationResult:
+        """软删除素材记录，保留标签和完整元数据快照。"""
+        unique_ids = list(dict.fromkeys(asset_id for asset_id in asset_ids if asset_id))
+        if not unique_ids:
+            return OperationResult(OperationStatus.INVALID, "未提供素材 ID")
+        try:
+            with self._transaction() as conn:
+                rows = []
+                for chunk in _chunked(unique_ids, 500):
+                    placeholders = ", ".join("?" for _ in chunk)
+                    rows.extend(conn.execute(
+                        f"SELECT * FROM media_assets WHERE asset_id IN ({placeholders})", chunk
+                    ).fetchall())
+                if not rows:
+                    return OperationResult(OperationStatus.NOT_FOUND, "素材不存在")
+                recovery_ids = []
+                for row in rows:
+                    recovery_ids.append(self._store_recycle_snapshot(
+                        conn, "asset", row["asset_id"], row["project_id"],
+                        self._asset_snapshot(conn, row), retention_days,
+                    ))
+                self._delete_asset_rows(conn, [row["asset_id"] for row in rows])
+                for row, recovery_id in zip(rows, recovery_ids):
+                    self._record_operation_in_transaction(
+                        conn, "删除素材", "素材记录已移入回收站", row["project_id"],
+                        object_type="asset", object_id=row["asset_id"], recovery_id=recovery_id,
+                    )
+            return OperationResult(
+                OperationStatus.SUCCESS, affected_count=len(rows), recovery_id=recovery_ids[0],
+                value=recovery_ids,
+            )
+        except sqlite3.Error as exc:
+            logger.error(f"软删除素材失败: {exc}")
+            return OperationResult(OperationStatus.ERROR, str(exc))
+
+    def delete_media_asset(self, asset_id: str) -> bool:
+        return bool(self.delete_media_asset_result(asset_id))
+
+    def delete_media_assets(self, asset_ids: List[str]) -> int:
+        return self.delete_media_assets_result(asset_ids).affected_count
+
+    def relink_media_assets(self, project_id: str, updates: List[tuple[str, str, str, int]]) -> OperationResult:
+        """原子回写预览中确认的素材路径，并记录重定位审计。"""
+        if not updates:
+            return OperationResult(OperationStatus.INVALID, "没有重新链接更新")
+        try:
+            with self._transaction() as conn:
+                if conn.execute("SELECT 1 FROM projects WHERE project_id = ?", (project_id,)).fetchone() is None:
+                    return OperationResult(OperationStatus.NOT_FOUND, f"项目不存在: {project_id}")
+                seen_paths = set()
+                for asset_id, new_path, _name, _size in updates:
+                    if new_path in seen_paths:
+                        return OperationResult(OperationStatus.CONFLICT, f"多个素材选择了同一路径: {new_path}")
+                    seen_paths.add(new_path)
+                    row = conn.execute(
+                        "SELECT asset_id FROM media_assets WHERE asset_id = ? AND project_id = ?",
+                        (asset_id, project_id),
+                    ).fetchone()
+                    if row is None:
+                        return OperationResult(OperationStatus.NOT_FOUND, f"素材不存在或不属于项目: {asset_id}")
+                    conflict = conn.execute(
+                        "SELECT asset_id FROM media_assets WHERE project_id = ? AND file_path = ? AND asset_id != ?",
+                        (project_id, new_path, asset_id),
+                    ).fetchone()
+                    if conflict is not None:
+                        return OperationResult(OperationStatus.CONFLICT, f"路径已关联其他素材: {new_path}")
+                for asset_id, new_path, name, size in updates:
+                    conn.execute(
+                        "UPDATE media_assets SET file_path = ?, file_name = ?, file_size = ? WHERE asset_id = ?",
+                        (new_path, name, size, asset_id),
+                    )
+                    self._refresh_asset_fts(conn, asset_id)
+                    self._record_operation_in_transaction(
+                        conn, "重新链接素材", new_path, project_id,
+                        object_type="asset", object_id=asset_id,
+                    )
+            return OperationResult(OperationStatus.SUCCESS, affected_count=len(updates))
+        except sqlite3.Error as exc:
+            logger.error(f"重新链接素材失败: {exc}")
+            return OperationResult(OperationStatus.ERROR, str(exc))
+
+    @staticmethod
+    def _insert_snapshot_row(conn, table: str, values: dict) -> None:
+        """Restore a row using only columns available in the current schema."""
+        columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        selected = {key: value for key, value in values.items() if key in columns}
+        names = list(selected)
+        placeholders = ", ".join("?" for _ in names)
+        conn.execute(
+            f"INSERT INTO {table} ({', '.join(names)}) VALUES ({placeholders})",
+            [selected[name] for name in names],
+        )
+
+    def _restore_asset_snapshot(self, conn, snapshot: dict) -> None:
+        asset = snapshot["asset"]
+        self._insert_snapshot_row(conn, "media_assets", asset)
+        for tag in snapshot.get("tags", []):
+            conn.execute(
+                "INSERT OR IGNORE INTO asset_tags (asset_id, tag) VALUES (?, ?)",
+                (asset["asset_id"], tag),
+            )
+        self._refresh_asset_fts(conn, asset["asset_id"])
+
+    def get_recycle_bin_items(self, project_id: Optional[str] = None) -> List[dict]:
+        """返回未过期回收站项，供恢复入口和健康检查使用。"""
+        with self._connection() as conn:
+            query = "SELECT recycle_id, entity_type, entity_id, project_id, deleted_at, expires_at FROM recycle_bin"
+            params = []
+            if project_id:
+                query += " WHERE project_id = ?"
+                params.append(project_id)
+            query += " ORDER BY deleted_at DESC"
+            return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+    def restore_recycle_item(self, recycle_id: str) -> OperationResult:
+        """恢复单个素材或项目快照；冲突时不覆盖当前记录。"""
+        try:
+            with self._transaction() as conn:
+                item = conn.execute("SELECT * FROM recycle_bin WHERE recycle_id = ?", (recycle_id,)).fetchone()
+                if item is None:
+                    return OperationResult(OperationStatus.NOT_FOUND, f"回收站项不存在: {recycle_id}")
+                snapshot = json.loads(item["snapshot_json"])
+                if item["entity_type"] == "asset":
+                    asset = snapshot["asset"]
+                    if conn.execute("SELECT 1 FROM media_assets WHERE asset_id = ?", (asset["asset_id"],)).fetchone():
+                        return OperationResult(OperationStatus.CONFLICT, "素材 ID 已被重新使用")
+                    if conn.execute("SELECT 1 FROM projects WHERE project_id = ?", (asset["project_id"],)).fetchone() is None:
+                        return OperationResult(OperationStatus.CONFLICT, "素材所属项目不存在，无法恢复")
+                    self._restore_asset_snapshot(conn, snapshot)
+                    project_id = asset["project_id"]
+                    object_id = asset["asset_id"]
+                elif item["entity_type"] == "project":
+                    project = snapshot["project"]
+                    if conn.execute("SELECT 1 FROM projects WHERE project_id = ?", (project["project_id"],)).fetchone():
+                        return OperationResult(OperationStatus.CONFLICT, "项目 ID 已被重新使用")
+                    asset_ids = [asset["asset"]["asset_id"] for asset in snapshot.get("assets", [])]
+                    if asset_ids:
+                        placeholders = ", ".join("?" for _ in asset_ids)
+                        if conn.execute(
+                            f"SELECT 1 FROM media_assets WHERE asset_id IN ({placeholders}) LIMIT 1", asset_ids
+                        ).fetchone():
+                            return OperationResult(OperationStatus.CONFLICT, "项目素材 ID 已被重新使用")
+                    workspace_id = project.get("workspace_id")
+                    if workspace_id and conn.execute(
+                        "SELECT 1 FROM workspaces WHERE workspace_id = ?", (workspace_id,)
+                    ).fetchone() is None:
+                        project["workspace_id"] = "default"
+                        now = datetime.now().isoformat()
+                        conn.execute(
+                            "INSERT OR IGNORE INTO workspaces "
+                            "(workspace_id, name, path, description, created_at, updated_at) "
+                            "VALUES ('default', ?, '', ?, ?, ?)",
+                            ("默认工作区", "默认工作区", now, now),
+                        )
+                    self._insert_snapshot_row(conn, "projects", project)
+                    for log in snapshot.get("shooting_logs", []):
+                        self._insert_snapshot_row(conn, "shooting_logs", log)
+                    for asset_snapshot in snapshot.get("assets", []):
+                        self._restore_asset_snapshot(conn, asset_snapshot)
+                    for job_id in snapshot.get("backup_job_ids", []):
+                        conn.execute(
+                            "UPDATE backup_jobs SET project_id = ? WHERE job_id = ? AND project_id IS NULL",
+                            (project["project_id"], job_id),
+                        )
+                    project_id = project["project_id"]
+                    object_id = project_id
+                else:
+                    return OperationResult(OperationStatus.INVALID, "不支持的回收站实体类型")
+                conn.execute("DELETE FROM recycle_bin WHERE recycle_id = ?", (recycle_id,))
+                self._record_operation_in_transaction(
+                    conn, "恢复回收站项目", "已恢复数据库记录", project_id,
+                    object_type=item["entity_type"], object_id=object_id, recovery_id=recycle_id,
+                )
+            return OperationResult(OperationStatus.SUCCESS, affected_count=1, recovery_id=recycle_id)
+        except (sqlite3.Error, KeyError, TypeError, json.JSONDecodeError) as exc:
+            logger.error(f"恢复回收站项失败 {recycle_id}: {exc}")
+            return OperationResult(OperationStatus.ERROR, str(exc))
+
+    def cleanup_expired_recycle_bin(self, now: Optional[datetime] = None) -> OperationResult:
+        """永久清理超过保留期的快照；不会触碰任何源媒体文件。"""
+        now = now or datetime.now()
+        try:
+            with self._transaction() as conn:
+                cursor = conn.execute("DELETE FROM recycle_bin WHERE expires_at <= ?", (now.isoformat(),))
+            return OperationResult(OperationStatus.SUCCESS, affected_count=max(cursor.rowcount, 0))
+        except sqlite3.Error as exc:
+            logger.error(f"清理回收站失败: {exc}")
+            return OperationResult(OperationStatus.ERROR, str(exc))
+
+    def create_rename_history(
+        self, mappings: List[tuple[str, str]], project_id: Optional[str] = None,
+    ) -> OperationResult:
+        """持久化一次成功的文件重命名映射，供安全回退。"""
+        if not mappings:
+            return OperationResult(OperationStatus.INVALID, "没有可记录的重命名映射")
+        rename_id = str(uuid.uuid4())
+        try:
+            with self._transaction() as conn:
+                conn.execute(
+                    "INSERT INTO rename_history (rename_id, project_id, mappings_json, created_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (rename_id, project_id, json.dumps(mappings, ensure_ascii=False), datetime.now().isoformat()),
+                )
+                self._record_operation_in_transaction(
+                    conn, "文件重命名", f"成功 {len(mappings)} 个", project_id,
+                    object_type="rename", object_id=rename_id, recovery_id=rename_id,
+                )
+            return OperationResult(OperationStatus.SUCCESS, affected_count=len(mappings), recovery_id=rename_id)
+        except sqlite3.Error as exc:
+            logger.error(f"保存重命名回退记录失败: {exc}")
+            return OperationResult(OperationStatus.ERROR, str(exc))
+
+    def get_rename_history(self, rename_id: str) -> OperationResult:
+        with self._connection() as conn:
+            row = conn.execute("SELECT * FROM rename_history WHERE rename_id = ?", (rename_id,)).fetchone()
+        if row is None:
+            return OperationResult(OperationStatus.NOT_FOUND, f"重命名记录不存在: {rename_id}")
+        if row["reverted_at"]:
+            return OperationResult(OperationStatus.CONFLICT, "该重命名已经回退")
+        try:
+            mappings = [tuple(item) for item in json.loads(row["mappings_json"])]
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            return OperationResult(OperationStatus.ERROR, f"重命名记录损坏: {exc}")
+        return OperationResult(OperationStatus.SUCCESS, value={
+            "rename_id": row["rename_id"], "project_id": row["project_id"], "mappings": mappings,
+        })
+
+    def mark_rename_history_reverted(self, rename_id: str) -> OperationResult:
+        try:
+            with self._transaction() as conn:
+                cursor = conn.execute(
+                    "UPDATE rename_history SET reverted_at = ? WHERE rename_id = ? AND reverted_at IS NULL",
+                    (datetime.now().isoformat(), rename_id),
+                )
+                if cursor.rowcount != 1:
+                    return OperationResult(OperationStatus.CONFLICT, "重命名记录已回退或不存在")
+                self._record_operation_in_transaction(
+                    conn, "回退文件重命名", project_id=None,
+                    object_type="rename", object_id=rename_id, recovery_id=rename_id,
+                )
+            return OperationResult(OperationStatus.SUCCESS, affected_count=1, recovery_id=rename_id)
+        except sqlite3.Error as exc:
+            return OperationResult(OperationStatus.ERROR, str(exc))
 
     def get_missing_file_asset_ids(self, project_id: str) -> List[str]:
         """返回当前项目中文件已丢失（路径为空或磁盘上不存在）的素材 asset_id 列表。
@@ -1789,7 +2253,11 @@ class DatabaseService:
         self,
         event: str,
         detail: str = "",
-        project_id: Optional[str] = None
+        project_id: Optional[str] = None,
+        status: str = OperationStatus.SUCCESS.value,
+        object_type: str = "",
+        object_id: str = "",
+        recovery_id: str = "",
     ) -> bool:
         """记录一条操作审计日志（导入/备份/重命名/评级等关键操作）。
 
@@ -1803,14 +2271,11 @@ class DatabaseService:
         """
         try:
             with self._transaction() as conn:
-                conn.execute(
-                    "INSERT INTO operation_logs (log_id, project_id, event, detail, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (str(uuid.uuid4())[:8], project_id, event, detail,
-                     datetime.now().isoformat())
+                self._record_operation_in_transaction(
+                    conn, event, detail, project_id, status, object_type, object_id, recovery_id,
                 )
                 return True
-        except Exception as e:
+        except sqlite3.Error as e:
             logger.error(f"记录操作日志失败: {e}")
             return False
 
@@ -1843,6 +2308,10 @@ class DatabaseService:
                     "project_id": r["project_id"],
                     "event": r["event"],
                     "detail": r["detail"],
+                    "status": r["result_status"] if "result_status" in r.keys() else "success",
+                    "object_type": r["object_type"] if "object_type" in r.keys() else "",
+                    "object_id": r["object_id"] if "object_id" in r.keys() else "",
+                    "recovery_id": r["recovery_id"] if "recovery_id" in r.keys() else "",
                     "created_at": created_at,
                 })
             return results

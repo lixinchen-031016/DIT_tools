@@ -574,13 +574,16 @@ class WorkspaceProjectSelector(QWidget):
         project_name = self.project_combo.currentText().split(" (")[0]
         reply = QMessageBox.question(
             self, "确认",
-            f"确定删除项目「{project_name}」及所有关联数据？\n此操作不可撤销。",
+            f"确定删除项目「{project_name}」及所有关联数据？\n\n"
+            "数据库记录将移入回收站保留 30 天，可恢复；源媒体文件不会删除。",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
         if reply != QMessageBox.Yes:
             return
-        self._db_service.delete_project(project_id)
+        if not self._db_service.delete_project(project_id):
+            QMessageBox.warning(self, "删除失败", "项目不存在或数据库操作失败。")
+            return
         self._load_projects()
         set_current_project(None)
         get_data_bus().emit_data_changed("projects_changed")

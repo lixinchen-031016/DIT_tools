@@ -32,6 +32,7 @@ class RenameView(QWidget):
         self.db_service = get_db_service()
         self.selected_files = []
         self._worker = None
+        self._last_rename_id = None
         self._setup_ui()
         self._progress_sig.connect(self._on_progress)
 
@@ -136,8 +137,13 @@ class RenameView(QWidget):
         self.rename_btn.setStyleSheet(PRIMARY_BUTTON_QSS)
         self.rename_btn.clicked.connect(self._execute_rename)
         self.rename_btn.setEnabled(False)
+        self.undo_btn = QPushButton("↩ 回退上次重命名")
+        self.undo_btn.setToolTip("仅在文件未被后续修改且原路径未被占用时可安全回退")
+        self.undo_btn.clicked.connect(self._undo_last_rename)
+        self.undo_btn.setEnabled(False)
         btn_layout.addWidget(self.preview_btn)
         btn_layout.addWidget(self.rename_btn)
+        btn_layout.addWidget(self.undo_btn)
         btn_layout.addStretch()
         config_layout.addLayout(btn_layout)
         config_layout.addStretch()
@@ -294,14 +300,14 @@ class RenameView(QWidget):
                 msg += f"，{unmatched} 个未入库（仅文件系统重命名）"
         QMessageBox.information(self, "重命名完成", msg)
 
-        # 操作审计
+        # 持久化映射；回退会先确认全部文件状态再执行，避免覆盖后续变更。
         try:
-            self.db_service.record_operation(
-                "文件重命名",
-                f"成功 {len(results)} 个，数据库同步 {synced} 个",
-            )
+            history = self.db_service.create_rename_history(results)
+            if history:
+                self._last_rename_id = history.recovery_id
+                self.undo_btn.setEnabled(True)
         except Exception as e:
-            logger.warning(f"记录重命名操作日志失败: {e}")
+            logger.warning(f"保存重命名回退记录失败: {e}")
 
         # 广播 assets_changed，让 asset_info_view / search_view 刷新路径
         if synced > 0:
@@ -311,6 +317,43 @@ class RenameView(QWidget):
                 logger.error(f"广播重命名完成事件失败: {e}")
 
         # 刷新文件列表（静默重扫）
+        path = self.folder_edit.text()
+        if path:
+            self._scan_folder(path)
+
+    @safe_slot("回退重命名失败")
+    def _undo_last_rename(self):
+        if not self._last_rename_id:
+            return
+        reply = QMessageBox.question(
+            self, "确认回退",
+            "将回退上一次重命名。若文件已被后续修改或原路径被占用，操作会安全取消。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self.undo_btn.setEnabled(False)
+        self._worker = WorkerThread(
+            self.rename_service.rollback_rename, self.db_service, self._last_rename_id,
+        )
+        self._worker.finished.connect(self._on_undo_finished)
+        self._worker.error.connect(self._on_rename_error)
+        self._worker.thread_finished.connect(self._worker.deleteLater)
+        self._worker.start()
+
+    @Slot(object)
+    def _on_undo_finished(self, result):
+        self._worker = None
+        if not result:
+            QMessageBox.warning(self, "无法回退", result.message)
+            self.undo_btn.setEnabled(True)
+            return
+        QMessageBox.information(self, "回退完成", f"已回退 {result.affected_count} 个文件。")
+        self._last_rename_id = None
+        try:
+            get_data_bus().emit_data_changed("assets_changed")
+        except Exception as e:
+            logger.warning(f"广播重命名回退事件失败: {e}")
         path = self.folder_edit.text()
         if path:
             self._scan_folder(path)

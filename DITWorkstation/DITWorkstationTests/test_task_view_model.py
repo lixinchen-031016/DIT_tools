@@ -57,6 +57,23 @@ def test_task_view_model_retains_terminal_state_after_completion():
     assert vm.state is TaskState.COMPLETED
 
 
+def test_task_view_model_records_observability_baseline():
+    vm = TaskViewModel()
+    _wait_for_signal(
+        vm.finished,
+        start=lambda: vm.start(
+            lambda: "done", task_name="csv_export", project_id="project-1",
+            recovery_info={"output_path": "/tmp/assets.csv"},
+        ),
+    )
+    record = vm.history[-1]
+    assert record.task_name == "csv_export"
+    assert record.project_id == "project-1"
+    assert record.recovery_info["output_path"] == "/tmp/assets.csv"
+    assert record.started_at is not None and record.completed_at is not None
+    assert record.state is TaskState.COMPLETED
+
+
 def test_worker_cleanup_waits_for_native_thread_completion():
     worker = WorkerThread(lambda: "done")
     events = []

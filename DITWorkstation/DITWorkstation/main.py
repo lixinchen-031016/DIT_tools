@@ -9,7 +9,7 @@ import platform
 # 确保项目根目录在路径中
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtCore import Qt, QRect
 from PySide6.QtGui import QFont, QFontDatabase, QIcon, QPainter, QPixmap, QColor
 
@@ -117,7 +117,7 @@ def main():
     config.ensure_dirs()
 
     # 恢复上次保存的应用设置（备份默认验证、存储卡自动识别等）
-    apply_saved_config()
+    recovered_settings_path = apply_saved_config()
 
     # 个人模式启动兼容：确保 default 工作区拥有合法物理路径
     # （旧库或个人模式首启前，default 工作区 path 可能仍为空字符串，
@@ -137,6 +137,14 @@ def main():
     app.setApplicationName("DIT工作站")
     app.setOrganizationName("DITWorkstation")
     app.setWindowIcon(_create_app_icon())
+
+    if recovered_settings_path:
+        QMessageBox.warning(
+            None,
+            "设置已恢复",
+            "设置文件无法读取，应用已使用默认设置启动。\n"
+            f"原文件已保留在：\n{recovered_settings_path}",
+        )
 
     # 设置默认字体（跨平台，含中文与 emoji 回退）
     font = QFont(_pick_default_font_family(), _pick_default_font_point_size())

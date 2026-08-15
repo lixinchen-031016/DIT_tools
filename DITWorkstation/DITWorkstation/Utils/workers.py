@@ -23,6 +23,7 @@ class TaskState(str, Enum):
     CANCELLED = "cancelled"
     COMPLETED = "completed"
     FAILED = "failed"
+    RECOVERABLE = "recoverable"
 
 
 class WorkerSignals(QObject):

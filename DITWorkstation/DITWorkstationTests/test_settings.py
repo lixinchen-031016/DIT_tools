@@ -31,6 +31,50 @@ def test_load_app_settings_missing_file_returns_empty(tmp_path, monkeypatch):
     assert common.load_app_settings() == {}
 
 
+def test_corrupt_settings_are_quarantined_and_defaults_are_used(tmp_path, monkeypatch):
+    target = _patch_settings_path(monkeypatch, tmp_path)
+    target.write_text('{"app_config": ', encoding="utf-8")
+
+    assert common.load_app_settings() == {}
+    quarantined = list(tmp_path.glob("settings.json.corrupt.*"))
+    assert len(quarantined) == 1
+    assert quarantined[0].read_text(encoding="utf-8") == '{"app_config": '
+    assert not target.exists()
+
+
+def test_invalid_settings_shape_is_quarantined(tmp_path, monkeypatch):
+    target = _patch_settings_path(monkeypatch, tmp_path)
+    target.write_text('["not", "an object"]', encoding="utf-8")
+
+    assert common.load_app_settings() == {}
+    assert len(list(tmp_path.glob("settings.json.corrupt.*"))) == 1
+
+
+def test_invalid_known_config_values_fall_back_without_dropping_other_settings(tmp_path, monkeypatch):
+    target = _patch_settings_path(monkeypatch, tmp_path)
+    target.write_text(
+        '{"app_config": {"verify_after_copy": "yes", "search_page_size": 0, '
+        '"usage_mode": "personal", "future_field": {"enabled": true}}}',
+        encoding="utf-8",
+    )
+
+    assert common.load_app_settings() == {
+        "usage_mode": "personal", "future_field": {"enabled": True}
+    }
+
+
+def test_save_settings_uses_atomic_replacement(tmp_path, monkeypatch):
+    target = _patch_settings_path(monkeypatch, tmp_path)
+    target.write_text('{"old": true}', encoding="utf-8")
+
+    assert common._save_settings({"app_config": {"verify_after_copy": False}}) is True
+    import json
+    assert json.loads(target.read_text(encoding="utf-8")) == {
+        "app_config": {"verify_after_copy": False}
+    }
+    assert not list(tmp_path.glob(".settings.json.*.tmp"))
+
+
 def test_save_settings_does_not_clobber_recent_paths(tmp_path, monkeypatch):
     target = _patch_settings_path(monkeypatch, tmp_path)
     common.add_recent_path("/tmp/source", category="import_source")
