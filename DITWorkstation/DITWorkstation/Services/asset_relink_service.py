@@ -78,7 +78,11 @@ class AssetRelinkService:
             by_name_size.setdefault((path.name.casefold(), path.stat().st_size), []).append(path)
 
         preview = RelinkPreview(project_id=project_id, new_root=str(root))
-        old_root_path = Path(old_root) if old_root else None
+        # 素材路径入库时会经过 normalize_path；Windows 上测试或历史参数中的
+        # `/legacy` 是当前盘符根下的相对根，而直接构造 Path 后仍可能是无盘符
+        # 路径，无法与已规范化的 `C:\\legacy\\...` 做 relative_to 比较。
+        # 对 old_root 使用同一规则，确保两侧处于同一绝对路径语义空间。
+        old_root_path = Path(normalize_path(old_root)) if old_root else None
         for asset in missing_assets:
             self._raise_if_cancelled(cancel_check)
             candidates: list[Path] = []
