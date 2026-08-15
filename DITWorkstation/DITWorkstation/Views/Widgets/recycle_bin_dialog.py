@@ -49,6 +49,14 @@ class RecycleBinDialog(QDialog):
         self.restore_btn.setEnabled(False)
         self.restore_btn.clicked.connect(self._restore_selected)
         buttons.addWidget(self.restore_btn)
+        self.restore_all_btn = QPushButton("还原全部记录")
+        self.restore_all_btn.setEnabled(False)
+        self.restore_all_btn.clicked.connect(self._restore_all)
+        buttons.addWidget(self.restore_all_btn)
+        self.empty_btn = QPushButton("清空回收站")
+        self.empty_btn.setEnabled(False)
+        self.empty_btn.clicked.connect(self._empty_recycle_bin)
+        buttons.addWidget(self.empty_btn)
         close_btn = QPushButton("关闭")
         close_btn.clicked.connect(self.accept)
         buttons.addWidget(close_btn)
@@ -71,6 +79,8 @@ class RecycleBinDialog(QDialog):
             self.table.setItem(row, 4, QTableWidgetItem(str(item["expires_at"])))
         self.count_label.setText(f"共 {len(items)} 项")
         self.restore_btn.setEnabled(False)
+        self.restore_all_btn.setEnabled(bool(items))
+        self.empty_btn.setEnabled(bool(items))
 
     def _selected_recycle_id(self):
         row = self.table.currentRow()
@@ -88,4 +98,49 @@ class RecycleBinDialog(QDialog):
         logger.info(f"已从回收站恢复记录: {recycle_id}")
         get_data_bus().emit_data_changed("recycle_restored")
         QMessageBox.information(self, "恢复完成", "记录已恢复。")
+        self._refresh_items()
+
+    def _restore_all(self):
+        count = self.table.rowCount()
+        if not count:
+            return
+        reply = QMessageBox.question(
+            self, "确认还原全部记录",
+            f"确定还原回收站中的全部 {count} 项记录？\n\n"
+            "恢复不会覆盖现有同 ID 记录；无法恢复的记录将保留在回收站中。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        result = self.db_service.restore_all_recycle_items()
+        if not result:
+            QMessageBox.warning(self, "恢复失败", result.message or "无法恢复回收站记录")
+            return
+        if result.affected_count:
+            logger.info(f"已从回收站批量恢复记录: {result.affected_count}")
+            get_data_bus().emit_data_changed("recycle_restored")
+        message = f"已恢复 {result.affected_count} 项记录。"
+        if result.message:
+            message = f"{message}\n{result.message}，其余记录仍保留在回收站中。"
+        QMessageBox.information(self, "恢复完成", message)
+        self._refresh_items()
+
+    def _empty_recycle_bin(self):
+        count = self.table.rowCount()
+        if not count:
+            return
+        reply = QMessageBox.question(
+            self, "确认清空回收站",
+            f"确定永久删除回收站中的全部 {count} 项记录？\n\n"
+            "此操作无法撤销，且不会删除磁盘上的源媒体文件。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        result = self.db_service.empty_recycle_bin()
+        if not result:
+            QMessageBox.warning(self, "清空失败", result.message or "无法清空回收站")
+            return
+        logger.info(f"已清空回收站: {result.affected_count} 项")
+        QMessageBox.information(self, "清空完成", f"已永久删除 {result.affected_count} 项回收站记录。")
         self._refresh_items()

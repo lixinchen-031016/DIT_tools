@@ -78,6 +78,33 @@ def test_recycle_bin_expiration_cleanup(db_service, project, tmp_path):
     assert db_service.restore_recycle_item(deleted.recovery_id).status is OperationStatus.NOT_FOUND
 
 
+def test_restore_all_recycle_items_restores_project_before_assets(db_service, project, tmp_path):
+    asset = _asset(project.project_id, "restore-all-asset", tmp_path / "restore-all.cr3")
+    db_service.add_media_asset(asset)
+    assert db_service.delete_media_asset_result(asset.asset_id)
+    assert db_service.delete_project_result(project.project_id)
+
+    restored = db_service.restore_all_recycle_items()
+
+    assert restored.status is OperationStatus.SUCCESS
+    assert restored.affected_count == 2
+    assert db_service.get_project(project.project_id) is not None
+    assert db_service.get_media_asset(asset.asset_id) is not None
+    assert db_service.get_recycle_bin_items() == []
+
+
+def test_empty_recycle_bin_permanently_removes_all_snapshots(db_service, project, tmp_path):
+    asset = _asset(project.project_id, "empty-bin-asset", tmp_path / "empty-bin.cr3")
+    db_service.add_media_asset(asset)
+    assert db_service.delete_media_asset_result(asset.asset_id)
+
+    cleared = db_service.empty_recycle_bin()
+
+    assert cleared.status is OperationStatus.SUCCESS
+    assert cleared.affected_count == 1
+    assert db_service.get_recycle_bin_items() == []
+
+
 def test_relink_preview_uses_relative_path_and_keeps_conflicts_unapplied(db_service, project, tmp_path):
     new_root = tmp_path / "new-root"
     matched = new_root / "A" / "clip.cr3"

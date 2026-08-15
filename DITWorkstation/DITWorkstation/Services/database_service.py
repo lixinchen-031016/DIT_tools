@@ -1815,6 +1815,40 @@ class DatabaseService:
             logger.error(f"恢复回收站项失败 {recycle_id}: {exc}")
             return OperationResult(OperationStatus.ERROR, str(exc))
 
+    def restore_all_recycle_items(self) -> OperationResult:
+        """尽可能恢复全部回收站记录，并优先恢复项目以满足素材依赖。"""
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT recycle_id, entity_type FROM recycle_bin "
+                "ORDER BY CASE entity_type WHEN 'project' THEN 0 ELSE 1 END, deleted_at ASC"
+            ).fetchall()
+        if not rows:
+            return OperationResult(OperationStatus.INVALID, "回收站为空")
+
+        failed = []
+        restored = 0
+        for row in rows:
+            result = self.restore_recycle_item(row["recycle_id"])
+            if result:
+                restored += result.affected_count
+            else:
+                failed.append({"recycle_id": row["recycle_id"], "message": result.message})
+
+        message = "" if not failed else f"{len(failed)} 项因冲突或数据错误未恢复"
+        return OperationResult(
+            OperationStatus.SUCCESS, message, value={"failed": failed}, affected_count=restored,
+        )
+
+    def empty_recycle_bin(self) -> OperationResult:
+        """永久清空回收站快照；不会触碰任何源媒体文件。"""
+        try:
+            with self._transaction() as conn:
+                cursor = conn.execute("DELETE FROM recycle_bin")
+            return OperationResult(OperationStatus.SUCCESS, affected_count=max(cursor.rowcount, 0))
+        except sqlite3.Error as exc:
+            logger.error(f"清空回收站失败: {exc}")
+            return OperationResult(OperationStatus.ERROR, str(exc))
+
     def cleanup_expired_recycle_bin(self, now: Optional[datetime] = None) -> OperationResult:
         """永久清理超过保留期的快照；不会触碰任何源媒体文件。"""
         now = now or datetime.now()
