@@ -195,6 +195,10 @@ class MainWindow(QMainWindow):
         recycle_action.setToolTip("查看并恢复保留期内删除的项目和素材记录")
         recycle_action.triggered.connect(self._show_recycle_bin)
 
+        log_viewer_action = settings_menu.addAction("日志查看器…")
+        log_viewer_action.setToolTip("在应用内查看日志文件内容")
+        log_viewer_action.triggered.connect(self._show_log_viewer)
+
         # 帮助菜单
         help_menu = menubar.addMenu("帮助(&H)")
 
@@ -277,6 +281,11 @@ class MainWindow(QMainWindow):
         """打开数据库回收站；恢复操作完成后会广播数据刷新事件。"""
         from DITWorkstation.Views.Widgets.recycle_bin_dialog import RecycleBinDialog
         RecycleBinDialog(self, db_service=get_db_service()).exec()
+
+    def _show_log_viewer(self):
+        """打开日志查看器对话框。"""
+        from DITWorkstation.Views.Widgets.log_viewer_dialog import LogViewerDialog
+        LogViewerDialog(self).exec()
 
     def _wrap_scrollable(self, view: QWidget) -> QScrollArea:
         """把视图包裹在 QScrollArea 中，内容超出时自动出现滚动条。
