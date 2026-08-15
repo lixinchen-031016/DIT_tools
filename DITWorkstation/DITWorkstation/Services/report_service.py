@@ -3,7 +3,7 @@ import os
 import platform
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import Iterable, List, Optional, Dict
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -190,9 +190,13 @@ class ReportService:
     def generate_asset_report(
         self,
         project: Project,
-        assets: List[MediaAsset],
+        assets: Iterable[MediaAsset],
         logs: List[ShootingLog],
-        output_path: Optional[str] = None
+        output_path: Optional[str] = None,
+        *,
+        total: int = 0,
+        progress_callback=None,
+        cancel_check=None,
     ) -> str:
         """
         生成素材统计报告
@@ -231,25 +235,36 @@ class ReportService:
         elements.append(Spacer(1, 10*mm))
 
         elements.append(Paragraph("统计概览", heading_style))
-        total_size = sum(a.file_size for a in assets)
-        raw_count = sum(1 for a in assets if a.file_type in config.raw_extensions)
-        jpg_count = sum(1 for a in assets if a.file_type in ('.jpg', '.jpeg'))
-
-        # 评级分布：仅统计已评级（rating > 0）的素材
-        rated_count = sum(1 for a in assets if a.rating and a.rating > 0)
+        total_size = 0
+        raw_count = 0
+        jpg_count = 0
+        rated_count = 0
+        asset_count = 0
         rating_dist = {r: 0 for r in RATING_LABELS}
+        scene_stats: Dict[str, int] = {}
         for a in assets:
+            if cancel_check and cancel_check():
+                raise InterruptedError("报告生成已取消")
+            asset_count += 1
+            total_size += a.file_size
+            raw_count += int(a.file_type in config.raw_extensions)
+            jpg_count += int(a.file_type in ('.jpg', '.jpeg'))
+            rated_count += int(bool(a.rating and a.rating > 0))
             r = a.rating or 0
             rating_dist[r] = rating_dist.get(r, 0) + 1
+            scene = a.scene or "未分类"
+            scene_stats[scene] = scene_stats.get(scene, 0) + 1
+            if progress_callback:
+                progress_callback(asset_count, total, f"统计: {a.file_name}")
 
         stats = [
             ["项目", project.name],
-            ["素材总数", str(len(assets))],
+            ["素材总数", str(asset_count)],
             ["RAW文件数", str(raw_count)],
             ["JPG文件数", str(jpg_count)],
             ["总数据量", self._format_size(total_size)],
             ["拍摄日志数", str(len(logs))],
-            ["已评级素材", f"{rated_count} / {len(assets)}"],
+            ["已评级素材", f"{rated_count} / {asset_count}"],
             ["报告时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
         ]
         t = Table(stats, colWidths=[40*mm, 120*mm])
@@ -263,11 +278,6 @@ class ReportService:
         elements.append(Spacer(1, 8*mm))
 
         elements.append(Paragraph("按场景统计", heading_style))
-        scene_stats: Dict[str, int] = {}
-        for a in assets:
-            scene = a.scene or "未分类"
-            scene_stats[scene] = scene_stats.get(scene, 0) + 1
-
         if scene_stats:
             scene_data = [["场景", "文件数"]]
             for scene, count in sorted(scene_stats.items()):
@@ -285,10 +295,10 @@ class ReportService:
 
         elements.append(Paragraph("按评级统计", heading_style))
         rating_data = [["评级", "文件数", "占比"]]
-        total = len(assets) or 1  # 避免除零
+        total_assets = asset_count or 1  # 避免除零
         for r in sorted(RATING_LABELS.keys()):
             count = rating_dist.get(r, 0)
-            percent = f"{(count / total) * 100:.1f}%"
+            percent = f"{(count / total_assets) * 100:.1f}%"
             rating_data.append([RATING_LABELS[r], str(count), percent])
         t = Table(rating_data, colWidths=[60*mm, 40*mm, 40*mm])
         t.setStyle(TableStyle([
@@ -315,7 +325,10 @@ class ReportService:
         """导出素材 CSV；兼容旧接口，内部统一使用可迭代数据源。"""
         return self.export_assets_csv_iter(assets, output_path)
 
-    def export_assets_csv_iter(self, assets, output_path: str) -> str:
+    def export_assets_csv_iter(
+        self, assets, output_path: str, *, total: int = 0,
+        progress_callback=None, cancel_check=None,
+    ) -> str:
         """把素材元数据导出为 CSV 表格。
 
         使用 utf-8-sig（带 BOM）编码，Excel 在 Windows/macOS 上均可直接
@@ -349,6 +362,8 @@ class ReportService:
             writer = csv.writer(f)
             writer.writerow(headers)
             for a in assets:
+                if cancel_check and cancel_check():
+                    raise InterruptedError("CSV 导出已取消")
                 writer.writerow([
                     a.file_name, a.file_path, a.file_type, a.asset_type,
                     a.file_size,
@@ -367,6 +382,8 @@ class ReportService:
                     _dt(a.date_imported),
                 ])
                 count += 1
+                if progress_callback:
+                    progress_callback(count, total, f"导出: {a.file_name}")
 
         logger.info(f"素材 CSV 导出成功: {path}（{count} 条）")
         return str(path)

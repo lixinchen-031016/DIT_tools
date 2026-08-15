@@ -15,7 +15,7 @@ from DITWorkstation.Models import MediaAsset, AssetType, ChecksumAlgorithm
 from DITWorkstation.Services.checksum_service import ChecksumService
 from DITWorkstation.Services.database_service import DatabaseService
 from DITWorkstation.Services.metadata_service import MetadataService
-from DITWorkstation.Utils import logger, get_checksum_service, normalize_path
+from DITWorkstation.Utils import logger, get_checksum_service, normalize_path, scan_files
 
 
 class MediaImportService:
@@ -95,12 +95,7 @@ class MediaImportService:
         if not extensions:
             return []
 
-        media_files = []
-        iterator = folder_path.rglob("*") if recursive else folder_path.glob("*")
-
-        for f in iterator:
-            if f.is_file() and f.suffix.lower() in extensions:
-                media_files.append(f)
+        media_files = scan_files(folder_path, extensions, recursive=recursive)
 
         logger.info(f"扫描文件夹完成: {folder}, 发现 {len(media_files)} 个媒体文件")
         return sorted(media_files)

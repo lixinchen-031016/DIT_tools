@@ -248,6 +248,10 @@ class ProjectDashboardView(RefreshOnShowView):
         self.task_progress.setRange(0, 1000)
         self.task_progress.setVisible(False)
         layout.addWidget(self.task_progress)
+        self.cancel_task_btn = QPushButton("取消当前任务")
+        self.cancel_task_btn.clicked.connect(self._cancel_current_task)
+        self.cancel_task_btn.setVisible(False)
+        layout.addWidget(self.cancel_task_btn)
 
         # 最近操作（审计日志摘要）
         self.recent_label = QLabel("🕘 最近操作")
@@ -384,7 +388,7 @@ class ProjectDashboardView(RefreshOnShowView):
         if asset_count == 0:
             self.card_assets.set_value("0", "尚未导入", COLOR.WARNING)
         else:
-            unlinked = asset_count - self._count_assets_with_log(project_id)
+            unlinked = asset_count - stats.get("linked_asset_count", 0)
             hint = f"其中 {unlinked} 个未关联日志" if unlinked > 0 else "全部已关联日志"
             color = COLOR.DANGER if unlinked > 0 else COLOR.SUCCESS
             self.card_assets.set_value(str(asset_count), hint, color)
@@ -434,8 +438,7 @@ class ProjectDashboardView(RefreshOnShowView):
     def _count_assets_with_log(self, project_id: str) -> int:
         """统计已关联 log_id 的 asset 数（用于卡片提示）"""
         try:
-            assets = self.db_service.get_media_assets(project_id)
-            return sum(1 for a in assets if a.log_id)
+            return self.db_service.get_project_stats(project_id).get("linked_asset_count", 0)
         except Exception as e:
             logger.warning(f"统计已关联日志素材失败 project_id={project_id}: {e}")
             return 0
@@ -536,6 +539,7 @@ class ProjectDashboardView(RefreshOnShowView):
             path,
             include_files=include_files,
             progress_callback=lambda cur, tot, msg: self._archive_progress.emit(cur, tot, msg),
+            inject_cancel_check=True,
         )
         self.worker.finished.connect(self._on_archive_finished)
         self.worker.error.connect(self._on_task_error)
@@ -596,6 +600,7 @@ class ProjectDashboardView(RefreshOnShowView):
             files_dest=files_dest,
             verify=restore_files,
             progress_callback=lambda cur, tot, msg: self._archive_progress.emit(cur, tot, msg),
+            inject_cancel_check=True,
         )
         self.worker.finished.connect(self._on_restore_finished)
         self.worker.error.connect(self._on_task_error)
@@ -634,6 +639,13 @@ class ProjectDashboardView(RefreshOnShowView):
         self.btn_restore.setEnabled(not running)
         self.task_progress.setVisible(running)
         self.task_progress.setValue(0)
+        self.cancel_task_btn.setVisible(running)
+        self.cancel_task_btn.setEnabled(running)
+
+    def _cancel_current_task(self):
+        if self.worker is not None:
+            self.worker.cancel()
+            self.cancel_task_btn.setEnabled(False)
 
     @Slot(int, int, str)
     def _on_task_progress(self, current: int, total: int, message: str):

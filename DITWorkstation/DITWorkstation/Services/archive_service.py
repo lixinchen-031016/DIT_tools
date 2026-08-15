@@ -69,90 +69,97 @@ class ArchiveService:
             raise ValueError(f"项目不存在: {project_id}")
 
         logs = self.db_service.get_shooting_logs(project_id)
-        assets = self.db_service.get_media_assets(project_id)
+        total = self.db_service.count_project_assets(project_id)
 
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            path.unlink()
 
-        total = len(assets)
         copied = 0
         missing = 0
-        asset_dicts = []
         checksum_lines = []
+        metadata_path = None
+        archive_temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb", suffix=".assets.json", dir=path.parent, delete=False,
+            ) as asset_stream:
+                metadata_path = Path(asset_stream.name)
+                asset_stream.write(b"[")
+                for index, asset in enumerate(self.db_service.iter_project_assets(project_id)):
+                    if cancel_check and cancel_check():
+                        raise InterruptedError("归档已取消")
+                    data = self._asset_to_dict(asset)
+                    if include_files:
+                        data["archive_file"] = f"{_FILES_DIR}/{self._file_rel_path(asset, index)}"
+                    if index:
+                        asset_stream.write(b",")
+                    asset_stream.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+                asset_stream.write(b"]")
 
-        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
-            manifest = {
-                "version": _ARCHIVE_VERSION,
-                "exported_at": datetime.now().isoformat(),
-                "project": {
-                    "project_id": project.project_id,
-                    "name": project.name,
-                    "description": project.description,
-                    "base_path": project.base_path,
-                    "workspace_id": project.workspace_id,
-                    "created_at": project.created_at.isoformat(),
-                },
-                "stats": {"assets": len(assets), "logs": len(logs)},
-            }
+            with tempfile.NamedTemporaryFile(
+                suffix=".zip", dir=path.parent, delete=False,
+            ) as archive_stream:
+                archive_temp_path = Path(archive_stream.name)
 
-            zf.writestr(
-                _LOGS_JSON,
-                json.dumps(
-                    [self._log_to_dict(l) for l in logs],
-                    ensure_ascii=False, indent=2,
-                )
-            )
-
-            for i, asset in enumerate(assets):
-                if cancel_check and cancel_check():
-                    raise InterruptedError("归档已取消")
-                if progress_callback:
-                    progress_callback(i, total, f"归档: {asset.file_name}")
-
-                d = self._asset_to_dict(asset)
-                archive_file = ""
+            with zipfile.ZipFile(archive_temp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                manifest = {
+                    "version": _ARCHIVE_VERSION,
+                    "exported_at": datetime.now().isoformat(),
+                    "project": {
+                        "project_id": project.project_id,
+                        "name": project.name,
+                        "description": project.description,
+                        "base_path": project.base_path,
+                        "workspace_id": project.workspace_id,
+                        "created_at": project.created_at.isoformat(),
+                    },
+                    "stats": {"assets": total, "logs": len(logs)},
+                }
+                zf.writestr(_LOGS_JSON, json.dumps(
+                    [self._log_to_dict(log) for log in logs], ensure_ascii=False, indent=2,
+                ))
+                zf.write(metadata_path, _ASSETS_JSON)
                 if include_files:
-                    rel = self._file_rel_path(asset, i)
-                    archive_file = f"{_FILES_DIR}/{rel}"
-                    d["archive_file"] = archive_file
-                    src = Path(asset.file_path)
-                    try:
-                        if src.is_file():
-                            zf.write(src, archive_file)
-                            copied += 1
-                            checksum_lines.append(
-                                f"{archive_file}\t{asset.checksum_algorithm}"
-                                f"\t{asset.checksum_value}"
-                            )
-                        else:
+                    for index, asset in enumerate(self.db_service.iter_project_assets(project_id)):
+                        if cancel_check and cancel_check():
+                            raise InterruptedError("归档已取消")
+                        if progress_callback:
+                            progress_callback(index, total, f"归档: {asset.file_name}")
+                        archive_file = f"{_FILES_DIR}/{self._file_rel_path(asset, index)}"
+                        src = Path(asset.file_path)
+                        try:
+                            if src.is_file():
+                                zf.write(src, archive_file)
+                                copied += 1
+                                checksum_lines.append(
+                                    f"{archive_file}\t{asset.checksum_algorithm}\t{asset.checksum_value}"
+                                )
+                            else:
+                                missing += 1
+                                logger.warning(f"归档跳过缺失文件: {asset.file_path}")
+                        except OSError as exc:
                             missing += 1
-                            logger.warning(f"归档跳过缺失文件: {asset.file_path}")
-                    except OSError as e:
-                        missing += 1
-                        logger.warning(f"归档读取失败 {asset.file_path}: {e}")
-                asset_dicts.append(d)
-
-            zf.writestr(
-                _ASSETS_JSON,
-                json.dumps(asset_dicts, ensure_ascii=False, indent=2),
-            )
-            if checksum_lines:
-                zf.writestr(_CHECKSUMS_TXT, "\n".join(checksum_lines) + "\n")
-
-            # 写回统计（文件拷贝数在打包后才确定）
-            manifest["stats"]["files_copied"] = copied
-            manifest["stats"]["files_missing"] = missing
-            zf.writestr(
-                _MANIFEST,
-                json.dumps(manifest, ensure_ascii=False, indent=2),
-            )
+                            logger.warning(f"归档读取失败 {asset.file_path}: {exc}")
+                elif progress_callback:
+                    progress_callback(total, total, "已写入元数据")
+                if checksum_lines:
+                    zf.writestr(_CHECKSUMS_TXT, "\n".join(checksum_lines) + "\n")
+                manifest["stats"]["files_copied"] = copied
+                manifest["stats"]["files_missing"] = missing
+                zf.writestr(_MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=2))
+            # 成功完成后才替换目标，取消或异常不会产生看似完整的归档包。
+            archive_temp_path.replace(path)
+            archive_temp_path = None
+        finally:
+            if metadata_path is not None:
+                metadata_path.unlink(missing_ok=True)
+            if archive_temp_path is not None:
+                archive_temp_path.unlink(missing_ok=True)
 
         if progress_callback:
             progress_callback(total, total, "完成")
         logger.info(
-            f"项目归档完成: {path}（{len(assets)} 素材 / {len(logs)} 日志，"
+            f"项目归档完成: {path}（{total} 素材 / {len(logs)} 日志，"
             f"文件 {copied} 个，缺失 {missing} 个）"
         )
         return str(path)

@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QGroupBox, QFormLayout, QTableWidget,
     QTableWidgetItem, QHeaderView, QComboBox, QDateEdit,
-    QCheckBox, QDialog, QMessageBox
+    QCheckBox, QDialog, QMessageBox, QProgressDialog
 )
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import QCompleter
@@ -16,6 +16,7 @@ from DITWorkstation.App import config
 from DITWorkstation.App.feature_flags import is_enabled
 from DITWorkstation.Models import RATING_LABELS, AssetRating
 from DITWorkstation.App.session_context import get_data_bus, get_current_workspace_id
+from DITWorkstation.ViewModels import TaskViewModel
 from DITWorkstation.Views.Widgets import RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 from DITWorkstation.Views.Widgets.table_factory import make_table
@@ -119,6 +120,13 @@ class SearchView(RefreshOnShowView):
         self._current_filters = {}
         self._total = 0
         self._page = 0
+        self._page_cursors = [None]
+        self._next_cursor = None
+        self._export_vm = TaskViewModel(self)
+        self._export_vm.progress.connect(self._on_export_progress)
+        self._export_vm.finished.connect(self._on_export_finished)
+        self._export_vm.error.connect(self._on_export_error)
+        self._export_progress_dialog = None
         self._setup_ui()
         self.project_combo.currentIndexChanged.connect(self._on_project_changed)
         self._load_projects()
@@ -294,9 +302,9 @@ class SearchView(RefreshOnShowView):
         # 分页控制条：大结果集分页展示，避免一次性渲染过多行导致卡顿
         page_layout = QHBoxLayout()
         self.prev_page_btn = QPushButton("◀ 上一页")
-        self.prev_page_btn.clicked.connect(lambda: self._search(go_to_page=self._page - 1))
+        self.prev_page_btn.clicked.connect(self._previous_page)
         self.next_page_btn = QPushButton("下一页 ▶")
-        self.next_page_btn.clicked.connect(lambda: self._search(go_to_page=self._page + 1))
+        self.next_page_btn.clicked.connect(self._next_page)
         self.page_label = QLabel("")
         self.page_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
         page_layout.addWidget(self.prev_page_btn)
@@ -443,7 +451,18 @@ class SearchView(RefreshOnShowView):
         """执行搜索并加载指定页（默认从第一页开始）。"""
         self._current_filters = self._collect_filters()
         self._total = self.db_service.count_assets(**self._current_filters)
-        self._page = go_to_page
+        self._page = 0
+        self._page_cursors = [None]
+        self._next_cursor = None
+        target_page = max(0, int(go_to_page))
+        # Keyset 分页不能随机跳转；为了保留旧调用方的页码契约，按游标依次
+        # 定位目标页，而不退回到深 OFFSET 查询。
+        while self._page < target_page:
+            self._load_page()
+            if self._next_cursor is None:
+                break
+            self._page += 1
+            self._page_cursors.append(self._next_cursor)
         self._load_page()
 
     def _collect_filters(self) -> dict:
@@ -487,12 +506,27 @@ class SearchView(RefreshOnShowView):
         total_pages = max(1, (self._total + page_size - 1) // page_size)
         self._page = max(0, min(self._page, total_pages - 1))
 
-        results = self.db_service.search_assets(
-            **self._current_filters,
-            limit=page_size,
-            offset=self._page * page_size,
+        cursor = self._page_cursors[self._page]
+        results, self._next_cursor = self.db_service.get_search_asset_page(
+            **self._current_filters, page_size=page_size, cursor=cursor,
         )
         self._display_results(results, self._total, self._page, total_pages)
+
+    def _next_page(self):
+        if self._next_cursor is None:
+            return
+        self._page += 1
+        if len(self._page_cursors) <= self._page:
+            self._page_cursors.append(self._next_cursor)
+        else:
+            self._page_cursors[self._page] = self._next_cursor
+        self._load_page()
+
+    def _previous_page(self):
+        if self._page <= 0:
+            return
+        self._page -= 1
+        self._load_page()
 
     def _display_results(self, results, total: int = 0, page: int = 0, total_pages: int = 1):
         self._results = results
@@ -509,7 +543,7 @@ class SearchView(RefreshOnShowView):
         self.page_bar.setVisible(total > 0 and total_pages > 1)
         self.page_label.setText(f"第 {page + 1} / {total_pages} 页")
         self.prev_page_btn.setEnabled(page > 0)
-        self.next_page_btn.setEnabled(page < total_pages - 1)
+        self.next_page_btn.setEnabled(self._next_cursor is not None)
 
         # 新搜索完成后隐藏过期提示
         self.stale_banner.setVisible(False)
@@ -563,13 +597,44 @@ class SearchView(RefreshOnShowView):
         )
         if not path:
             return
-        all_results = self.db_service.iter_search_assets(**self._current_filters)
-        ReportService().export_assets_csv_iter(all_results, path)
-        exported_count = self.db_service.count_assets(**self._current_filters)
-        QMessageBox.information(
-            self, "导出完成",
-            f"已导出 {exported_count} 条素材记录：\n{path}"
+        self._export_progress_dialog = QProgressDialog("正在导出素材清单…", "取消", 0, 100, self)
+        self._export_progress_dialog.setWindowTitle("导出 CSV")
+        self._export_progress_dialog.setWindowModality(Qt.WindowModal)
+        self._export_progress_dialog.canceled.connect(self._export_vm.cancel)
+        self._export_progress_dialog.show()
+
+        def export_task(progress_callback, cancel_check):
+            assets = self.db_service.iter_search_assets(**self._current_filters)
+            ReportService().export_assets_csv_iter(
+                assets, path, total=self._total, cancel_check=cancel_check,
+                progress_callback=lambda current, total, message: progress_callback(
+                    "export", current / total if total else 0.0, message,
+                ),
+            )
+            return {"path": path, "count": self._total}
+
+        self._export_vm.start(
+            export_task, inject_progress=True, inject_cancel_check=True,
+            task_name="csv_export", project_id=self._current_filters.get("project_id"),
+            recovery_info={"output_path": path},
         )
+
+    def _on_export_progress(self, _target, progress, message):
+        if self._export_progress_dialog is not None:
+            self._export_progress_dialog.setValue(int(progress * 100))
+            self._export_progress_dialog.setLabelText(message)
+
+    def _on_export_finished(self, result):
+        if self._export_progress_dialog is not None:
+            self._export_progress_dialog.close()
+            self._export_progress_dialog = None
+        QMessageBox.information(self, "导出完成", f"已导出 {result['count']} 条素材记录：\n{result['path']}")
+
+    def _on_export_error(self, message):
+        if self._export_progress_dialog is not None:
+            self._export_progress_dialog.close()
+            self._export_progress_dialog = None
+        QMessageBox.information(self, "导出已取消" if "取消" in message else "导出失败", message)
 
     def _refresh_tag_completer(self):
         """从数据库加载全部标签用于输入自动补全。"""

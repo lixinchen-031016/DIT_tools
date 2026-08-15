@@ -1401,6 +1401,36 @@ class TestWorkspaceManagement(unittest.TestCase):
         page = self.db.search_assets(project_id=p.project_id, limit=2, offset=1)
         self.assertEqual([a.asset_id for a in page], ["iter_b", "iter_a"])
 
+    def test_project_and_search_keyset_pages_have_stable_order(self):
+        """Keyset 页读取不使用 OFFSET，且不会遗漏同时间写入的素材。"""
+        p = self.db.create_project(name="游标分页项目")
+        imported_at = datetime(2026, 1, 1, 12, 0, 0)
+        for asset_id in ("page_a", "page_b", "page_c", "page_d", "page_e"):
+            self.db.add_media_asset(MediaAsset(
+                asset_id=asset_id, project_id=p.project_id,
+                file_path=f"/media/{asset_id}.cr2", file_name=f"{asset_id}.cr2",
+                date_imported=imported_at,
+            ))
+
+        first, cursor = self.db.get_project_asset_page(p.project_id, page_size=2)
+        second, cursor = self.db.get_project_asset_page(p.project_id, page_size=2, cursor=cursor)
+        third, final_cursor = self.db.get_project_asset_page(p.project_id, page_size=2, cursor=cursor)
+        self.assertEqual(
+            [a.asset_id for a in first + second + third],
+            ["page_e", "page_d", "page_c", "page_b", "page_a"],
+        )
+        self.assertIsNone(final_cursor)
+
+        first, cursor = self.db.get_search_asset_page(project_id=p.project_id, page_size=3)
+        second, final_cursor = self.db.get_search_asset_page(
+            project_id=p.project_id, page_size=3, cursor=cursor,
+        )
+        self.assertEqual(
+            [a.asset_id for a in first + second],
+            ["page_e", "page_d", "page_c", "page_b", "page_a"],
+        )
+        self.assertIsNone(final_cursor)
+
     def test_operation_log_record_and_query(self):
         """操作审计日志可写入并按时间倒序查询"""
         p = self.db.create_project(name="审计项目")

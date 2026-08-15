@@ -14,7 +14,7 @@ from DITWorkstation.Models import (
     CopyTask, ChecksumAlgorithm
 )
 from DITWorkstation.Services.checksum_service import ChecksumService
-from DITWorkstation.Utils import logger, get_checksum_service
+from DITWorkstation.Utils import logger, get_checksum_service, scan_files
 
 
 class BackupService:
@@ -54,14 +54,13 @@ class BackupService:
                 "relative": source.name
             })
         else:
-            for item in source.rglob("*"):
-                if item.is_file() and not item.name.startswith("."):
-                    files.append({
-                        "path": str(item),
-                        "size": item.stat().st_size,
-                        "name": item.name,
-                        "relative": str(item.relative_to(source))
-                    })
+            for item in scan_files(source):
+                files.append({
+                    "path": str(item),
+                    "size": item.stat().st_size,
+                    "name": item.name,
+                    "relative": str(item.relative_to(source))
+                })
         return files
 
     @staticmethod
@@ -160,10 +159,10 @@ class BackupService:
 
         self._set_cancelled(False)
 
-        assets = [
-            a for a in self.db_service.get_media_assets(project_id)
-            if a.backup_locations
-        ]
+        assets = (
+            asset for asset in self.db_service.iter_project_assets(project_id)
+            if asset.backup_locations
+        )
         jobs = self.db_service.get_backup_jobs(project_id)
 
         # 目标目录 -> 备份作业源根 映射，用于推导目标文件相对路径
@@ -176,7 +175,7 @@ class BackupService:
             "checked": 0, "matched": 0, "missing": 0,
             "mismatch": 0, "unhashable": 0, "errors": [],
         }
-        total = len(assets)
+        total = sum(1 for asset in self.db_service.iter_project_assets(project_id) if asset.backup_locations)
         for i, asset in enumerate(assets):
             if cancel_check and cancel_check():
                 break

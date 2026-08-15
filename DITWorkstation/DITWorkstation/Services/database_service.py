@@ -1372,15 +1372,67 @@ class DatabaseService:
             logger.error(f"批量添加素材资产失败: {e}")
             return 0
 
-    def get_media_assets(self, project_id: str) -> List[MediaAsset]:
-        """获取项目素材"""
+    def get_media_assets(
+        self, project_id: str, limit: Optional[int] = None, offset: Optional[int] = None,
+    ) -> List[MediaAsset]:
+        """获取项目素材；保留旧的全量行为，新增有界读取参数。"""
+        query = (
+            "SELECT * FROM media_assets WHERE project_id = ? "
+            "ORDER BY date_imported DESC, asset_id DESC"
+        )
+        params = [project_id]
+        if limit is not None and limit > 0:
+            query += " LIMIT ?"
+            params.append(limit)
+            if offset is not None and offset > 0:
+                query += " OFFSET ?"
+                params.append(offset)
         with self._connection() as conn:
-            rows = conn.execute(
-                "SELECT * FROM media_assets WHERE project_id = ? "
-                "ORDER BY date_imported DESC, asset_id DESC",
-                (project_id,)
-            ).fetchall()
+            rows = conn.execute(query, params).fetchall()
             return [self._row_to_asset(r) for r in rows]
+
+    def iter_project_assets(self, project_id: str, batch_size: int = 500):
+        """以固定批次迭代项目素材，供导出、归档和校验等长任务使用。"""
+        with self._connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM media_assets WHERE project_id = ? "
+                "ORDER BY date_imported DESC, asset_id DESC", (project_id,)
+            )
+            while True:
+                rows = cursor.fetchmany(max(1, batch_size))
+                if not rows:
+                    return
+                for row in rows:
+                    yield self._row_to_asset(row)
+
+    def count_project_assets(self, project_id: str) -> int:
+        with self._connection() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM media_assets WHERE project_id = ?", (project_id,)
+            ).fetchone()[0]
+
+    def get_project_asset_page(
+        self, project_id: str, page_size: int = 500,
+        cursor: Optional[tuple[str, str]] = None,
+    ) -> tuple[List[MediaAsset], Optional[tuple[str, str]]]:
+        """基于 ``date_imported, asset_id`` 的 keyset 分页读取项目素材。"""
+        page_size = max(1, page_size)
+        query = "SELECT * FROM media_assets WHERE project_id = ?"
+        params = [project_id]
+        if cursor:
+            query += " AND (date_imported < ? OR (date_imported = ? AND asset_id < ?))"
+            params.extend([cursor[0], cursor[0], cursor[1]])
+        query += " ORDER BY date_imported DESC, asset_id DESC LIMIT ?"
+        params.append(page_size + 1)
+        with self._connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+        has_next = len(rows) > page_size
+        rows = rows[:page_size]
+        assets = [self._row_to_asset(row) for row in rows]
+        next_cursor = None
+        if has_next and rows:
+            next_cursor = (rows[-1]["date_imported"], rows[-1]["asset_id"])
+        return assets, next_cursor
 
     def get_media_asset(self, asset_id: str) -> Optional[MediaAsset]:
         """获取单个素材资产"""
@@ -1842,7 +1894,7 @@ class DatabaseService:
             文件已丢失的素材 asset_id 列表（按项目素材默认排序）
         """
         missing = []
-        for asset in self.get_media_assets(project_id):
+        for asset in self.iter_project_assets(project_id):
             if not asset.file_path or not Path(asset.file_path).exists():
                 missing.append(asset.asset_id)
         return missing
@@ -2093,6 +2145,7 @@ class DatabaseService:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         batch_size: int = 500,
+        cursor: Optional[tuple[str, str]] = None,
     ):
         """按游标批量读取素材，避免导出/批处理一次性加载全部记录。"""
         filters = dict(
@@ -2101,6 +2154,9 @@ class DatabaseService:
             log_id=log_id, rating=rating, tag=tag,
         )
         where_sql, params = self._search_sql(**filters)
+        if cursor:
+            where_sql += " AND (date_imported < ? OR (date_imported = ? AND asset_id < ?))"
+            params.extend([cursor[0], cursor[0], cursor[1]])
         query = f"SELECT * FROM media_assets{where_sql} ORDER BY date_imported DESC, asset_id DESC"
         if limit is not None and limit > 0:
             query += " LIMIT ?"
@@ -2116,6 +2172,22 @@ class DatabaseService:
                     break
                 for row in rows:
                     yield self._row_to_asset(row)
+
+    def get_search_asset_page(
+        self, *, page_size: int = 500, cursor: Optional[tuple[str, str]] = None, **filters,
+    ) -> tuple[List[MediaAsset], Optional[tuple[str, str]]]:
+        """返回一个 keyset 页面和下一页游标，避免深页 OFFSET 扫描。"""
+        page_size = max(1, page_size)
+        rows = list(self.iter_search_assets(
+            **filters, cursor=cursor, limit=page_size + 1, batch_size=page_size + 1,
+        ))
+        has_next = len(rows) > page_size
+        rows = rows[:page_size]
+        next_cursor = None
+        if has_next and rows:
+            last = rows[-1]
+            next_cursor = (last.date_imported.isoformat(), last.asset_id)
+        return rows, next_cursor
 
     def search_assets(
         self,
@@ -2239,12 +2311,18 @@ class DatabaseService:
                 (project_id,)
             ).fetchone()[0]
 
+            linked_asset_count = conn.execute(
+                "SELECT COUNT(*) FROM media_assets WHERE project_id = ? AND log_id IS NOT NULL",
+                (project_id,)
+            ).fetchone()[0]
+
             return {
                 "asset_count": asset_count,
                 "log_count": log_count,
                 "total_size": total_size,
                 "backup_job_count": backup_job_count,
                 "backed_up_count": backed_up_count,
+                "linked_asset_count": linked_asset_count,
             }
 
     # ===== 操作审计日志 =====

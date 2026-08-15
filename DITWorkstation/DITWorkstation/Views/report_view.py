@@ -97,6 +97,10 @@ class ReportView(RefreshOnShowView):
         """)
         self.generate_btn.clicked.connect(self._generate_report)
         btn_layout.addWidget(self.generate_btn)
+        self.cancel_btn = QPushButton("取消")
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.clicked.connect(self._cancel_generation)
+        btn_layout.addWidget(self.cancel_btn)
         btn_layout.addStretch()
         config_layout.addLayout(btn_layout)
 
@@ -154,22 +158,30 @@ class ReportView(RefreshOnShowView):
             )
 
         self.generate_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
         self.status_label.setText("正在生成报告...")
         self._log(f"开始生成报告: {project.name}")
 
         if report_type == 0:
             # 备份报告（使用空jobs列表，实际可从历史记录获取）
             self.worker = SimpleWorkerThread(
-                self.report_service.generate_backup_report,
-                project, [], output_path
+                self.report_service.generate_backup_report, project, [], output_path,
             )
         else:
-            # 素材统计报告
-            assets = self.db_service.get_media_assets(project_id)
-            logs = self.db_service.get_shooting_logs(project_id)
+            # 资产读取、统计和 PDF 写入都在工作线程中进行，避免大项目在
+            # 点击“生成报告”时先阻塞主线程构造完整素材列表。
+            def generate_asset_report_task(cancel_check):
+                return self.report_service.generate_asset_report(
+                    project,
+                    self.db_service.iter_project_assets(project_id),
+                    self.db_service.get_shooting_logs(project_id),
+                    output_path,
+                    total=self.db_service.count_project_assets(project_id),
+                    cancel_check=cancel_check,
+                )
             self.worker = SimpleWorkerThread(
-                self.report_service.generate_asset_report,
-                project, assets, logs, output_path
+                generate_asset_report_task,
+                inject_cancel_check=True,
             )
 
         self.worker.finished.connect(self._on_finished)
@@ -181,6 +193,7 @@ class ReportView(RefreshOnShowView):
     @Slot(object)
     def _on_finished(self, result):
         self.generate_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
         self.status_label.setText(f"✅ 报告已生成: {result}")
         self._log(f"报告生成成功: {result}")
         # worker 已连 deleteLater，这里清空引用避免悬挂
@@ -190,6 +203,7 @@ class ReportView(RefreshOnShowView):
     @Slot(str)
     def _on_error(self, error: str):
         self.generate_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
         self.status_label.setText(f"❌ 生成失败: {error}")
         self._log(f"错误: {error}")
         self.worker = None
@@ -199,6 +213,12 @@ class ReportView(RefreshOnShowView):
             details=error,
             parent=self,
         )
+
+    def _cancel_generation(self):
+        if self.worker is not None and self.worker.isRunning():
+            self.cancel_btn.setEnabled(False)
+            self.status_label.setText("正在取消，当前批次完成后停止...")
+            self.worker.cancel()
 
     def _log(self, message: str):
         self.status_panel.log(message)

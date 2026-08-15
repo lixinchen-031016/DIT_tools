@@ -68,10 +68,10 @@ class AssetRelinkService:
         if not root.is_dir():
             raise NotADirectoryError(f"重新链接目录不存在: {new_root}")
 
-        missing_assets = [
-            asset for asset in self.db_service.get_media_assets(project_id)
+        missing_assets = (
+            asset for asset in self.db_service.iter_project_assets(project_id)
             if not asset.file_path or not Path(asset.file_path).is_file()
-        ]
+        )
         files = self._scan_files(root, cancel_check)
         by_name_size: dict[tuple[str, int], list[Path]] = {}
         for path in files:

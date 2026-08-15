@@ -100,6 +100,24 @@ def test_archive_with_files(db_service, tmp_dir):
         assert "IMG_000.jpg" in checksums
 
 
+def test_archive_cancel_does_not_replace_existing_output(db_service, tmp_dir):
+    """取消归档时保留旧输出，且不留下半成品临时 zip。"""
+    src = tmp_dir / "media"
+    src.mkdir()
+    project, _, _ = _make_project_with_data(db_service, src)
+    out = tmp_dir / "proj.zip"
+    out.write_bytes(b"existing archive")
+
+    with pytest.raises(InterruptedError):
+        ArchiveService(db_service=db_service).archive_project(
+            project.project_id, str(out), include_files=False,
+            cancel_check=lambda: True,
+        )
+
+    assert out.read_bytes() == b"existing archive"
+    assert list(tmp_dir.glob("*.zip")) == [out]
+
+
 def test_restore_project_metadata_only(db_service, tmp_dir):
     """恢复（不含文件）：新项目重建，素材/日志记录齐全"""
     src = tmp_dir / "media"

@@ -13,6 +13,7 @@ from .common import (
     log_files_summary, delete_log_files,
 )
 from .workers import WorkerSignals, WorkerThread, SimpleWorkerThread
+from .scanner import scan_files
 
 __all__ = [
     'format_size', 'generate_timestamp', 'generate_log_message',
@@ -21,6 +22,7 @@ __all__ = [
     'get_file_stem', 'path_exists', 'is_file', 'is_directory',
     'get_relative_path', 'calculate_speed', 'Logger', 'logger',
     'WorkerSignals', 'WorkerThread', 'SimpleWorkerThread',
+    'scan_files',
     'get_db_service', 'get_checksum_service', 'reset_singletons',
     'safe_slot', 'pick_directory', 'pick_save_file', 'pick_open_file',
     'open_in_file_manager', 'find_overwrite_conflicts',

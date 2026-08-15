@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QGroupBox, QFormLayout, QScrollArea,
-    QMessageBox, QAbstractItemView, QProgressBar, QFrame, QSizePolicy,
+    QMessageBox, QAbstractItemView, QProgressBar, QFrame, QSizePolicy, QProgressDialog,
     QComboBox, QDialog, QDialogButtonBox, QLineEdit, QTextEdit,
 )
 from PySide6.QtCore import Qt, QThread, Signal, Slot
@@ -22,6 +22,7 @@ from DITWorkstation.Utils import (
     format_size, get_db_service, safe_slot, logger, WorkerThread,
     open_in_file_manager, pick_directory, pick_save_file,
 )
+from DITWorkstation.ViewModels import TaskViewModel
 from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 from DITWorkstation.Views.Widgets.error_dialog import show_error
@@ -62,10 +63,11 @@ class _BatchExifWorker(QThread):
     finished_batch = Signal(int, int)  # success_count, total_count
     error = Signal(str)  # 错误信息（确保异常时 UI 能恢复）
 
-    def __init__(self, db_service, asset_ids):
+    def __init__(self, db_service, project_id, total):
         super().__init__()
         self._db_service = db_service
-        self._asset_ids = asset_ids
+        self._project_id = project_id
+        self._total = total
         self._metadata_service = MetadataService()
         self._cancelled = False
 
@@ -73,21 +75,16 @@ class _BatchExifWorker(QThread):
         self._cancelled = True
 
     def run(self):
-        total = len(self._asset_ids)
+        total = self._total
         success = 0
         try:
-            for i, asset_id in enumerate(self._asset_ids):
+            for i, asset in enumerate(self._db_service.iter_project_assets(self._project_id), 1):
                 if self._cancelled:
                     break
                 try:
-                    asset = self._db_service.get_media_asset(asset_id)
-                    if not asset:
-                        self.progress.emit(i + 1, total, f"跳过：{asset_id}（未找到）")
-                        continue
-
                     file_path = asset.file_path
                     if not file_path or not Path(file_path).exists():
-                        self.progress.emit(i + 1, total, f"跳过：{asset.file_name}（文件不存在）")
+                        self.progress.emit(i, total, f"跳过：{asset.file_name}（文件不存在）")
                         continue
 
                     update_fields = {}
@@ -133,17 +130,17 @@ class _BatchExifWorker(QThread):
                             update_fields["date_taken"] = metadata.date_taken
 
                     if update_fields:
-                        ok = self._db_service.update_media_asset(asset_id, **update_fields)
+                        ok = self._db_service.update_media_asset(asset.asset_id, **update_fields)
                         if ok:
                             success += 1
-                            self.progress.emit(i + 1, total, f"已更新：{asset.file_name}")
+                            self.progress.emit(i, total, f"已更新：{asset.file_name}")
                         else:
-                            self.progress.emit(i + 1, total, f"更新失败：{asset.file_name}")
+                            self.progress.emit(i, total, f"更新失败：{asset.file_name}")
                     else:
-                        self.progress.emit(i + 1, total, f"无元数据：{asset.file_name}")
+                        self.progress.emit(i, total, f"无元数据：{asset.file_name}")
                 except Exception as e:
                     # 单个文件异常不中断整体流程
-                    self.progress.emit(i + 1, total, f"出错：{e}")
+                    self.progress.emit(i, total, f"出错：{e}")
 
             self.finished_batch.emit(success, total)
         except Exception as e:
@@ -165,6 +162,15 @@ class AssetInfoView(RefreshOnShowView):
         self._missing_scan_generation = 0
         self._missing_scan_pending = False
         self._assets = []
+        self._asset_total = 0
+        self._asset_page = 0
+        self._asset_page_cursors = [None]
+        self._asset_next_cursor = None
+        self._export_vm = TaskViewModel(self)
+        self._export_vm.progress.connect(self._on_export_progress)
+        self._export_vm.finished.connect(self._on_export_finished)
+        self._export_vm.error.connect(self._on_export_error)
+        self._export_progress_dialog = None
         self._missing_ids = set()  # 当前项目文件已丢失的素材 asset_id 集合
         self._setup_ui()
         # 项目切换由共享控件广播到全局，本视图仅需监听后刷新素材列表
@@ -324,6 +330,22 @@ class AssetInfoView(RefreshOnShowView):
         self.asset_table.customContextMenuRequested.connect(self._on_asset_context_menu)
         left_layout.addWidget(self.asset_table, 1)
         attach_empty_state(self.asset_table, "📦", "暂无素材", "请先在「媒体导入」中导入素材")
+
+        self.asset_page_bar = QWidget()
+        page_layout = QHBoxLayout(self.asset_page_bar)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        self.prev_asset_page_btn = QPushButton("上一页")
+        self.prev_asset_page_btn.clicked.connect(self._previous_asset_page)
+        self.asset_page_label = QLabel("")
+        self.next_asset_page_btn = QPushButton("下一页")
+        self.next_asset_page_btn.clicked.connect(self._next_asset_page)
+        page_layout.addStretch()
+        page_layout.addWidget(self.prev_asset_page_btn)
+        page_layout.addWidget(self.asset_page_label)
+        page_layout.addWidget(self.next_asset_page_btn)
+        page_layout.addStretch()
+        self.asset_page_bar.setVisible(False)
+        left_layout.addWidget(self.asset_page_bar)
 
         # 批量操作栏：多选后可批量评级 / 批量删除
         batch_row = QHBoxLayout()
@@ -680,7 +702,8 @@ class AssetInfoView(RefreshOnShowView):
     @safe_slot("导出素材清单失败")
     def _export_csv(self):
         """把当前项目的全部素材元数据导出为 CSV。"""
-        if not self._assets:
+        project_id = self.selector.get_current_project_id()
+        if not project_id or self._asset_total == 0:
             QMessageBox.information(self, "提示", "当前项目没有可导出的素材")
             return
         from datetime import datetime
@@ -692,15 +715,53 @@ class AssetInfoView(RefreshOnShowView):
         )
         if not path:
             return
-        ReportService().export_assets_csv(self._assets, path)
-        QMessageBox.information(
-            self, "导出完成",
-            f"已导出 {len(self._assets)} 条素材记录：\n{path}"
+        self._export_progress_dialog = QProgressDialog("正在导出素材清单…", "取消", 0, 100, self)
+        self._export_progress_dialog.setWindowTitle("导出 CSV")
+        self._export_progress_dialog.setWindowModality(Qt.WindowModal)
+        self._export_progress_dialog.canceled.connect(self._export_vm.cancel)
+        self._export_progress_dialog.show()
+
+        def export_task(progress_callback, cancel_check):
+            ReportService().export_assets_csv_iter(
+                self.db_service.iter_project_assets(project_id), path,
+                total=self._asset_total, cancel_check=cancel_check,
+                progress_callback=lambda current, total, message: progress_callback(
+                    "export", current / total if total else 0.0, message,
+                ),
+            )
+            return {"path": path, "count": self._asset_total}
+
+        self._export_vm.start(
+            export_task, inject_progress=True, inject_cancel_check=True,
+            task_name="project_csv_export", project_id=project_id,
+            recovery_info={"output_path": path},
         )
 
-    def _load_assets(self):
+    def _on_export_progress(self, _target, progress, message):
+        if self._export_progress_dialog is not None:
+            self._export_progress_dialog.setValue(int(progress * 100))
+            self._export_progress_dialog.setLabelText(message)
+
+    def _on_export_finished(self, result):
+        if self._export_progress_dialog is not None:
+            self._export_progress_dialog.close()
+            self._export_progress_dialog = None
+        QMessageBox.information(self, "导出完成", f"已导出 {result['count']} 条素材记录：\n{result['path']}")
+
+    def _on_export_error(self, message):
+        if self._export_progress_dialog is not None:
+            self._export_progress_dialog.close()
+            self._export_progress_dialog = None
+        QMessageBox.information(self, "导出已取消" if "取消" in message else "导出失败", message)
+
+    def _load_assets(self, reset_page=True):
         project_id = self.selector.get_current_project_id()
-        self._missing_scan_generation += 1
+        if reset_page:
+            self._missing_scan_generation += 1
+            self._asset_page = 0
+            self._asset_page_cursors = [None]
+            self._asset_next_cursor = None
+            self._asset_total = self.db_service.count_project_assets(project_id) if project_id else 0
         self.asset_table.setRowCount(0)
         sync_empty_state(self.asset_table)
         self._update_batch_state()
@@ -713,10 +774,15 @@ class AssetInfoView(RefreshOnShowView):
         if not project_id:
             self.batch_exif_btn.setEnabled(False)
             self._assets = []
+            self._asset_total = 0
             self._refresh_missing_summary()
             return
 
-        assets = self.db_service.get_media_assets(project_id)
+        page_size = 500
+        cursor = self._asset_page_cursors[self._asset_page]
+        assets, self._asset_next_cursor = self.db_service.get_project_asset_page(
+            project_id, page_size=page_size, cursor=cursor,
+        )
         self._assets = assets
         self.asset_table.setRowCount(len(assets))
         sync_empty_state(self.asset_table)
@@ -738,20 +804,47 @@ class AssetInfoView(RefreshOnShowView):
             self.asset_table.setItem(i, 3, exif_item)
 
             # 文件存在性校验：自动触发，将失效条目标识为「文件已丢失」
-            status_item = QTableWidgetItem("检查中…")
-            status_item.setForeground(QColor(COLOR.TEXT_SECONDARY))
+            is_missing = asset.asset_id in self._missing_ids
+            status_item = QTableWidgetItem("⚠ 文件已丢失" if is_missing else "检查中…")
+            status_item.setForeground(QColor(COLOR.DANGER if is_missing else COLOR.TEXT_SECONDARY))
             self.asset_table.setItem(i, 4, status_item)
 
         self._refresh_missing_summary()
-        self._start_missing_file_scan(project_id)
+        if reset_page:
+            self._start_missing_file_scan(project_id)
+
+    def _next_asset_page(self):
+        if self._asset_next_cursor is None:
+            return
+        self._asset_page += 1
+        if len(self._asset_page_cursors) <= self._asset_page:
+            self._asset_page_cursors.append(self._asset_next_cursor)
+        else:
+            self._asset_page_cursors[self._asset_page] = self._asset_next_cursor
+        self._load_assets(reset_page=False)
+
+    def _previous_asset_page(self):
+        if self._asset_page <= 0:
+            return
+        self._asset_page -= 1
+        self._load_assets(reset_page=False)
 
     def _refresh_missing_summary(self):
         """依据 self._missing_ids 刷新素材计数文案与「清理丢失素材」按钮可用状态。"""
         missing_count = len(self._missing_ids)
-        text = f"共 {len(self._assets)} 个素材"
+        text = f"共 {self._asset_total} 个素材"
+        if self._asset_total:
+            start = self._asset_page * 500 + 1
+            end = start + len(self._assets) - 1
+            text += f"（当前显示 {start}-{end}）"
         if missing_count:
             text += f"（{missing_count} 个文件已丢失）"
         self.asset_count_label.setText(text)
+        total_pages = max(1, (self._asset_total + 499) // 500)
+        self.asset_page_bar.setVisible(total_pages > 1)
+        self.asset_page_label.setText(f"第 {self._asset_page + 1} / {total_pages} 页")
+        self.prev_asset_page_btn.setEnabled(self._asset_page > 0)
+        self.next_asset_page_btn.setEnabled(self._asset_next_cursor is not None)
         # 仅当存在丢失素材时才允许一键清理，避免误触空操作
         self.cleanup_missing_btn.setEnabled(
             missing_count > 0 and not self._missing_scan_pending
@@ -1391,14 +1484,14 @@ class AssetInfoView(RefreshOnShowView):
         if not project_id:
             return
 
-        assets = self.db_service.get_media_assets(project_id)
-        if not assets:
+        total = self.db_service.count_project_assets(project_id)
+        if not total:
             QMessageBox.information(self, "提示", "当前项目没有素材。")
             return
 
         reply = QMessageBox.question(
             self, "确认",
-            f"将对项目下 {len(assets)} 个素材重新读取 EXIF 信息，是否继续？"
+            f"将对项目下 {total} 个素材重新读取 EXIF 信息，是否继续？"
         )
         if reply != QMessageBox.Yes:
             return
@@ -1408,12 +1501,11 @@ class AssetInfoView(RefreshOnShowView):
         self.refresh_exif_btn.setEnabled(False)
         self.batch_progress_frame.setVisible(True)
         self.batch_progress.setVisible(True)
-        self.batch_progress.setRange(0, len(assets))
+        self.batch_progress.setRange(0, total)
         self.batch_progress.setValue(0)
         self.batch_status_label.setText("正在读取 EXIF 信息...")
 
-        asset_ids = [a.asset_id for a in assets]
-        self._batch_worker = _BatchExifWorker(self.db_service, asset_ids)
+        self._batch_worker = _BatchExifWorker(self.db_service, project_id, total)
         self._batch_worker.progress.connect(self._on_batch_progress)
         self._batch_worker.finished_batch.connect(self._on_batch_finished)
         self._batch_worker.error.connect(self._on_batch_error)

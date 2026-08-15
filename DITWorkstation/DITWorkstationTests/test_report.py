@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from DITWorkstation.Services.report_service import ReportService
 from DITWorkstation.Models import MediaAsset
+from DITWorkstation.Models import Project
 
 
 def _asset(**kwargs):
@@ -109,3 +110,21 @@ def test_export_assets_csv_iter_accepts_generator(tmp_dir):
     with open(out, encoding="utf-8-sig", newline="") as f:
         rows = list(csv.reader(f))
     assert [row[0] for row in rows[1:]] == ["first.cr2", "second.cr2"]
+
+
+def test_generate_asset_report_accepts_generator_and_honors_cancel(tmp_dir):
+    """PDF 统计可消费迭代器，并在下一条素材前响应取消。"""
+    output = tmp_dir / "assets.pdf"
+    project = Project(project_id="p1", name="流式报告")
+    ReportService().generate_asset_report(
+        project,
+        (_asset(file_name=f"report_{i}.cr2", scene="S01") for i in range(3)),
+        [], str(output), total=3,
+    )
+    assert output.exists()
+
+    with pytest.raises(InterruptedError):
+        ReportService().generate_asset_report(
+            project, (_asset() for _ in range(1)), [], str(tmp_dir / "cancelled.pdf"),
+            cancel_check=lambda: True,
+        )
