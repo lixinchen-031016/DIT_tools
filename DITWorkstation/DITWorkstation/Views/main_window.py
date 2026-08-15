@@ -31,6 +31,7 @@ from DITWorkstation.Views.project_dashboard_view import ProjectDashboardView
 from DITWorkstation.Views.first_run_wizard import FirstRunWizard, _SOP_GUIDE_TEXT
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS
 from DITWorkstation.App import config
+from DITWorkstation.App.version import APP_VERSION
 from DITWorkstation.Utils import logger, get_db_service
 from DITWorkstation.Services.volume_monitor import VolumeMonitor
 from DITWorkstation.Services.card_automation_service import CardAutomationService
@@ -51,7 +52,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DIT工作站 - 专业摄影数据管理")
+        self.setWindowTitle(f"DIT工作站 {APP_VERSION} - 专业摄影数据管理")
         self.setMinimumSize(1200, 800)
         self.resize(1400, 900)
 
@@ -155,9 +156,11 @@ class MainWindow(QMainWindow):
         self.status_label_workspace = QLabel("工作区: 未选择")
         self.status_label_project = QLabel("项目: 未选择")
         self.status_label_task = QLabel("就绪")
+        self.status_label_version = QLabel(APP_VERSION)
         self.status_bar.addWidget(self.status_label_workspace)
         self.status_bar.addWidget(self.status_label_project)
         self.status_bar.addPermanentWidget(self.status_label_task)
+        self.status_bar.addPermanentWidget(self.status_label_version)
 
         # 监听会话上下文：当前项目/工作区切换时更新状态栏
         bus.project_focus_changed.connect(self._on_project_focus_changed)
@@ -187,6 +190,10 @@ class MainWindow(QMainWindow):
         settings_action.setShortcut("Ctrl+,")
         settings_action.setToolTip("缩略图缓存清理、最近路径管理与数据目录信息")
         settings_action.triggered.connect(self._show_settings)
+
+        recycle_action = settings_menu.addAction("回收站…")
+        recycle_action.setToolTip("查看并恢复保留期内删除的项目和素材记录")
+        recycle_action.triggered.connect(self._show_recycle_bin)
 
         # 帮助菜单
         help_menu = menubar.addMenu("帮助(&H)")
@@ -254,6 +261,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "关于 DIT 工作站",
             "<h3>DIT 工作站</h3>"
+            f"<p>版本：{APP_VERSION}</p>"
             "<p>专业摄影数据管理应用</p>"
             "<p>支持安全备份、校验和验证、JPG 筛选 RAW 提取、批量重命名、"
             "拍摄日志管理、素材检索与报告生成。</p>"
@@ -264,6 +272,11 @@ class MainWindow(QMainWindow):
         from DITWorkstation.Views.Widgets.settings_dialog import SettingsDialog
         dialog = SettingsDialog(self)
         dialog.exec()
+
+    def _show_recycle_bin(self):
+        """打开数据库回收站；恢复操作完成后会广播数据刷新事件。"""
+        from DITWorkstation.Views.Widgets.recycle_bin_dialog import RecycleBinDialog
+        RecycleBinDialog(self, db_service=get_db_service()).exec()
 
     def _wrap_scrollable(self, view: QWidget) -> QScrollArea:
         """把视图包裹在 QScrollArea 中，内容超出时自动出现滚动条。

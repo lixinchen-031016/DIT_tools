@@ -4,6 +4,8 @@
 
 DIT 工作站是一款面向影视与摄影行业的桌面端数据管理工具，为 DIT（数字影像工程师）提供从素材导入、备份、RAW 提取、重命名、拍摄日志、素材信息、检索到报告生成的完整工作流。基于 PySide6 构建原生桌面体验，使用 SQLite 进行本地数据持久化，支持高性能校验、跨平台 PDF 报告输出与一键打包分发（macOS onedir / Windows 单文件）。
 
+当前版本采用 `alpha.YYYYMMDD` 格式，日期部分为启动/打包当天的本地日期。例如 `alpha.20260815`。
+
 ---
 
 ## 📑 目录
@@ -36,7 +38,7 @@ DIT 工作站围绕 9 大功能模块构建完整的数据管理闭环：
 | 5 | 文件重命名 | ✏️ | 按场景/镜头/镜次规则批量重命名，支持模板变量，预览确认后执行，自动防覆盖 |
 | 6 | 拍摄日志 | 📋 | 管理场景/镜头/镜次拍摄记录，支持「从代表素材填充 EXIF」，双向关联素材与日志 |
 | 7 | 素材检索 | 🔍 | 按项目/场景/镜头/类型/关键词/日志/评级/日期/标签多维度组合检索（分页展示，每页 500 条），结果可导出 CSV；支持按校验和跨项目查重 |
-| 8 | 素材信息 | ℹ️ | 查看素材 EXIF 与元数据详情，支持缩略图预览、单个/批量重新读取 EXIF，可设置镜次评级，可一键导出项目素材清单 CSV；支持标签/备注编辑、批量评级、批量删除和丢失文件检测/清理 |
+| 8 | 素材信息 | ℹ️ | 查看素材 EXIF 与元数据详情，支持缩略图预览、单个/批量重新读取 EXIF，可设置镜次评级，可一键导出项目素材清单 CSV；支持标签/备注编辑、批量评级、软删除、丢失文件检测与重新链接 |
 | 9 | 报告生成 | 📊 | 生成 PDF 数据备份报告与素材统计报告，含镜次评级分布统计；按平台查找预装中文字体 |
 
 ---
@@ -89,6 +91,22 @@ DIT 工作站围绕 9 大功能模块构建完整的数据管理闭环：
 - 可批量从项目移除素材记录（仅删除数据库记录，不动磁盘文件）
 - 素材列表会在后台检查文件是否仍存在，状态列显示「✓ 正常」或「⚠ 文件已丢失」；检查期间不会阻塞界面
 - 「清理丢失素材」只删除数据库中的失效素材记录，不删除任何磁盘文件，执行前会再次后台复查并要求确认
+
+### 可恢复性：回收站、重命名回退与素材重新链接
+- 删除素材或项目时优先写入数据库回收站，源媒体文件不会被删除。
+- 通过「设置 → 回收站…」查看未过期记录并恢复；若同 ID 已被重新使用，或素材所属项目不存在，系统会拒绝覆盖并说明原因。
+- 素材路径失效时可在「素材信息」中选择新根目录，先查看相对路径、文件名与大小、可选校验和匹配形成的预览，再确认回写；重名候选不会自动覆盖。
+- 批量重命名会保存映射记录；仅在目标文件状态仍可确认时允许安全回退。
+
+### 大项目与后台任务
+- 素材检索和素材信息列表均按 cursor 分页加载，默认每页 500 条，避免首次打开项目时创建全部表格行。
+- 搜索和项目素材 CSV 导出采用流式后台任务，导出范围不受当前页限制；可从进度对话框取消。
+- 素材统计报告在后台迭代统计，项目归档以临时 ZIP 写入并在成功后原子替换目标；取消或异常不会覆盖已有归档文件。
+- 文件扫描器支持扩展名过滤、递归、取消和批量回调；备份校验、丢失文件检查和重新链接均使用迭代读取。
+
+### 版本标识
+- 应用标题、状态栏和「帮助 → 关于 DIT 工作站」显示版本号。
+- 版本格式固定为 `alpha.YYYYMMDD`；PyInstaller 打包时同步写入 macOS 的显示版本，内部构建号使用纯日期以满足平台格式要求。
 
 ### 操作审计与设置
 - 新增 `operation_logs` 操作审计日志：导入、备份、RAW 提取、重命名、评级、标签更新等关键操作自动留痕
@@ -195,11 +213,12 @@ DIT_tools/
     │   ├── main.py                 # 应用入口
     │   ├── App/
     │   │   ├── __init__.py         # 全局配置 AppConfig
+    │   │   ├── version.py          # alpha.YYYYMMDD 版本标识
     │   │   └── session_context.py  # EventBus + 全局项目/工作区状态
     │   ├── Models/
     │   │   └── __init__.py         # 数据模型（dataclass + Enum + RATING_LABELS）
     │   ├── Services/               # 业务逻辑层
-    │   │   ├── database_service.py     # 数据库服务（SQLite，9 张表 + 连接池 + FTS5）
+    │   │   ├── database_service.py     # 数据库服务（SQLite，11 张表 + 连接池 + FTS5）
     │   │   ├── checksum_service.py     # 校验和服务（带缓存）
     │   │   ├── media_import_service.py # 媒体导入服务
     │   │   ├── metadata_service.py     # 元数据读取服务（EXIF/视频）
@@ -214,6 +233,7 @@ DIT_tools/
     │   ├── Utils/
     │   │   ├── __init__.py
     │   │   ├── common.py               # 工具函数 + 单例 + safe_slot 装饰器
+    │   │   ├── scanner.py              # 可取消的统一文件扫描器
     │   │   └── workers.py             # 后台线程（WorkerThread/SimpleWorkerThread）
     │   ├── ViewModels/
     │   │   ├── __init__.py             # ViewModel 导出
@@ -234,12 +254,13 @@ DIT_tools/
     │           ├── workspace_dialog.py        # 工作区新建/编辑对话框
     │           ├── workspace_project_selector.py # 工作区-项目共享选择控件
     │           ├── settings_dialog.py            # 设置对话框
+    │           ├── recycle_bin_dialog.py         # 回收站查看与恢复对话框
     │           ├── project_template_dialog.py    # 项目模板对话框
     │           ├── backup_template_dialog.py     # 备份方案对话框
     │           ├── status_panel.py               # 进度/状态/日志面板
     │           ├── table_factory.py              # 表格工厂
     │           └── empty_state.py                # 空状态占位
-    ├── DITWorkstationTests/           # 测试套件（当前 335 个测试）
+    ├── DITWorkstationTests/           # 测试套件（当前 351 个测试）
     │   ├── conftest.py                 # 共享 fixture
     │   ├── test_database.py            # 数据库服务测试（65）
     │   ├── test_media_import.py        # 媒体导入测试（28）
@@ -301,7 +322,7 @@ python DITWorkstation/main.py
 
 ## 🧪 测试
 
-项目包含 335 个测试，覆盖核心服务业务逻辑、工具函数、会话上下文、数据模型、后台任务、缩略图、功能模式、文件状态扫描和无头 UI 交互。
+项目包含 351 个测试，覆盖核心服务业务逻辑、回收站恢复、跨平台路径重新链接、分页、后台任务、归档取消、工具函数、会话上下文、数据模型、缩略图、功能模式、文件状态扫描和无头 UI 交互。
 
 ```bash
 # 激活虚拟环境后
@@ -313,7 +334,7 @@ pytest DITWorkstationTests/ -v
 
 | 测试文件 | 覆盖范围 | 测试数量 |
 |----------|----------|----------|
-| `test_database.py` | 数据库服务（9 张表 CRUD + 版本化迁移 + FTS5 + 连接池） | 69 |
+| `test_database.py` | 数据库服务（11 张表 CRUD + 版本化迁移 + FTS5 + 连接池） | 69 |
 | `test_utils.py` | 工具函数（format_size / sanitize_filename 等） | 36 |
 | `test_media_import.py` | 媒体导入服务 | 30 |
 | `test_backup.py` | 备份服务 | 15 |
@@ -338,11 +359,13 @@ pytest DITWorkstationTests/ -v
 | `test_backup_templates.py` | 备份方案模板 | 2 |
 | `test_card_automation.py` | 相机卡自动化 | 1 |
 | `test_feature_flags.py` | 团队/个人模式功能开关 | 15 |
-| **合计** | | **335** |
+| `test_recovery.py` | 回收站恢复、重新链接与重命名回退 | 5 |
+| `test_version_and_recycle_bin.py` | alpha 版本格式与回收站 UI 恢复入口 | 2 |
+| **合计** | | **351** |
 
 测试共享 fixture（`conftest.py`）提供隔离的数据库实例、临时目录与工厂函数，保证测试间互不干扰。
 
-当前本地验证环境为 macOS arm64、Python 3.13、PySide6 6.11.1，执行结果为 `335 passed`。测试使用 Qt `offscreen` 平台，不能替代 Windows/Linux 原生 GUI、文件系统和打包产物验证。
+当前本地验证环境为 macOS arm64、Python 3.13、PySide6 6.11.1，执行结果为 `351 passed`。测试使用 Qt `offscreen` 平台，不能替代 Windows/Linux 原生 GUI、文件系统和打包产物验证。
 
 ---
 
@@ -358,6 +381,7 @@ bash build/build_macos.sh
 ```
 
 - **产物**：`dist/DITWorkstation.app`（onedir 应用包，约 130MB，arm64 架构；依赖置于 `Contents/Frameworks`，启动更快）+ `dist/DITWorkstation.dmg`（脚本自动生成，约 57MB）
+- **版本**：构建当天自动采用 `alpha.YYYYMMDD` 显示版本；内部构建号为同一天的纯数字。
 - **要求**：macOS 主机、Python 3.11+、MediaInfo（`brew install mediainfo`，可选；打包态优先使用随包分发的动态库）
 - **签名**：adhoc 签名（Hardened Runtime），分发时需 Apple Developer ID 正式签名才能通过 Gatekeeper
 - **数据目录**：`~/Library/Application Support/DITWorkstation/`
@@ -370,6 +394,7 @@ build\build_windows.bat
 ```
 
 - **产物**：`dist\DITWorkstation.exe`（单文件模式）
+- **版本**：应用窗口、状态栏和“关于”对话框显示构建当天的 `alpha.YYYYMMDD`。
 - **要求**：Windows 主机、Python 3.11+（`python` 或 `py` 启动器均可）、MediaInfo（从官网下载，可选；打包态优先使用随包分发的 MediaInfo.dll）
 - **数据目录**：`%APPDATA%\DITWorkstation\`
 - **长路径**：已内嵌 `longPathAware` manifest，支持超过 260 字符的路径
@@ -452,7 +477,7 @@ App（配置/会话）→ Models（数据模型）→ Services（业务逻辑）
 ### 数据库结构
 
 - **模式**：SQLite，启用 WAL（Write-Ahead Logging）模式
-- **表**：9 张
+- **表**：11 张
   - `workspaces` — 工作区（工作区-项目两级结构的父级）
   - `projects` — 项目（归属于工作区）
   - `shooting_logs` — 拍摄日志
@@ -460,10 +485,12 @@ App（配置/会话）→ Models（数据模型）→ Services（业务逻辑）
   - `asset_tags` — 素材标签关联表
   - `backup_jobs` — 备份作业记录（含失败文件与任务快照）
   - `operation_logs` — 操作审计日志
+  - `recycle_bin` — 项目/素材软删除快照及保留期
+  - `rename_history` — 批量重命名映射及回退状态
   - `project_templates` — 项目模板
   - `backup_templates` — 备份方案模板
-- **索引**：14 个，覆盖常用查询字段以保证检索性能
-- **迁移**：`PRAGMA user_version` 版本化迁移（v1–v4），幂等可重复执行；升级前自动生成 `*.pre-migration.bak` 备份，失败可回滚
+- **索引**：18 个，覆盖常用查询字段以保证检索性能
+- **迁移**：`PRAGMA user_version` 版本化迁移（v1–v5），幂等可重复执行；升级前自动生成 `*.pre-migration.bak` 备份，失败可回滚
 
 ---
 

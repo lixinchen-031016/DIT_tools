@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt, QRect
 from PySide6.QtGui import QFont, QFontDatabase, QIcon, QPainter, QPixmap, QColor
 
 from DITWorkstation.App import config
+from DITWorkstation.App.version import APP_VERSION
 from DITWorkstation.App.navigation import get_nav_index
 from DITWorkstation.Utils import apply_saved_config, logger, get_db_service
 from DITWorkstation.App.feature_flags import ensure_personal_default_workspace_path
@@ -136,6 +137,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("DIT工作站")
     app.setOrganizationName("DITWorkstation")
+    app.setApplicationVersion(APP_VERSION)
     app.setWindowIcon(_create_app_icon())
 
     if recovered_settings_path:

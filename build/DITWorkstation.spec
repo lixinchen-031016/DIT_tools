@@ -13,10 +13,13 @@ DITWorkstation PyInstaller 打包配置
 import os
 import sys
 import platform
+from datetime import date
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
+BUILD_NUMBER = f"{date.today():%Y%m%d}"
+APP_VERSION = f"alpha.{BUILD_NUMBER}"
 
 # 项目根目录（spec 文件位于 build/ 下，所以根目录是上一层）
 PROJECT_ROOT = Path(SPECPATH).parent
@@ -140,8 +143,8 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "DIT工作站",
             "CFBundleDisplayName": "DIT工作站",
-            "CFBundleShortVersionString": "1.0.0",
-            "CFBundleVersion": "1.0.0",
+            "CFBundleShortVersionString": APP_VERSION,
+            "CFBundleVersion": BUILD_NUMBER,
             "NSHighResolutionCapable": True,
             "NSAppleEventsUsageDescription": "DIT工作站需要访问文件以管理媒体素材。",
             "NSPhotoLibraryUsageDescription": "DIT工作站需要访问照片库以管理摄影素材。",
