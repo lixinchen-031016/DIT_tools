@@ -46,6 +46,7 @@ def test_selector_horizontal_layout_no_buttons_below(tmp_dir):
 # ===== 素材检索分页 =====
 
 def test_search_view_pagination(tmp_dir, monkeypatch):
+    from PySide6.QtCore import QEventLoop, QTimer
     from DITWorkstation.Utils import common, reset_singletons
     from DITWorkstation.App.session_context import reset_session_state
     from DITWorkstation.Models import MediaAsset
@@ -68,7 +69,20 @@ def test_search_view_pagination(tmp_dir, monkeypatch):
         view = SearchView()
         view.project_combo.clear()
         view.project_combo.addItem("分页项目", project.project_id)
+
+        def wait_until(predicate, timeout_ms=3000):
+            loop = QEventLoop()
+            timer = QTimer()
+            timer.setInterval(10)
+            timer.timeout.connect(lambda: loop.quit() if predicate() else None)
+            timer.start()
+            QTimer.singleShot(timeout_ms, loop.quit)
+            loop.exec()
+            timer.stop()
+            assert predicate()
+
         view._search()
+        wait_until(lambda: view._total == 1200)
         assert view._total == 1200
         assert view.result_table.rowCount() == 500
         assert view.page_label.text() == "第 1 / 3 页"
@@ -76,6 +90,7 @@ def test_search_view_pagination(tmp_dir, monkeypatch):
         assert view.next_page_btn.isEnabled()
 
         view._search(go_to_page=2)
+        wait_until(lambda: view.page_label.text() == "第 3 / 3 页")
         assert view.result_table.rowCount() == 200
         assert view.page_label.text() == "第 3 / 3 页"
         assert view.next_page_btn.isEnabled() is False
@@ -477,14 +492,14 @@ def test_asset_info_view_marks_and_cleans_missing_files(tmp_dir, monkeypatch):
                 elapsed += 20
             assert predicate()
 
-        wait_until(lambda: not view._missing_scan_pending)
+        wait_until(lambda: not view._missing_scan_pending and view.asset_model.rowCount() == 2)
 
         # 1) 列表渲染：共 2 行，状态列正确标识
-        assert view.asset_table.rowCount() == 2
+        assert view.asset_model.rowCount() == 2
         status_by_id = {}
-        for r in range(view.asset_table.rowCount()):
-            aid = view.asset_table.item(r, 0).data(Qt.UserRole)
-            status_by_id[aid] = view.asset_table.item(r, 4).text()
+        for r in range(view.asset_model.rowCount()):
+            aid = view.asset_model.data(view.asset_model.index(r, 0), Qt.UserRole)
+            status_by_id[aid] = view.asset_model.data(view.asset_model.index(r, 4), Qt.DisplayRole)
         assert status_by_id["a_present"] == "✓ 正常"
         assert status_by_id["a_missing"] == "⚠ 文件已丢失"
         # 计数文案包含丢失提示，清理按钮启用
@@ -493,8 +508,8 @@ def test_asset_info_view_marks_and_cleans_missing_files(tmp_dir, monkeypatch):
 
         # 2) 选中丢失素材：详情面板显示警告横幅（不触发缩略图生成）
         missing_row = next(
-            r for r in range(view.asset_table.rowCount())
-            if view.asset_table.item(r, 0).data(Qt.UserRole) == "a_missing"
+            r for r in range(view.asset_model.rowCount())
+            if view.asset_model.data(view.asset_model.index(r, 0), Qt.UserRole) == "a_missing"
         )
         view.asset_table.selectRow(missing_row)
         view._on_asset_selected()
@@ -524,7 +539,7 @@ def test_asset_info_view_marks_and_cleans_missing_files(tmp_dir, monkeypatch):
         # 完成后：丢失记录删除，正常记录保留
         assert db.get_media_asset("a_missing") is None
         assert db.get_media_asset("a_present") is not None
-        assert view.asset_table.rowCount() == 1
+        wait_until(lambda: view.asset_model.rowCount() == 1)
         assert not view.cleanup_missing_btn.isEnabled()
         # 磁盘真实文件不受影响
         assert real.exists()

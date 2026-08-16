@@ -6,7 +6,7 @@ AlternatingRowColors、setDefaultSectionSize(32) 等）。本工厂将其集中�
 """
 from typing import List, Optional
 
-from PySide6.QtWidgets import QTableWidget, QHeaderView, QAbstractItemView
+from PySide6.QtWidgets import QTableWidget, QTableView, QHeaderView, QAbstractItemView
 
 DEFAULT_ROW_HEIGHT = 32
 
@@ -51,4 +51,28 @@ def make_table(
     table.verticalHeader().setDefaultSectionSize(row_height)
     if sortable:
         table.setSortingEnabled(True)
+    return table
+
+
+def make_table_view(
+    *,
+    sortable: bool = False,
+    selection_mode=QAbstractItemView.SingleSelection,
+    selection_behavior=QAbstractItemView.SelectRows,
+    row_height: int = DEFAULT_ROW_HEIGHT,
+    alternating: bool = True,
+    resize_to_contents_cols: Optional[List[int]] = None,
+) -> QTableView:
+    """创建标准配置的 ``QTableView``，由调用方设置数据模型。"""
+    table = QTableView()
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(QHeaderView.Stretch)
+    if resize_to_contents_cols:
+        for col in resize_to_contents_cols:
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+    table.setSelectionBehavior(selection_behavior)
+    table.setSelectionMode(selection_mode)
+    table.setAlternatingRowColors(alternating)
+    table.verticalHeader().setDefaultSectionSize(row_height)
+    table.setSortingEnabled(sortable)
     return table

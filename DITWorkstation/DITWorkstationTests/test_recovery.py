@@ -4,6 +4,7 @@ from pathlib import Path
 
 from DITWorkstation.Models import MediaAsset, OperationStatus, RenameRule, ShootingLog
 from DITWorkstation.Services.asset_relink_service import AssetRelinkService
+from DITWorkstation.Services.database_service import DatabaseService
 from DITWorkstation.Services.rename_service import RenameService
 from DITWorkstation.Utils import normalize_path
 
@@ -76,6 +77,22 @@ def test_recycle_bin_expiration_cleanup(db_service, project, tmp_path):
     assert deleted
     assert cleaned.affected_count == 1
     assert db_service.restore_recycle_item(deleted.recovery_id).status is OperationStatus.NOT_FOUND
+
+
+def test_database_startup_cleans_expired_recycle_snapshots(db_service, project, tmp_path):
+    path = tmp_path / "startup-expired.cr3"
+    path.write_bytes(b"data")
+    db_service.add_media_asset(_asset(project.project_id, "startup-expired", path))
+    deleted = db_service.delete_media_asset_result("startup-expired", retention_days=0)
+    assert deleted
+
+    db_path = db_service.db_path
+    db_service.close_all()
+    restarted = DatabaseService(db_path=db_path)
+    try:
+        assert restarted.get_recycle_bin_items() == []
+    finally:
+        restarted.close_all()
 
 
 def test_restore_all_recycle_items_restores_project_before_assets(db_service, project, tmp_path):

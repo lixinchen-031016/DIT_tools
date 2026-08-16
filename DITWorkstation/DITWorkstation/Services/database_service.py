@@ -352,6 +352,12 @@ class DatabaseService:
             # 向后兼容：旧项目（workspace_id 为 NULL）自动归入"默认工作区"
             self._migrate_legacy_projects_to_default_workspace(conn)
             self._recover_interrupted_backup_jobs(conn)
+            # 回收站不依赖用户主动打开窗口才清理，避免长期运行时过期快照积累。
+            expired = conn.execute(
+                "DELETE FROM recycle_bin WHERE expires_at <= ?", (datetime.now().isoformat(),)
+            ).rowcount
+            if expired:
+                logger.info(f"启动时清理过期回收站快照: {expired} 项")
             conn.commit()
         finally:
             conn.close()
@@ -1375,7 +1381,11 @@ class DatabaseService:
     def get_media_assets(
         self, project_id: str, limit: Optional[int] = None, offset: Optional[int] = None,
     ) -> List[MediaAsset]:
-        """获取项目素材；保留旧的全量行为，新增有界读取参数。"""
+        """兼容旧调用方的素材读取接口。
+
+        新代码必须使用 ``iter_project_assets``、``get_project_asset_page`` 或
+        ``get_search_asset_page``；当未提供 ``limit`` 时本接口会物化整个项目。
+        """
         query = (
             "SELECT * FROM media_assets WHERE project_id = ? "
             "ORDER BY date_imported DESC, asset_id DESC"

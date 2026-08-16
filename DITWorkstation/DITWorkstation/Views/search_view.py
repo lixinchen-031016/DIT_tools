@@ -122,6 +122,12 @@ class SearchView(RefreshOnShowView):
         self._page = 0
         self._page_cursors = [None]
         self._next_cursor = None
+        self._search_generation = 0
+        self._requested_page = 0
+        self._pending_search = None
+        self._page_vm = TaskViewModel(self)
+        self._page_vm.finished.connect(self._on_page_loaded)
+        self._page_vm.error.connect(self._on_page_load_error)
         self._export_vm = TaskViewModel(self)
         self._export_vm.progress.connect(self._on_export_progress)
         self._export_vm.finished.connect(self._on_export_finished)
@@ -449,20 +455,23 @@ class SearchView(RefreshOnShowView):
     @safe_slot("搜索失败")
     def _search(self, go_to_page: int = 0):
         """执行搜索并加载指定页（默认从第一页开始）。"""
+        if self._page_vm.is_running():
+            # 连续输入或点击搜索时，旧查询的结果不应覆盖最新筛选条件。
+            self._pending_search = go_to_page
+            self._search_generation += 1
+            self._page_vm.cancel()
+            self.result_label.setText("正在切换搜索条件…")
+            return
         self._current_filters = self._collect_filters()
-        self._total = self.db_service.count_assets(**self._current_filters)
+        self._total = None
         self._page = 0
         self._page_cursors = [None]
         self._next_cursor = None
-        target_page = max(0, int(go_to_page))
-        # Keyset 分页不能随机跳转；为了保留旧调用方的页码契约，按游标依次
-        # 定位目标页，而不退回到深 OFFSET 查询。
-        while self._page < target_page:
-            self._load_page()
-            if self._next_cursor is None:
-                break
-            self._page += 1
-            self._page_cursors.append(self._next_cursor)
+        self._requested_page = max(0, int(go_to_page))
+        self._search_generation += 1
+        self.result_table.setRowCount(0)
+        sync_empty_state(self.result_table)
+        self.result_label.setText("正在搜索…")
         self._load_page()
 
     def _collect_filters(self) -> dict:
@@ -500,17 +509,71 @@ class SearchView(RefreshOnShowView):
         )
 
     def _load_page(self):
-        """按当前页加载一页结果并刷新表格/分页控件。"""
+        """在后台按当前游标读取一页，避免 SQLite/FTS 查询阻塞主线程。"""
+        if self._page_vm.is_running():
+            return
         page_size = getattr(config, "search_page_size", 500)
         page_size = max(1, int(page_size))
-        total_pages = max(1, (self._total + page_size - 1) // page_size)
-        self._page = max(0, min(self._page, total_pages - 1))
-
         cursor = self._page_cursors[self._page]
-        results, self._next_cursor = self.db_service.get_search_asset_page(
-            **self._current_filters, page_size=page_size, cursor=cursor,
+        generation = self._search_generation
+        page = self._page
+        filters = dict(self._current_filters)
+        total = self._total
+
+        def load_page(cancel_check):
+            if cancel_check():
+                raise InterruptedError("搜索已取消")
+            resolved_total = self.db_service.count_assets(**filters) if total is None else total
+            if cancel_check():
+                raise InterruptedError("搜索已取消")
+            results, next_cursor = self.db_service.get_search_asset_page(
+                **filters, page_size=page_size, cursor=cursor,
+            )
+            return {
+                "generation": generation, "page": page, "total": resolved_total,
+                "page_size": page_size, "results": results, "next_cursor": next_cursor,
+            }
+
+        self.prev_page_btn.setEnabled(False)
+        self.next_page_btn.setEnabled(False)
+        self._page_vm.start(
+            load_page, inject_cancel_check=True, task_name="search_asset_page",
+            project_id=filters.get("project_id"),
         )
-        self._display_results(results, self._total, self._page, total_pages)
+
+    def _on_page_loaded(self, result):
+        if result.get("generation") != self._search_generation:
+            self._start_pending_search()
+            return
+        self._total = result["total"]
+        self._page = result["page"]
+        self._next_cursor = result["next_cursor"]
+        # Keyset 游标不支持随机跳转。保留旧的 go_to_page 契约时，在后台逐页前进。
+        if self._page < self._requested_page and self._next_cursor is not None:
+            self._page += 1
+            if len(self._page_cursors) <= self._page:
+                self._page_cursors.append(self._next_cursor)
+            else:
+                self._page_cursors[self._page] = self._next_cursor
+            self._load_page()
+            return
+        total_pages = max(1, (self._total + result["page_size"] - 1) // result["page_size"])
+        self._display_results(result["results"], self._total, self._page, total_pages)
+        self._start_pending_search()
+
+    def _on_page_load_error(self, error: str):
+        logger.warning(f"素材搜索失败: {error}")
+        self.result_label.setText(f"搜索失败：{error}")
+        self.prev_page_btn.setEnabled(self._page > 0)
+        self.next_page_btn.setEnabled(self._next_cursor is not None)
+        self._start_pending_search()
+
+    def _start_pending_search(self):
+        if self._pending_search is None:
+            return
+        go_to_page = self._pending_search
+        self._pending_search = None
+        self._search(go_to_page=go_to_page)
 
     def _next_page(self):
         if self._next_cursor is None:
@@ -530,6 +593,10 @@ class SearchView(RefreshOnShowView):
 
     def _display_results(self, results, total: int = 0, page: int = 0, total_pages: int = 1):
         self._results = results
+        # QTableWidget 在逐格插入时若保持排序开启，会为每个单元格重排一次；
+        # 500 条结果会放大成数千次排序。仅在填充期间关闭，结束后恢复用户排序。
+        sorting_enabled = self.result_table.isSortingEnabled()
+        self.result_table.setSortingEnabled(False)
         self.result_table.setRowCount(len(results))
         sync_empty_state(self.result_table)
         if total > 0:
@@ -548,39 +615,34 @@ class SearchView(RefreshOnShowView):
         # 新搜索完成后隐藏过期提示
         self.stale_banner.setVisible(False)
 
-        for i, asset in enumerate(results):
-            name_item = QTableWidgetItem(asset.file_name)
-            # 存 asset_id 到 UserRole，双击/右键可排序安全地定位 asset
-            name_item.setData(Qt.UserRole, asset.asset_id)
-            self.result_table.setItem(i, 0, name_item)
-            self.result_table.setItem(i, 1, QTableWidgetItem(asset.file_type))
-            self.result_table.setItem(i, 2, QTableWidgetItem(
-                format_size(asset.file_size)
-            ))
-            self.result_table.setItem(i, 3, QTableWidgetItem(asset.scene))
-            self.result_table.setItem(i, 4, QTableWidgetItem(asset.shot))
+        try:
+            for i, asset in enumerate(results):
+                name_item = QTableWidgetItem(asset.file_name)
+                # 存 asset_id 到 UserRole，双击/右键可排序安全地定位 asset
+                name_item.setData(Qt.UserRole, asset.asset_id)
+                self.result_table.setItem(i, 0, name_item)
+                self.result_table.setItem(i, 1, QTableWidgetItem(asset.file_type))
+                self.result_table.setItem(i, 2, QTableWidgetItem(format_size(asset.file_size)))
+                self.result_table.setItem(i, 3, QTableWidgetItem(asset.scene))
+                self.result_table.setItem(i, 4, QTableWidgetItem(asset.shot))
 
-            log_label = ""
-            if asset.log_id:
-                # 跨项目时补齐缓存，避免显示裸 UUID
-                self._ensure_log_cached(asset.log_id)
-                log = self._log_cache.get(asset.log_id)
-                if log:
-                    log_label = f"{log.scene}/{log.shot}/{log.take}"
-                else:
-                    # 日志可能已被删除，显示为未关联
-                    log_label = "（日志已删除）"
-            self.result_table.setItem(i, 5, QTableWidgetItem(log_label))
+                log_label = ""
+                if asset.log_id:
+                    # 跨项目时补齐缓存，避免显示裸 UUID
+                    self._ensure_log_cached(asset.log_id)
+                    log = self._log_cache.get(asset.log_id)
+                    log_label = f"{log.scene}/{log.shot}/{log.take}" if log else "（日志已删除）"
+                self.result_table.setItem(i, 5, QTableWidgetItem(log_label))
 
-            # 评级：用 RATING_LABELS 转为易读文本（如 "★★ 备选"），避免显示裸数字
-            rating_label = RATING_LABELS.get(asset.rating, RATING_LABELS[AssetRating.NONE.value])
-            self.result_table.setItem(i, 6, QTableWidgetItem(rating_label))
-
-            checksum_short = asset.checksum_value[:12] + "..." if asset.checksum_value else ""
-            self.result_table.setItem(i, 7, QTableWidgetItem(checksum_short))
-            self.result_table.setItem(i, 8, QTableWidgetItem(
-                asset.date_imported.strftime("%Y-%m-%d %H:%M")
-            ))
+                rating_label = RATING_LABELS.get(asset.rating, RATING_LABELS[AssetRating.NONE.value])
+                self.result_table.setItem(i, 6, QTableWidgetItem(rating_label))
+                checksum_short = asset.checksum_value[:12] + "..." if asset.checksum_value else ""
+                self.result_table.setItem(i, 7, QTableWidgetItem(checksum_short))
+                self.result_table.setItem(i, 8, QTableWidgetItem(
+                    asset.date_imported.strftime("%Y-%m-%d %H:%M")
+                ))
+        finally:
+            self.result_table.setSortingEnabled(sorting_enabled)
 
     @safe_slot("导出 CSV 失败")
     def _export_csv(self):

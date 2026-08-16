@@ -533,7 +533,7 @@ class ShootingLogView(RefreshOnShowView):
         if not self.current_project or not self.current_log_id:
             return
 
-        all_assets = self.db_service.get_media_assets(self.current_project.project_id)
+        all_assets = list(self.db_service.iter_project_assets(self.current_project.project_id))
         linked_ids = {a.asset_id for a in self.db_service.get_assets_by_log_id(self.current_log_id)}
         unlinked = [a for a in all_assets if a.asset_id not in linked_ids]
 
@@ -581,7 +581,7 @@ class ShootingLogView(RefreshOnShowView):
             QMessageBox.warning(self, "提示", "请先选择项目")
             return
 
-        all_assets = self.db_service.get_media_assets(self.current_project.project_id)
+        all_assets = list(self.db_service.iter_project_assets(self.current_project.project_id))
         if not all_assets:
             QMessageBox.information(self, "提示", "该项目下还没有导入素材，请先在媒体导入界面导入素材。")
             return
@@ -627,7 +627,7 @@ class ShootingLogView(RefreshOnShowView):
             QMessageBox.warning(self, "提示", "请先选择项目")
             return None
 
-        all_assets = self.db_service.get_media_assets(self.current_project.project_id)
+        all_assets = list(self.db_service.iter_project_assets(self.current_project.project_id))
         if not all_assets:
             QMessageBox.information(self, "提示", "该项目下还没有导入素材，无法填充 EXIF。")
             return None
@@ -726,7 +726,7 @@ class ShootingLogView(RefreshOnShowView):
             self.proj_asset_count_label.setText("")
             return
 
-        assets = self.db_service.get_media_assets(self.current_project.project_id)
+        assets = list(self.db_service.iter_project_assets(self.current_project.project_id))
         linked_count = sum(1 for a in assets if a.log_id)
         self.proj_asset_table.setRowCount(len(assets))
         sync_empty_state(self.proj_asset_table)

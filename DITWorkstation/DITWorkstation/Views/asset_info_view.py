@@ -23,10 +23,10 @@ from DITWorkstation.Utils import (
     open_in_file_manager, pick_directory, pick_save_file,
 )
 from DITWorkstation.ViewModels import TaskViewModel
-from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
+from DITWorkstation.Views.Widgets import AssetTableModel, RefreshOnShowView, WorkspaceProjectSelector
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 from DITWorkstation.Views.Widgets.error_dialog import show_error
-from DITWorkstation.Views.Widgets.table_factory import make_table
+from DITWorkstation.Views.Widgets.table_factory import make_table_view
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS
 
 # 缺失值占位符
@@ -166,6 +166,11 @@ class AssetInfoView(RefreshOnShowView):
         self._asset_page = 0
         self._asset_page_cursors = [None]
         self._asset_next_cursor = None
+        self._asset_load_generation = 0
+        self._pending_asset_load = None
+        self._asset_page_vm = TaskViewModel(self)
+        self._asset_page_vm.finished.connect(self._on_asset_page_finished)
+        self._asset_page_vm.error.connect(self._on_asset_page_error)
         self._export_vm = TaskViewModel(self)
         self._export_vm.progress.connect(self._on_export_progress)
         self._export_vm.finished.connect(self._on_export_finished)
@@ -316,14 +321,17 @@ class AssetInfoView(RefreshOnShowView):
         self.asset_count_label.setStyleSheet(f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};")
         left_layout.addWidget(self.asset_count_label)
 
-        self.asset_table = make_table(
-            ["文件名", "类型", "大小", "EXIF", "状态"],
+        self.asset_table = make_table_view(
             sortable=True,
             resize_to_contents_cols=[1, 2, 3, 4],
             selection_mode=QAbstractItemView.ExtendedSelection,
         )
+        self.asset_model = AssetTableModel(
+            ["文件名", "类型", "大小", "EXIF", "状态"], self._asset_cell, self,
+        )
+        self.asset_table.setModel(self.asset_model)
         # 表格全局样式由 main.py 注入的 GLOBAL_QSS 统一控制，不再单独 setStyleSheet
-        self.asset_table.itemSelectionChanged.connect(self._on_asset_selected)
+        self.asset_table.selectionModel().selectionChanged.connect(self._on_asset_selected)
         # 双击打开所在目录
         self.asset_table.doubleClicked.connect(self._on_asset_double_clicked)
         self.asset_table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -756,13 +764,22 @@ class AssetInfoView(RefreshOnShowView):
 
     def _load_assets(self, reset_page=True):
         project_id = self.selector.get_current_project_id()
+        if self._asset_page_vm.is_running():
+            # 项目切换或连续翻页时只保留最后一次请求；当前查询完成后立即执行。
+            self._pending_asset_load = reset_page
+            self._asset_load_generation += 1
+            self._asset_page_vm.cancel()
+            self.asset_count_label.setText("正在切换素材列表…")
+            return
         if reset_page:
             self._missing_scan_generation += 1
             self._asset_page = 0
             self._asset_page_cursors = [None]
             self._asset_next_cursor = None
-            self._asset_total = self.db_service.count_project_assets(project_id) if project_id else 0
-        self.asset_table.setRowCount(0)
+            self._asset_total = 0
+        self._asset_load_generation += 1
+        generation = self._asset_load_generation
+        self.asset_model.clear()
         sync_empty_state(self.asset_table)
         self._update_batch_state()
         self.current_file_label.setText("请选择左侧素材查看详情")
@@ -780,38 +797,81 @@ class AssetInfoView(RefreshOnShowView):
 
         page_size = 500
         cursor = self._asset_page_cursors[self._asset_page]
-        assets, self._asset_next_cursor = self.db_service.get_project_asset_page(
-            project_id, page_size=page_size, cursor=cursor,
-        )
-        self._assets = assets
-        self.asset_table.setRowCount(len(assets))
-        sync_empty_state(self.asset_table)
-        self.batch_exif_btn.setEnabled(len(assets) > 0)
-
-        for i, asset in enumerate(assets):
-            name_item = QTableWidgetItem(asset.file_name)
-            name_item.setData(Qt.UserRole, asset.asset_id)
-            self.asset_table.setItem(i, 0, name_item)
-            self.asset_table.setItem(i, 1, QTableWidgetItem(asset.file_type))
-            self.asset_table.setItem(i, 2, QTableWidgetItem(format_size(asset.file_size)))
-            # EXIF 状态标识
-            has_exif = bool(asset.camera_make or asset.camera_model or asset.lens_model)
-            exif_item = QTableWidgetItem("✓ 有" if has_exif else "— 无")
-            if has_exif:
-                exif_item.setForeground(QColor(COLOR.SUCCESS))
-            else:
-                exif_item.setForeground(QColor(COLOR.TEXT_SECONDARY))
-            self.asset_table.setItem(i, 3, exif_item)
-
-            # 文件存在性校验：自动触发，将失效条目标识为「文件已丢失」
-            is_missing = asset.asset_id in self._missing_ids
-            status_item = QTableWidgetItem("⚠ 文件已丢失" if is_missing else "检查中…")
-            status_item.setForeground(QColor(COLOR.DANGER if is_missing else COLOR.TEXT_SECONDARY))
-            self.asset_table.setItem(i, 4, status_item)
-
-        self._refresh_missing_summary()
         if reset_page:
             self._start_missing_file_scan(project_id)
+
+        def load_page(cancel_check):
+            if cancel_check():
+                raise InterruptedError("素材列表加载已取消")
+            total = self.db_service.count_project_assets(project_id) if reset_page else self._asset_total
+            if cancel_check():
+                raise InterruptedError("素材列表加载已取消")
+            assets, next_cursor = self.db_service.get_project_asset_page(
+                project_id, page_size=page_size, cursor=cursor,
+            )
+            return {
+                "generation": generation, "project_id": project_id, "total": total,
+                "assets": assets, "next_cursor": next_cursor,
+            }
+
+        self.asset_count_label.setText("正在加载素材列表…")
+        self.prev_asset_page_btn.setEnabled(False)
+        self.next_asset_page_btn.setEnabled(False)
+        self._asset_page_vm.start(
+            load_page, inject_cancel_check=True, task_name="project_asset_page", project_id=project_id,
+        )
+
+    def _on_asset_page_finished(self, result):
+        if result.get("generation") != self._asset_load_generation:
+            self._start_pending_asset_load()
+            return
+        if result.get("project_id") != self.selector.get_current_project_id():
+            self._start_pending_asset_load()
+            return
+        self._asset_total = result["total"]
+        self._assets = result["assets"]
+        self._asset_next_cursor = result["next_cursor"]
+        self.asset_model.set_assets(self._assets)
+        # 缺失扫描可能先于分页查询结束；此时把已得到的扫描结论回填新页面。
+        if not self._missing_scan_pending:
+            for asset in self._assets:
+                is_missing = asset.asset_id in self._missing_ids
+                self.asset_model.set_status(
+                    asset.asset_id, "⚠ 文件已丢失" if is_missing else "✓ 正常",
+                    QColor(COLOR.DANGER) if is_missing else QColor(COLOR.SUCCESS),
+                )
+        self.batch_exif_btn.setEnabled(bool(self._assets))
+        sync_empty_state(self.asset_table)
+        self._refresh_missing_summary()
+        self._start_pending_asset_load()
+
+    def _on_asset_page_error(self, error: str):
+        logger.warning(f"读取素材分页失败: {error}")
+        self.asset_count_label.setText(f"素材列表加载失败：{error}")
+        self._refresh_missing_summary()
+        self._start_pending_asset_load()
+
+    def _start_pending_asset_load(self):
+        if self._pending_asset_load is None:
+            return
+        reset_page = self._pending_asset_load
+        self._pending_asset_load = None
+        self._load_assets(reset_page=reset_page)
+
+    def _asset_cell(self, asset, column: int):
+        if column == 0:
+            return asset.file_name, None
+        if column == 1:
+            return asset.file_type, None
+        if column == 2:
+            return format_size(asset.file_size), None
+        if column == 3:
+            has_exif = bool(asset.camera_make or asset.camera_model or asset.lens_model)
+            return ("✓ 有", QColor(COLOR.SUCCESS)) if has_exif else ("— 无", QColor(COLOR.TEXT_SECONDARY))
+        default = ("⚠ 文件已丢失", QColor(COLOR.DANGER)) if asset.asset_id in self._missing_ids else (
+            "检查中…", QColor(COLOR.TEXT_SECONDARY)
+        )
+        return self.asset_model.status_for(asset.asset_id, default)
 
     def _next_asset_page(self):
         if self._asset_next_cursor is None:
@@ -883,15 +943,11 @@ class AssetInfoView(RefreshOnShowView):
 
         self._missing_scan_pending = False
         self._missing_ids = set(missing_ids or [])
-        for row in range(self.asset_table.rowCount()):
-            item = self.asset_table.item(row, 0)
-            status_item = self.asset_table.item(row, 4)
-            if item is None or status_item is None:
-                continue
-            is_missing = item.data(Qt.UserRole) in self._missing_ids
-            status_item.setText("⚠ 文件已丢失" if is_missing else "✓ 正常")
-            status_item.setForeground(
-                QColor(COLOR.DANGER) if is_missing else QColor(COLOR.SUCCESS)
+        for asset in self._assets:
+            is_missing = asset.asset_id in self._missing_ids
+            self.asset_model.set_status(
+                asset.asset_id, "⚠ 文件已丢失" if is_missing else "✓ 正常",
+                QColor(COLOR.DANGER) if is_missing else QColor(COLOR.SUCCESS),
             )
         self._refresh_missing_summary()
         if self.current_asset:
@@ -912,16 +968,13 @@ class AssetInfoView(RefreshOnShowView):
         self._missing_scan_pending = False
         self.cleanup_missing_btn.setEnabled(False)
         self.relink_missing_btn.setEnabled(False)
-        for row in range(self.asset_table.rowCount()):
-            status_item = self.asset_table.item(row, 4)
-            if status_item is not None:
-                status_item.setText("⚠ 检查失败")
-                status_item.setForeground(QColor(COLOR.DANGER))
+        for asset in self._assets:
+            self.asset_model.set_status(asset.asset_id, "⚠ 检查失败", QColor(COLOR.DANGER))
         logger.warning(f"文件存在性扫描失败: {error}")
 
     def _on_asset_selected(self):
-        row = self.asset_table.currentRow()
-        if row < 0:
+        index = self.asset_table.currentIndex()
+        if not index.isValid():
             self.current_asset = None
             self.refresh_exif_btn.setEnabled(False)
             self._sync_rating_buttons(None)
@@ -931,8 +984,9 @@ class AssetInfoView(RefreshOnShowView):
             self.missing_banner.setVisible(False)
             self._clear_properties()
             return
-        asset_id = self.asset_table.item(row, 0).data(Qt.UserRole)
-        self.current_asset = self.db_service.get_media_asset(asset_id)
+        row = index.row()
+        self.current_asset = self.asset_model.asset_at(row)
+        asset_id = self.current_asset.asset_id if self.current_asset else None
         if self.current_asset:
             # 使用最近一次后台扫描结果，避免在 UI 线程访问磁盘。
             is_missing = asset_id in self._missing_ids
@@ -959,11 +1013,9 @@ class AssetInfoView(RefreshOnShowView):
         """返回当前多选行对应的 asset_id 列表。"""
         ids = []
         for index in self.asset_table.selectionModel().selectedRows():
-            item = self.asset_table.item(index.row(), 0)
-            if item is not None:
-                aid = item.data(Qt.UserRole)
-                if aid:
-                    ids.append(aid)
+            asset = self.asset_model.asset_at(index.row())
+            if asset is not None:
+                ids.append(asset.asset_id)
         return ids
 
     def _update_batch_state(self):
@@ -984,12 +1036,10 @@ class AssetInfoView(RefreshOnShowView):
             self._missing_ids.add(asset_id)
         else:
             self._missing_ids.discard(asset_id)
-        status_item = self.asset_table.item(row, 4)
-        if status_item is not None:
-            status_item.setText("⚠ 文件已丢失" if is_missing else "✓ 正常")
-            status_item.setForeground(
-                QColor(COLOR.DANGER) if is_missing else QColor(COLOR.SUCCESS)
-            )
+        self.asset_model.set_status(
+            asset_id, "⚠ 文件已丢失" if is_missing else "✓ 正常",
+            QColor(COLOR.DANGER) if is_missing else QColor(COLOR.SUCCESS),
+        )
         self._refresh_missing_summary()
 
     @safe_slot("批量评级失败")
@@ -1162,26 +1212,17 @@ class AssetInfoView(RefreshOnShowView):
         """双击素材 → 打开所在目录（通过 item 的 UserRole 取 asset_id，排序安全）"""
         if not index.isValid():
             return
-        name_item = self.asset_table.item(index.row(), 0)
-        if name_item is None:
-            return
-        asset_id = name_item.data(Qt.UserRole)
-        if not asset_id:
-            return
-        asset = self.db_service.get_media_asset(asset_id)
+        asset = self.asset_model.asset_at(index.row())
         if asset is not None:
             self._open_asset_directory(asset)
 
     def _on_asset_context_menu(self, pos):
         """素材表右键菜单：打开所在目录 / 复制路径"""
         from PySide6.QtWidgets import QMenu
-        item = self.asset_table.itemAt(pos)
-        if not item:
+        index = self.asset_table.indexAt(pos)
+        if not index.isValid():
             return
-        row = item.row()
-        name_item = self.asset_table.item(row, 0)
-        asset_id = name_item.data(Qt.UserRole) if name_item else None
-        asset = self.db_service.get_media_asset(asset_id) if asset_id else None
+        asset = self.asset_model.asset_at(index.row())
         if not asset:
             return
 

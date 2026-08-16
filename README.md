@@ -322,12 +322,24 @@ python DITWorkstation/main.py
 
 ## 🧪 测试
 
-项目包含 351 个测试，覆盖核心服务业务逻辑、回收站恢复、跨平台路径重新链接、分页、后台任务、归档取消、工具函数、会话上下文、数据模型、缩略图、功能模式、文件状态扫描和无头 UI 交互。
+测试覆盖核心服务业务逻辑、回收站恢复、跨平台路径重新链接、分页、后台任务、归档取消、工具函数、会话上下文、数据模型、缩略图、功能模式、文件状态扫描和无头 UI 交互。
 
 ```bash
 # 激活虚拟环境后
 cd DITWorkstation
 pytest DITWorkstationTests/ -v
+```
+
+### 性能基准
+
+阶段 0 的合成数据基准生成独立数据库，不会读取或修改应用数据。它覆盖 1 万、5 万、10 万素材记录的项目打开、分页检索、流式 CSV 导出和归档，并将结果写为 JSON 与 Markdown，便于在性能改动前后比较。
+
+```bash
+# 仓库根目录执行
+python build/benchmark_database_workloads.py --assets 10000
+
+# 完整三档基准（可选加入文件导入、校验、归档与取消延迟）
+python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-workloads
 ```
 
 ### 测试覆盖
