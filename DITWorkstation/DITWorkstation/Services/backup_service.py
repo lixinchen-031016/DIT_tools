@@ -47,19 +47,23 @@ class BackupService:
 
         files = []
         if source.is_file():
+            stat = source.stat()
             files.append({
                 "path": str(source),
-                "size": source.stat().st_size,
+                "size": stat.st_size,
                 "name": source.name,
-                "relative": source.name
+                "relative": source.name,
+                "mtime_ns": stat.st_mtime_ns,
             })
         else:
             for item in scan_files(source):
+                stat = item.stat()
                 files.append({
                     "path": str(item),
-                    "size": item.stat().st_size,
+                    "size": stat.st_size,
                     "name": item.name,
-                    "relative": str(item.relative_to(source))
+                    "relative": str(item.relative_to(source)),
+                    "mtime_ns": stat.st_mtime_ns,
                 })
         return files
 
@@ -99,6 +103,53 @@ class BackupService:
             total_bytes=total_bytes
         )
         job.__dict__['_files_cache'] = files
+        return job
+
+    def create_incremental_backup_job(
+        self,
+        source_path: str,
+        target_paths: List[str],
+        algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
+        project_id: Optional[str] = None,
+    ) -> BackupJob:
+        """创建增量备份作业。
+
+        与最近一次覆盖同一来源及全部目标的成功备份快照比对 size/mtime。
+        不变文件仍会在执行时确认目标文件存在且大小一致，避免错误跳过被
+        人为删除的目标文件；它们不会再次复制或读取源文件计算哈希。
+        """
+        job = self.create_backup_job(source_path, target_paths, algorithm)
+        if self.db_service is None:
+            job.__dict__["_incremental"] = True
+            return job
+
+        requested = set(target_paths)
+        previous = None
+        for candidate in self.db_service.get_backup_jobs(project_id):
+            if candidate.get("source_path") != source_path:
+                continue
+            completed_targets = {
+                target.get("path") for target in candidate.get("targets", [])
+                if target.get("status") == CopyStatus.COMPLETED.value
+            }
+            if requested.issubset(completed_targets) and candidate.get("file_snapshots"):
+                previous = candidate
+                break
+
+        previous_by_relative = {
+            item.get("relative"): item for item in (previous or {}).get("file_snapshots", [])
+            if item.get("relative")
+        }
+        unchanged = 0
+        for item in job.__dict__["_files_cache"]:
+            old = previous_by_relative.get(item["relative"])
+            if old and old.get("size") == item["size"] and old.get("mtime_ns") == item["mtime_ns"]:
+                item["unchanged"] = True
+                item["checksum"] = old.get("checksum", "")
+                unchanged += 1
+        job.__dict__["_incremental"] = True
+        job.__dict__["_incremental_base_job_id"] = (previous or {}).get("job_id", "")
+        job.__dict__["_unchanged_files"] = unchanged
         return job
 
     def check_target_space(
@@ -218,6 +269,15 @@ class BackupService:
 
         if progress_callback:
             progress_callback(total, total, "完成")
+        self.db_service.record_operation(
+            "备份校验",
+            f"检查 {stats['checked']}，一致 {stats['matched']}，"
+            f"缺失 {stats['missing']}，不一致 {stats['mismatch']}",
+            project_id=project_id,
+            status="success" if not (stats["missing"] or stats["mismatch"] or stats["errors"]) else "error",
+            object_type="project",
+            object_id=project_id,
+        )
         return stats
 
     def is_cancelled(self) -> bool:
@@ -382,6 +442,7 @@ class BackupService:
                 ),
                 pending_files=list(t.get("pending_files", [])),
             ))
+        job.__dict__["_files_cache"] = list(raw.get("file_snapshots", []))
         return job
 
     def retry_failed_files(
@@ -421,8 +482,13 @@ class BackupService:
         self._set_cancelled(False)
         job.status = BackupStatus.RUNNING
         job.completed_at = None
-        files = self.scan_source(job.source_path)
-        file_by_rel = {f["relative"]: f for f in files}
+        # 重试应以启动时持久化的快照为准，避免因介质慢/已拔出而重扫整个源目录。
+        files = list(getattr(job, "_files_cache", []) or [])
+        if not files:
+            logger.warning("重试作业缺少源文件快照，回退为全量扫描")
+            files = self.scan_source(job.source_path)
+            job.__dict__["_files_cache"] = files
+        file_by_rel = {f.get("relative"): f for f in files if f.get("relative")}
 
         with self._executor_lock:
             if self._executor:
@@ -433,8 +499,23 @@ class BackupService:
         for target in retry_targets:
             # 重置目标状态；total_files/total_bytes 保留历史值用于统计
             target.status = CopyStatus.COPYING
-            failed_files = [file_by_rel[r] for r in target.failed_files if r in file_by_rel]
-            missing = [r for r in target.failed_files if r not in file_by_rel]
+            failed_files, missing = [], []
+            for relative in target.failed_files:
+                item = file_by_rel.get(relative)
+                if item is None:
+                    missing.append(relative)
+                    continue
+                try:
+                    stat = Path(item["path"]).stat()
+                    if stat.st_size != item.get("size") or (
+                        item.get("mtime_ns") is not None and stat.st_mtime_ns != item["mtime_ns"]
+                    ):
+                        missing.append(relative)
+                        continue
+                except OSError:
+                    missing.append(relative)
+                    continue
+                failed_files.append(item)
             target.failed_files = list(missing)
             target.pending_files = [
                 f.get("relative", Path(f["path"]).name) for f in failed_files
@@ -442,7 +523,7 @@ class BackupService:
             target.error_message = ""
             if missing:
                 target.error_message = (
-                    f"源目录中缺失 {len(missing)} 个文件: " + "、".join(missing[:10])
+                    f"源文件不可用或已变化 {len(missing)} 个: " + "、".join(missing[:10])
                 )
             if not failed_files:
                 # 失败文件在源目录中全部缺失，无法重试
@@ -597,6 +678,23 @@ class BackupService:
                 except OSError:
                     dest_size = None
                 if dest_size == file_info["size"]:
+                    # 增量作业已用上一份快照确认源文件未变化；这里只确认目标仍
+                    # 存在且大小一致，避免每次重复备份都重新读取源/目标计算哈希。
+                    if file_info.get("unchanged"):
+                        target.completed_files += 1
+                        target.copied_bytes += file_info["size"]
+                        if relative in target.pending_files:
+                            target.pending_files.remove(relative)
+                        if persist_callback:
+                            persist_callback()
+                        if file_completed_callback:
+                            file_completed_callback(target.path, CopyTask(
+                                source_path=str(src_file), dest_path=str(dest_file),
+                                file_size=file_info["size"], status=CopyStatus.COMPLETED,
+                                progress=1.0, source_checksum=file_info.get("checksum", ""),
+                                speed_mbps=0.0,
+                            ))
+                        continue
                     try:
                         src_hash = self.checksum_service.compute_file_checksum(
                             str(src_file), algorithm,
@@ -640,6 +738,8 @@ class BackupService:
                     ),
                     cancel_check=self._is_cancelled,
                 )
+                # 该值随任务快照持久化，供未来的增量判定及交付报告使用。
+                file_info["checksum"] = source_checksum.hash_value
                 checksum_time = time.time()
 
                 if verify:

@@ -15,6 +15,7 @@ from DITWorkstation.Utils.workers import WorkerThread, TaskState
 class TaskRecord:
     """任务观测基线；后续可直接映射至持久化任务历史。"""
     task_name: str
+    task_id: Optional[str] = None
     project_id: Optional[str] = None
     recovery_info: dict[str, Any] = field(default_factory=dict)
     state: TaskState = TaskState.IDLE
@@ -32,8 +33,9 @@ class TaskViewModel(QObject):
     finished = Signal(object)
     error = Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, task_store=None):
         super().__init__(parent)
+        self.task_store = task_store
         self.worker: Optional[WorkerThread] = None
         self._last_state = TaskState.IDLE
         self.current_record: Optional[TaskRecord] = None
@@ -74,6 +76,16 @@ class TaskViewModel(QObject):
             project_id=project_id,
             recovery_info=dict(recovery_info or {}),
         )
+        if self.task_store is not None:
+            try:
+                self.current_record.task_id = self.task_store.create_task_history(
+                    self.current_record.task_name, project_id,
+                    parameters={"args_count": len(args), "kwargs": sorted(kwargs)},
+                    recovery_info=self.current_record.recovery_info,
+                )
+            except Exception:
+                # 任务本身不能因为观测存储不可用而被阻塞。
+                self.current_record.task_id = None
         worker.state_changed.connect(self._on_state_changed)
         worker.progress.connect(self.progress)
         worker.file_completed.connect(self.file_completed)
@@ -110,6 +122,7 @@ class TaskViewModel(QObject):
                 self.current_record.started_at = datetime.now()
             if state in (TaskState.COMPLETED, TaskState.CANCELLED, TaskState.FAILED):
                 self.current_record.completed_at = datetime.now()
+            self._persist_current()
         self.state_changed.emit(value)
 
     def mark_recoverable(self, recovery_info: Optional[dict[str, Any]] = None):
@@ -118,12 +131,14 @@ class TaskViewModel(QObject):
             self.current_record.state = TaskState.RECOVERABLE
             self.current_record.recovery_info.update(recovery_info or {})
             self.current_record.completed_at = datetime.now()
+            self._persist_current()
         self._last_state = TaskState.RECOVERABLE
         self.state_changed.emit(TaskState.RECOVERABLE.value)
 
     def _on_finished(self, value):
         if self.current_record is not None:
             self.current_record.completed_at = datetime.now()
+            self._persist_current(output={"result": value})
             self.history.append(self.current_record)
             self.current_record = None
         self._clear_worker()
@@ -133,7 +148,22 @@ class TaskViewModel(QObject):
         if self.current_record is not None:
             self.current_record.error_summary = message
             self.current_record.completed_at = datetime.now()
+            self._persist_current(error_summary=message)
             self.history.append(self.current_record)
             self.current_record = None
         self._clear_worker()
         self.error.emit(message)
+
+    def _persist_current(self, *, output: Optional[dict] = None, error_summary: str = ""):
+        """尽力写入任务历史，不影响前台任务的执行结果。"""
+        record = self.current_record
+        if self.task_store is None or record is None or not record.task_id:
+            return
+        try:
+            self.task_store.update_task_history(
+                record.task_id, record.state.value, output=output,
+                error_summary=error_summary or record.error_summary,
+                recovery_info=record.recovery_info,
+            )
+        except Exception:
+            return

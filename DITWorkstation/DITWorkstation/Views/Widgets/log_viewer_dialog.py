@@ -1,10 +1,13 @@
 """日志查看器对话框：同时支持查看系统日志文件与应用操作审计日志。"""
+import csv
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QTabWidget,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QHeaderView,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QHeaderView, QComboBox,
+    QLineEdit, QFileDialog,
 )
 
 from DITWorkstation.App import config
@@ -79,6 +82,8 @@ def _read_log_files(log_dir: Path, max_chars: int = 3 * 1024 * 1024) -> str:
 class LogViewerDialog(QDialog):
     """在应用内查看系统日志文件与操作审计日志。"""
 
+    object_requested = Signal(str, str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("日志查看器")
@@ -101,6 +106,33 @@ class LogViewerDialog(QDialog):
         self.tabs.addTab(self.system_log_text, "系统日志")
 
         # ===== 标签二：操作日志 =====
+        operation_page = QDialog()
+        operation_layout = QVBoxLayout(operation_page)
+        operation_layout.setContentsMargins(0, 0, 0, 0)
+
+        filters = QHBoxLayout()
+        self.project_filter = QComboBox()
+        self.project_filter.addItem("全部项目", "")
+        self.event_filter = QLineEdit()
+        self.event_filter.setPlaceholderText("事件")
+        self.status_filter = QComboBox()
+        self.status_filter.addItem("全部结果", "")
+        for key, label in _STATUS_LABELS.items():
+            self.status_filter.addItem(label, key)
+        self.object_filter = QLineEdit()
+        self.object_filter.setPlaceholderText("对象类型")
+        self.date_from_filter = QLineEdit()
+        self.date_from_filter.setPlaceholderText("起始日期 YYYY-MM-DD")
+        self.date_to_filter = QLineEdit()
+        self.date_to_filter.setPlaceholderText("结束日期 YYYY-MM-DD")
+        for widget in (self.project_filter, self.event_filter, self.status_filter,
+                       self.object_filter, self.date_from_filter, self.date_to_filter):
+            filters.addWidget(widget)
+        apply_filters_btn = QPushButton("筛选")
+        apply_filters_btn.clicked.connect(self._reload_operation_logs)
+        filters.addWidget(apply_filters_btn)
+        operation_layout.addLayout(filters)
+
         self.operation_table = QTableWidget(0, 6)
         self.operation_table.setHorizontalHeaderLabels(
             ["时间", "项目", "事件", "详情", "状态", "对象"]
@@ -115,7 +147,20 @@ class LogViewerDialog(QDialog):
         header.setSectionResizeMode(QHeaderView.Interactive)
         for col, width in ((0, 150), (1, 120), (2, 100), (3, 320), (4, 70), (5, 140)):
             self.operation_table.setColumnWidth(col, width)
-        self.tabs.addTab(self.operation_table, "操作日志")
+        self.operation_table.itemDoubleClicked.connect(self._request_selected_object)
+        operation_layout.addWidget(self.operation_table, 1)
+
+        operation_actions = QHBoxLayout()
+        operation_actions.addStretch()
+        self.open_object_btn = QPushButton("打开关联对象")
+        self.open_object_btn.setToolTip("跳转到关联对象所在的工作区；对象 ID 会复制到剪贴板供定位")
+        self.open_object_btn.clicked.connect(self._request_selected_object)
+        operation_actions.addWidget(self.open_object_btn)
+        self.export_operations_btn = QPushButton("导出 CSV")
+        self.export_operations_btn.clicked.connect(self._export_operations)
+        operation_actions.addWidget(self.export_operations_btn)
+        operation_layout.addLayout(operation_actions)
+        self.tabs.addTab(operation_page, "操作日志")
 
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -167,7 +212,18 @@ class LogViewerDialog(QDialog):
     def _reload_operation_logs(self):
         try:
             db = get_db_service()
-            operations = db.get_recent_operations(limit=_LATEST_OPERATIONS_LIMIT)
+            self._populate_projects(db)
+            date_from = self._parse_date(self.date_from_filter.text(), end=False)
+            date_to = self._parse_date(self.date_to_filter.text(), end=True)
+            operations = db.get_recent_operations(
+                limit=_LATEST_OPERATIONS_LIMIT,
+                project_id=self.project_filter.currentData() or None,
+                event=self.event_filter.text().strip(),
+                status=self.status_filter.currentData() or "",
+                object_type=self.object_filter.text().strip(),
+                date_from=date_from,
+                date_to=date_to,
+            )
         except Exception as e:
             logger.warning(f"读取操作日志失败: {e}")
             self.info_label.setText("读取操作日志失败，请稍后重试。")
@@ -201,8 +257,75 @@ class LogViewerDialog(QDialog):
                 object_text,
             ]
             for col, value in enumerate(values):
-                self.operation_table.setItem(row, col, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                if col == 0:
+                    item.setData(Qt.UserRole, op)
+                self.operation_table.setItem(row, col, item)
 
         self.info_label.setText(
-            f"操作审计日志：共 {len(operations)} 条（最近 {_LATEST_OPERATIONS_LIMIT} 条）"
+            f"操作审计日志：匹配 {len(operations)} 条（最多 {_LATEST_OPERATIONS_LIMIT} 条）"
         )
+
+    def _populate_projects(self, db):
+        """刷新项目筛选项，同时保留用户当前选择。"""
+        selected = self.project_filter.currentData()
+        if self.project_filter.count() > 1:
+            return
+        for project in db.get_projects():
+            self.project_filter.addItem(project.name, project.project_id)
+        index = self.project_filter.findData(selected)
+        if index >= 0:
+            self.project_filter.setCurrentIndex(index)
+
+    @staticmethod
+    def _parse_date(value: str, end: bool) -> datetime | None:
+        value = value.strip()
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+            if len(value) == 10 and end:
+                return parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+            return parsed
+        except ValueError:
+            return None
+
+    def _selected_operation(self):
+        row = self.operation_table.currentRow()
+        if row < 0:
+            return None
+        item = self.operation_table.item(row, 0)
+        return item.data(Qt.UserRole) if item else None
+
+    def _request_selected_object(self, *_args):
+        operation = self._selected_operation()
+        if not operation or not operation.get("object_id"):
+            self.info_label.setText("此记录没有关联对象。")
+            return
+        object_type, object_id = operation.get("object_type", ""), operation["object_id"]
+        from PySide6.QtWidgets import QApplication
+        QApplication.clipboard().setText(object_id)
+        self.object_requested.emit(object_type, object_id)
+        self.info_label.setText(f"关联 {object_type or '对象'} ID 已复制：{object_id}")
+
+    def _export_operations(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出操作审计日志", "operation_audit.csv", "CSV 文件 (*.csv)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(["时间", "项目", "事件", "详情", "状态", "对象类型", "对象 ID", "恢复 ID"])
+                for row in range(self.operation_table.rowCount()):
+                    op = self.operation_table.item(row, 0).data(Qt.UserRole)
+                    writer.writerow([
+                        self.operation_table.item(row, 0).text(),
+                        self.operation_table.item(row, 1).text(), op.get("event", ""),
+                        op.get("detail", ""), op.get("status", ""),
+                        op.get("object_type", ""), op.get("object_id", ""), op.get("recovery_id", ""),
+                    ])
+            self.info_label.setText(f"已导出 {self.operation_table.rowCount()} 条操作审计日志：{path}")
+        except OSError as exc:
+            self.info_label.setText(f"导出操作审计日志失败：{exc}")

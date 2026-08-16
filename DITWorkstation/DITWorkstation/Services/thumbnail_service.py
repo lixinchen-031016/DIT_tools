@@ -5,9 +5,9 @@
 - 命中缓存同步返回 QPixmap；未命中投递到 QThreadPool 异步生成，完成后发 thumbnail_ready
 - 图片：Pillow Image.thumbnail 解码缩放
 - RAW：回退链 Pillow 直接解码 → EXIF 内嵌 JPEG/TIFF 预览（exifread，多数相机内嵌）
-  → 可选 rawpy 全量解码（未安装时自动跳过，安装后自动启用，无需改代码）
+  → rawpy 全量解码
 - 视频：回退链 ffmpeg 抽第 1 秒帧 → macOS 系统 QuickLook（qlmanage，无需安装）
-  → PyAV / OpenCV（可选依赖，安装后自动启用）；全部不可用时返回 None 显示占位图
+  → PyAV；全部解码失败时返回 None 显示占位图
 - QThreadPool 限 4 并发，避免大批量时抢占主线程
 """
 import io
@@ -46,7 +46,7 @@ class ThumbnailService(QObject):
         self._ffmpeg_available = shutil.which("ffmpeg") is not None
         if not self._ffmpeg_available:
             logger.info(
-                "未检测到 ffmpeg，视频缩略图将尝试 macOS QuickLook / PyAV / OpenCV 备选方案"
+                "未检测到 ffmpeg，视频缩略图将尝试 macOS QuickLook / PyAV 备选方案"
             )
 
     def get_thumbnail(self, cache_key: str, file_path: str,
@@ -128,7 +128,7 @@ class ThumbnailService(QObject):
         回退链：
         1. Pillow 直接解码（jpg/png/tiff/webp 等）；
         2. EXIF 内嵌 JPEG/TIFF 预览（exifread，相机 RAW 普遍内嵌）；
-        3. rawpy 全量解码（可选依赖，未安装时自动跳过）。
+        3. rawpy 全量解码（正式发布依赖）。
         """
         from PIL import Image
 
@@ -148,7 +148,7 @@ class ThumbnailService(QObject):
             except Exception as e:
                 logger.debug(f"EXIF 内嵌预览解码失败 {file_path}: {e}")
 
-        # 3. rawpy 全量解码（可选依赖）
+        # 3. rawpy 全量解码
         return self._decode_rawpy(file_path, size)
 
     @staticmethod
@@ -190,8 +190,7 @@ class ThumbnailService(QObject):
     def _decode_rawpy(file_path: str, size: int) -> Optional[bytes]:
         """用 rawpy（libraw）全量解码 RAW 为缩略图。
 
-        可选依赖：未安装 rawpy 时静默返回 None，不影响其他路径。
-        安装后自动启用（pip install rawpy），无需改代码。
+        rawpy 是正式发布依赖；ImportError 防御仅用于开发环境或损坏安装。
         """
         try:
             import rawpy
@@ -212,8 +211,7 @@ class ThumbnailService(QObject):
         回退链（全部失败返回 None，UI 显示占位图）：
         1. ffmpeg 抽第 1 秒帧（PATH 中可用时）；
         2. macOS 系统 QuickLook（qlmanage，无第三方依赖）；
-        3. PyAV（可选依赖 av）；
-        4. OpenCV（可选依赖 opencv-python-headless）。
+        3. PyAV（正式依赖 av）。
         """
         frame = self._ffmpeg_frame(file_path, size)
         if frame:
@@ -224,7 +222,7 @@ class ThumbnailService(QObject):
         frame = self._av_frame(file_path, size)
         if frame:
             return frame
-        return self._opencv_frame(file_path, size)
+        return None
 
     def _ffmpeg_frame(self, file_path: str, size: int) -> Optional[bytes]:
         """用 ffmpeg 抽视频第 1 秒帧并缩放（PNG bytes）。"""
@@ -274,7 +272,7 @@ class ThumbnailService(QObject):
 
     @staticmethod
     def _av_frame(file_path: str, size: int) -> Optional[bytes]:
-        """用 PyAV（可选依赖 av）解码视频首帧为缩略图。"""
+        """用 PyAV（正式依赖 av）解码视频首帧为缩略图。"""
         try:
             import av
         except ImportError:
@@ -293,29 +291,6 @@ class ThumbnailService(QObject):
         except Exception as e:
             logger.debug(f"PyAV 抽帧失败 {file_path}: {e}")
             return None
-
-    @staticmethod
-    def _opencv_frame(file_path: str, size: int) -> Optional[bytes]:
-        """用 OpenCV（可选依赖 opencv-python-headless）读取视频首帧为缩略图。"""
-        try:
-            import cv2
-        except ImportError:
-            return None
-        try:
-            cap = cv2.VideoCapture(file_path)
-            try:
-                ok, frame = cap.read()
-                if not ok:
-                    return None
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            finally:
-                cap.release()
-            from PIL import Image
-            return ThumbnailService._to_png(Image.fromarray(rgb), size)
-        except Exception as e:
-            logger.debug(f"OpenCV 抽帧失败 {file_path}: {e}")
-            return None
-
 
 class _ThumbnailWorker(QRunnable):
     """缩略图生成任务：在 QThreadPool 中执行，完成后发信号。"""

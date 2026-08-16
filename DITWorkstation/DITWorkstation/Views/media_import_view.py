@@ -21,10 +21,11 @@ from DITWorkstation.Models import Project
 from DITWorkstation.Services.media_import_service import MediaImportService
 from DITWorkstation.Services.thumbnail_service import ThumbnailService, SIZE_LARGE
 from DITWorkstation.Utils import (
-    format_size, WorkerThread, get_db_service, pick_directory,
+    format_size, get_db_service, pick_directory,
     find_overwrite_conflicts, open_in_file_manager, is_writable_directory,
     logger,
 )
+from DITWorkstation.ViewModels import TaskViewModel
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 from DITWorkstation.Views.Widgets.error_dialog import show_error
@@ -45,7 +46,10 @@ class MediaImportView(RefreshOnShowView):
         self.db_service = get_db_service()
         self.import_service = MediaImportService(db_service=self.db_service)
         self.current_project: Optional[Project] = None
-        self.worker = None
+        self.task_vm = TaskViewModel(self, task_store=self.db_service)
+        self.task_vm.finished.connect(self._on_import_finished)
+        self.task_vm.error.connect(self._on_import_error)
+        self.task_vm.progress.connect(self._on_progress)
         self._cancel_requested = False
         # 扫描得到的全部文件（含 stat 信息），时间筛选时在此列表上过滤，
         # 避免每次调整时间范围都重新扫描存储卡。
@@ -820,7 +824,7 @@ class MediaImportView(RefreshOnShowView):
         self.progress_bar.setValue(0)
         self._cancel_requested = False
 
-        self.worker = WorkerThread(
+        self.task_vm.start(
             self.import_service.import_assets,
             self.current_project.project_id,
             selected_files,
@@ -832,20 +836,18 @@ class MediaImportView(RefreshOnShowView):
             shot=shot,
             cancel_check=lambda: self._cancel_requested,
             inject_progress=True,
+            task_name="媒体导入",
+            project_id=self.current_project.project_id,
+            recovery_info={"source_path": self.source_edit.text(), "file_count": len(selected_files)},
         )
-        self.worker.finished.connect(self._on_import_finished)
-        self.worker.error.connect(self._on_import_error)
-        self.worker.progress.connect(self._on_progress)
-        # 线程结束后自动释放，避免 QThread 对象泄漏
-        self.worker.thread_finished.connect(self.worker.deleteLater)
-        self.worker.start()
 
         self._log("开始导入...")
         self.status_label.setText("正在导入...")
 
     def _cancel_import(self):
-        if self.worker and self.worker.isRunning():
+        if self.task_vm.is_running():
             self._cancel_requested = True
+            self.task_vm.cancel()
             # service 通过 cancel_check 回调判断取消，无需 Qt 中断标志
             self._log("取消导入...")
             self.status_label.setText("正在取消...")
@@ -860,8 +862,6 @@ class MediaImportView(RefreshOnShowView):
         self.import_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.progress_bar.setValue(100)
-        # worker 已连 deleteLater，这里清空引用避免悬挂
-        self.worker = None
 
         # 防御 result 为 None 或非 dict
         if not isinstance(result, dict):
@@ -919,7 +919,6 @@ class MediaImportView(RefreshOnShowView):
         self.cancel_btn.setEnabled(False)
         self.status_label.setText(f"❌ 错误: {error}")
         self._log(f"导入错误: {error}")
-        self.worker = None
         show_error(
             title="导入错误",
             description=error,

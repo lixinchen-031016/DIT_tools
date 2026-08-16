@@ -46,7 +46,7 @@ class BackupView(RefreshOnShowView):
         # 复用 db_service 与 checksum_service，与备份共享哈希缓存
         self.import_service = MediaImportService(db_service=self.db_service)
         self.current_job: BackupJob = None
-        self.task_vm = TaskViewModel(self)
+        self.task_vm = TaskViewModel(self, task_store=self.db_service)
         self.task_vm.progress.connect(self._on_progress)
         self.task_vm.file_completed.connect(self._on_file_completed)
         self.task_vm.finished.connect(self._on_task_finished)
@@ -195,6 +195,12 @@ class BackupView(RefreshOnShowView):
             "拷贝完成后重新计算目标文件校验和，与源文件比对，确保拷贝无误差。建议始终勾选。"
         )
         config_row.addWidget(self.verify_check)
+        self.incremental_check = QCheckBox("增量备份")
+        self.incremental_check.setToolTip(
+            "与同一来源和目标的上次成功备份快照比对。未变化文件不重复复制；"
+            "目标文件丢失时仍会自动补拷。需要全面位错误检查时使用下方“校验已有备份”。"
+        )
+        config_row.addWidget(self.incremental_check)
         config_row.addStretch()
         config_layout.addLayout(config_row)
 
@@ -699,8 +705,15 @@ class BackupView(RefreshOnShowView):
         # 锁定本次备份关联的项目，避免备份过程中用户切换项目导致导入到错误项目
         self._backup_project_id = project_id
 
-        # 创建备份作业
-        self.current_job = self.backup_service.create_backup_job(source, targets, algorithm)
+        # 创建备份作业；增量模式以持久化快照筛选不变文件。
+        if self.incremental_check.isChecked():
+            self.current_job = self.backup_service.create_incremental_backup_job(
+                source, targets, algorithm, project_id=project_id,
+            )
+            unchanged = self.current_job.__dict__.get("_unchanged_files", 0)
+            self._log(f"增量快照比对完成：{unchanged} 个未变化文件将跳过复制")
+        else:
+            self.current_job = self.backup_service.create_backup_job(source, targets, algorithm)
         self._log(f"创建备份作业 [{self.current_job.job_id}]: {len(targets)} 个目标, "
                   f"{self.current_job.total_files} 个文件"
                   + (f"，关联项目 {project_id}" if project_id else ""))

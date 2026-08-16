@@ -1,5 +1,6 @@
 """项目概览看板视图 - 聚合展示当前项目进度，提供 SOP 下一步引导"""
 import zipfile
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -10,7 +11,7 @@ from PySide6.QtGui import QColor
 
 from DITWorkstation.Utils import (
     get_db_service, format_size, logger, safe_slot,
-    pick_save_file, pick_open_file, pick_directory, WorkerThread,
+    pick_save_file, pick_open_file, pick_directory,
 )
 from DITWorkstation.App.navigation import get_nav_index
 from DITWorkstation.App.feature_flags import is_enabled
@@ -18,6 +19,8 @@ from DITWorkstation.App.session_context import (
     get_data_bus, get_current_workspace_id, set_current_project,
 )
 from DITWorkstation.Services.archive_service import ArchiveService
+from DITWorkstation.Services.project_health_service import ProjectHealthService
+from DITWorkstation.ViewModels import TaskViewModel
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
 from DITWorkstation.Views.Widgets.project_template_dialog import (
     create_project_from_template, save_project_as_template,
@@ -92,7 +95,11 @@ class ProjectDashboardView(RefreshOnShowView):
         super().__init__()
         self.db_service = get_db_service()
         self.archive_service = ArchiveService(db_service=self.db_service)
-        self.worker = None
+        self.health_service = ProjectHealthService(self.db_service)
+        self.task_vm = TaskViewModel(self, task_store=self.db_service)
+        self.task_vm.error.connect(self._on_task_error)
+        self.task_vm.finished.connect(self._on_task_finished)
+        self._dashboard_task_kind = None
         self._setup_ui()
         self._archive_progress.connect(self._on_task_progress)
         # 监听选择控件的项目切换，刷新统计卡片
@@ -268,6 +275,26 @@ class ProjectDashboardView(RefreshOnShowView):
         )
         layout.addWidget(self.recent_ops_label)
 
+        self.health_label = QLabel("项目健康")
+        self.health_label.setStyleSheet(
+            f"font-size: {FONT_SIZE.LG}px; font-weight: 600; color: {COLOR.TEXT_PRIMARY}; margin-top: 8px;"
+        )
+        layout.addWidget(self.health_label)
+        health_row = QHBoxLayout()
+        self.health_summary_label = QLabel("请选择项目以查看健康状态")
+        self.health_summary_label.setWordWrap(True)
+        self.health_summary_label.setStyleSheet(
+            f"background-color: {COLOR.BG_CARD}; color: {COLOR.TEXT_PRIMARY}; "
+            f"border: 1px solid {COLOR.BORDER}; border-radius: {RADIUS.BUTTON}px; "
+            f"padding: 12px 16px; font-size: {FONT_SIZE.SM}px;"
+        )
+        health_row.addWidget(self.health_summary_label, 1)
+        self.refresh_health_btn = QPushButton("刷新健康状态")
+        self.refresh_health_btn.setToolTip("检查失联素材、失败任务、待重试文件和备份盘剩余容量")
+        self.refresh_health_btn.clicked.connect(self._refresh_health)
+        health_row.addWidget(self.refresh_health_btn)
+        layout.addLayout(health_row)
+
         layout.addStretch()
 
         self._apply_usage_mode_visibility()
@@ -296,6 +323,10 @@ class ProjectDashboardView(RefreshOnShowView):
             # 最近操作审计面板
             self.recent_label.setVisible(False)
             self.recent_ops_label.setVisible(False)
+        if not is_enabled("audit_panel"):
+            self.health_label.setVisible(False)
+            self.health_summary_label.setVisible(False)
+            self.refresh_health_btn.setVisible(False)
 
     @safe_slot("从模板新建项目失败")
     def _create_from_template(self):
@@ -357,6 +388,8 @@ class ProjectDashboardView(RefreshOnShowView):
             self.card_backups.set_value("—", "")
             self.card_logs.set_value("—", "")
             self.card_size.set_value("—", "")
+            self.health_summary_label.setText("请选择项目以查看健康状态")
+            self.refresh_health_btn.setEnabled(False)
             if is_enabled("shooting_log"):
                 self.sop_hint.setText(
                     "💡 请先选择或创建项目。可在「媒体导入」或「拍摄日志」视图新建项目，"
@@ -371,6 +404,7 @@ class ProjectDashboardView(RefreshOnShowView):
             return
 
         self._set_guide_enabled(True)
+        self.refresh_health_btn.setEnabled(True)
 
         try:
             stats = self.db_service.get_project_stats(project_id)
@@ -415,6 +449,33 @@ class ProjectDashboardView(RefreshOnShowView):
 
         # SOP 提示
         self.sop_hint.setText(self._build_sop_hint(asset_count, backed_up, log_count, backup_job_count))
+        self._refresh_health(capture_capacity=False)
+
+    @safe_slot("刷新项目健康状态失败")
+    def _refresh_health(self, _checked=False, capture_capacity=True):
+        project_id = self.selector.get_current_project_id()
+        if not project_id:
+            return
+        report = self.health_service.get_health_report(project_id, capture_capacity=capture_capacity)
+        issues = report["issues"]
+        check = report["last_integrity_check"]
+        check_text = "从未校验" if not check else (
+            check["created_at"].strftime("%Y-%m-%d %H:%M") if check.get("created_at") else "时间未知"
+        )
+        capacity_lines = []
+        for item in report["capacities"]:
+            if item["available"]:
+                capacity_lines.append(
+                    f"{Path(item['path']).name or item['path']}：剩余 {format_size(item['free_bytes'])}"
+                )
+            else:
+                capacity_lines.append(f"{Path(item['path']).name or item['path']}：不可达")
+        state = "正常" if report["severity"] == "healthy" else "需要关注"
+        self.health_summary_label.setText(
+            f"状态：{state}  |  未备份 {issues['unbacked_assets']}  |  失联路径 {issues['missing_assets']}  | "
+            f"失败任务 {issues['failed_tasks']}  |  待重试 {issues['retry_files']}\n"
+            f"最后校验：{check_text}" + ("  |  " + "；".join(capacity_lines) if capacity_lines else "")
+        )
 
     def _refresh_recent_operations(self):
         """刷新「最近操作」审计日志摘要（最近 5 条）。"""
@@ -512,7 +573,7 @@ class ProjectDashboardView(RefreshOnShowView):
         if not project_id:
             QMessageBox.warning(self, "提示", "请先选择要归档的项目")
             return
-        if self.worker and self.worker.isRunning():
+        if self.task_vm.is_running():
             QMessageBox.warning(self, "提示", "已有任务正在运行，请稍候")
             return
 
@@ -533,30 +594,29 @@ class ProjectDashboardView(RefreshOnShowView):
             return
 
         self._set_task_running(True, f"归档项目（{'含' if include_files else '不含'}素材文件）…")
-        self.worker = WorkerThread(
+        self._dashboard_task_kind = "archive"
+        self.task_vm.start(
             self.archive_service.archive_project,
             project_id,
             path,
             include_files=include_files,
             progress_callback=lambda cur, tot, msg: self._archive_progress.emit(cur, tot, msg),
             inject_cancel_check=True,
+            task_name="归档项目",
+            project_id=project_id,
+            recovery_info={"archive_path": path, "include_files": include_files},
         )
-        self.worker.finished.connect(self._on_archive_finished)
-        self.worker.error.connect(self._on_task_error)
-        self.worker.thread_finished.connect(self.worker.deleteLater)
-        self.worker.start()
 
     @Slot(object)
     def _on_archive_finished(self, result):
         self._set_task_running(False)
-        self.worker = None
         QMessageBox.information(
             self, "归档完成", f"项目已归档到：\n{result}\n\n可随时通过「恢复项目」还原。"
         )
 
     @safe_slot("恢复项目失败")
     def _restore_project(self):
-        if self.worker and self.worker.isRunning():
+        if self.task_vm.is_running():
             QMessageBox.warning(self, "提示", "已有任务正在运行，请稍候")
             return
 
@@ -592,7 +652,8 @@ class ProjectDashboardView(RefreshOnShowView):
                     restore_files = True
 
         self._set_task_running(True, "恢复项目…")
-        self.worker = WorkerThread(
+        self._dashboard_task_kind = "restore"
+        self.task_vm.start(
             self.archive_service.restore_project,
             path,
             workspace_id=workspace_id,
@@ -601,16 +662,21 @@ class ProjectDashboardView(RefreshOnShowView):
             verify=restore_files,
             progress_callback=lambda cur, tot, msg: self._archive_progress.emit(cur, tot, msg),
             inject_cancel_check=True,
+            task_name="恢复项目",
+            recovery_info={"archive_path": path, "restore_files": restore_files},
         )
-        self.worker.finished.connect(self._on_restore_finished)
-        self.worker.error.connect(self._on_task_error)
-        self.worker.thread_finished.connect(self.worker.deleteLater)
-        self.worker.start()
+
+    @Slot(object)
+    def _on_task_finished(self, result):
+        kind, self._dashboard_task_kind = self._dashboard_task_kind, None
+        if kind == "archive":
+            self._on_archive_finished(result)
+        elif kind == "restore":
+            self._on_restore_finished(result)
 
     @Slot(object)
     def _on_restore_finished(self, result):
         self._set_task_running(False)
-        self.worker = None
         project = result["project"]
         lines = [
             f"已恢复项目：{project.name}",
@@ -643,8 +709,8 @@ class ProjectDashboardView(RefreshOnShowView):
         self.cancel_task_btn.setEnabled(running)
 
     def _cancel_current_task(self):
-        if self.worker is not None:
-            self.worker.cancel()
+        if self.task_vm.is_running():
+            self.task_vm.cancel()
             self.cancel_task_btn.setEnabled(False)
 
     @Slot(int, int, str)
@@ -655,7 +721,7 @@ class ProjectDashboardView(RefreshOnShowView):
 
     @Slot(str)
     def _on_task_error(self, error: str):
+        self._dashboard_task_kind = None
         self._set_task_running(False)
-        self.worker = None
         self.sop_hint.setText("❌ 任务失败")
         QMessageBox.critical(self, "任务失败", error)

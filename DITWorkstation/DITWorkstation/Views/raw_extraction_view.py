@@ -9,10 +9,10 @@ from PySide6.QtCore import Qt, Slot, Signal
 
 from DITWorkstation.Services.raw_extraction_service import RawExtractionService
 from DITWorkstation.Services.media_import_service import MediaImportService
-from DITWorkstation.Utils.workers import SimpleWorkerThread
 from DITWorkstation.Utils import (
     get_db_service, logger, pick_directory, find_overwrite_conflicts, normalize_name_key,
 )
+from DITWorkstation.ViewModels import TaskViewModel
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
@@ -34,7 +34,9 @@ class RawExtractionView(RefreshOnShowView):
         self.db_service = get_db_service()
         # 复用共享 db_service 单例，避免再创建一份
         self.import_service = MediaImportService(db_service=self.db_service)
-        self.worker = None
+        self.task_vm = TaskViewModel(self, task_store=self.db_service)
+        self.task_vm.finished.connect(self._on_finished)
+        self.task_vm.error.connect(self._on_error)
         self._setup_ui()
         self._progress_sig.connect(self._on_progress)
         # 项目切换由共享控件处理（broadcast_none=False 保留"不关联"语义）
@@ -268,19 +270,17 @@ class RawExtractionView(RefreshOnShowView):
         self.cancel_btn.setEnabled(True)
         self.progress_bar.setValue(0)
 
-        self.worker = SimpleWorkerThread(
+        self.task_vm.start(
             self.service.extract_raw_files,
             self.jpg_edit.text(),
             self.raw_edit.text(),
             output,
             verify=self.verify_check.isChecked(),
-            progress_callback=lambda c, t, m: self._progress_sig.emit(c, t, m)
+            progress_callback=lambda c, t, m: self._progress_sig.emit(c, t, m),
+            task_name="RAW 提取",
+            project_id=self.selector.get_current_project_id(),
+            recovery_info={"jpg_path": self.jpg_edit.text(), "raw_path": self.raw_edit.text(), "output_path": output},
         )
-        self.worker.finished.connect(self._on_finished)
-        self.worker.error.connect(self._on_error)
-        # 线程结束后自动释放，避免 QThread 对象泄漏
-        self.worker.thread_finished.connect(self.worker.deleteLater)
-        self.worker.start()
         self.status_label.setText("正在提取RAW文件...")
 
     @Slot(int, int, str)
@@ -291,6 +291,7 @@ class RawExtractionView(RefreshOnShowView):
             self.status_label.setText(f"{message} ({percent}%)")
 
     def _cancel_extraction(self):
+        self.task_vm.cancel()
         self.service.cancel()
         self.cancel_btn.setEnabled(False)
         self.status_label.setText("正在取消...")
@@ -301,8 +302,6 @@ class RawExtractionView(RefreshOnShowView):
         self.scan_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.progress_bar.setValue(100)
-        # worker 已连 deleteLater，这里清空引用避免悬挂
-        self.worker = None
 
         success = result['extracted']
         not_found = result['not_found']
@@ -438,7 +437,6 @@ class RawExtractionView(RefreshOnShowView):
         self.scan_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.status_label.setText(f"❌ 错误: {error}")
-        self.worker = None
         show_error(
             title="提取错误",
             description=error,

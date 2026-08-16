@@ -128,6 +128,42 @@ def test_retry_failed_files_only_retries_failures(tmp_path, monkeypatch):
     assert raw["targets"][0]["failed_files"] == []
 
 
+def test_retry_uses_persisted_snapshot_without_rescanning_source(tmp_path, monkeypatch):
+    """重试有快照时不扫描整个介质，只检查失败文件当前是否仍可用。"""
+    svc, _db, job, _dst, original = _backup_with_one_failure(tmp_path, monkeypatch)
+    monkeypatch.setattr(svc.checksum_service, "copy_file_with_checksum", original)
+    monkeypatch.setattr(svc, "scan_source", lambda _path: (_ for _ in ()).throw(AssertionError("不应重扫")))
+
+    result = svc.retry_failed_files(job.job_id, project_id="proj1")
+    assert result.status == BackupStatus.COMPLETED
+
+
+def test_incremental_backup_skips_unchanged_files(tmp_path, monkeypatch):
+    """增量备份仅复制 mtime/大小发生变化的文件。"""
+    src = _make_sources(tmp_path)
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    db = DatabaseService(db_path=tmp_path / "incremental.db")
+    project = db.create_project(name="增量")
+    svc = BackupService(db_service=db, checksum_service=ChecksumService())
+    svc.execute_backup(svc.create_backup_job(str(src), [str(dst)]), project_id=project.project_id)
+
+    changed = src / "f1.dat"
+    changed.write_bytes(os.urandom(10000))
+    calls = []
+    original = svc.checksum_service.copy_file_with_checksum
+    def tracking_copy(src_path, *args, **kwargs):
+        calls.append(os.path.basename(src_path))
+        return original(src_path, *args, **kwargs)
+    monkeypatch.setattr(svc.checksum_service, "copy_file_with_checksum", tracking_copy)
+
+    job = svc.create_incremental_backup_job(str(src), [str(dst)], project_id=project.project_id)
+    assert job.__dict__["_unchanged_files"] == 2
+    result = svc.execute_backup(job, project_id=project.project_id)
+    assert result.status == BackupStatus.COMPLETED
+    assert calls == ["f1.dat"]
+
+
 def test_retry_missing_job_returns_none(tmp_path):
     """重试不存在的作业返回 None"""
     db = DatabaseService(db_path=tmp_path / "test.db")

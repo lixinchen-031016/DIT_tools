@@ -182,11 +182,11 @@ DIT 工作站围绕 9 大功能模块构建完整的数据管理闭环：
 | pyinstaller | — | 单文件应用打包 |
 | pytest | 9.1.1 | 测试框架 |
 
-> **可选依赖**（未安装时自动降级，不影响核心功能）：
-> - `rawpy` — 相机 RAW 全量解码缩略图（替代仅 EXIF 内嵌预览），`pip install rawpy`
+> **正式媒体依赖**（构建时必须安装）：
+> - `rawpy` — 相机 RAW 全量解码缩略图
 > - `ffmpeg` — 视频抽帧缩略图，`brew install ffmpeg`（macOS）/ 官网安装（Windows）
-> - `av`（PyAV）/ `opencv-python-headless` — 无 ffmpeg 时的备选视频抽帧方案
-> - macOS 无以上依赖时，应用自动使用系统 QuickLook（qlmanage）生成视频缩略图
+> - `av`（PyAV）— 视频解码与抽帧方案
+> - MediaInfo — 视频元数据读取；构建脚本会检查动态库并随产物分发
 
 ---
 
@@ -292,9 +292,9 @@ DIT_tools/
 - Python 3.11+（推荐 3.13）
 - macOS / Windows（提供原生打包脚本）
 - Linux 可从源码运行；当前未提供 Linux 原生打包脚本，也未纳入本地跨平台验证
-- macOS 视频元数据读取需额外安装 MediaInfo（`brew install mediainfo`）
-- Windows 视频元数据读取需从 https://mediaarea.net/en/MediaInfo 下载安装 MediaInfo
-- PDF 报告需要系统中存在可用的中文字体：macOS 推荐 PingFang，Windows 推荐微软雅黑，Linux 推荐文泉驿或 Noto
+- macOS 正式构建需要 MediaInfo（`brew install mediainfo`）
+- Windows 正式构建需要 MediaInfo，或设置 `MEDIAINFO_DLL` 指向其 DLL
+- PDF 报告优先使用系统中文字体；缺失时使用 ReportLab 内置 CJK CID 字体
 
 ### 安装与运行
 
@@ -394,7 +394,7 @@ bash build/build_macos.sh
 
 - **产物**：`dist/DITWorkstation.app`（onedir 应用包，约 130MB，arm64 架构；依赖置于 `Contents/Frameworks`，启动更快）+ `dist/DITWorkstation.dmg`（脚本自动生成，约 57MB）
 - **版本**：构建当天自动采用 `alpha.YYYYMMDD` 显示版本；内部构建号为同一天的纯数字。
-- **要求**：macOS 主机、Python 3.11+、MediaInfo（`brew install mediainfo`，可选；打包态优先使用随包分发的动态库）
+- **要求**：macOS 主机、Python 3.11+、MediaInfo（`brew install mediainfo`；构建产物随包携带动态依赖）
 - **签名**：adhoc 签名（Hardened Runtime），分发时需 Apple Developer ID 正式签名才能通过 Gatekeeper
 - **数据目录**：`~/Library/Application Support/DITWorkstation/`
 
@@ -407,7 +407,7 @@ build\build_windows.bat
 
 - **产物**：`dist\DITWorkstation.exe`（单文件模式）
 - **版本**：应用窗口、状态栏和“关于”对话框显示构建当天的 `alpha.YYYYMMDD`。
-- **要求**：Windows 主机、Python 3.11+（`python` 或 `py` 启动器均可）、MediaInfo（从官网下载，可选；打包态优先使用随包分发的 MediaInfo.dll）
+- **要求**：Windows 主机、Python 3.11+（`python` 或 `py` 启动器均可）、MediaInfo（从官网下载，或设置 `MEDIAINFO_DLL`；打包态随包分发 DLL）
 - **数据目录**：`%APPDATA%\DITWorkstation\`
 - **长路径**：已内嵌 `longPathAware` manifest，支持超过 260 字符的路径
   （媒体卡深层目录 + 多级备份目录）；若个别机器仍报路径过长，请以管理员
@@ -417,12 +417,11 @@ build\build_windows.bat
 
 > **跨平台说明**：PyInstaller 不支持交叉编译，需在目标平台上分别执行对应脚本原生构建
 > （macOS 上运行 `build/build_macos.sh`，Windows 上运行 `build/build_windows.bat`）；
-> Linux 当前仅支持源码运行，尚无专用打包脚本。可选依赖 `rawpy` 由脚本单独宽容安装，
-> 无预编译 wheel 的平台会自动降级，不影响核心导入与备份流程。
+> Linux 当前仅支持源码运行，尚无专用打包脚本。
 
 > **运行时依赖说明**：视频元数据读取依赖 MediaInfo 动态库；视频缩略图按顺序尝试
-> `ffmpeg`、macOS QuickLook、PyAV 和 OpenCV。若这些依赖不可用，视频仍可导入，但缩略图或详细视频元数据可能为空。
-> PDF 报告会自动查找系统中文字体；若系统没有可用的中文字体，当前版本可能无法生成 PDF。
+> `ffmpeg`、macOS QuickLook 和 PyAV。正式构建会安装 Python 媒体依赖并携带 MediaInfo；
+> ffmpeg 未安装时仍使用其余解码方案。PDF 报告在没有系统中文字体时使用内置 CJK CID 字体。
 
 ---
 

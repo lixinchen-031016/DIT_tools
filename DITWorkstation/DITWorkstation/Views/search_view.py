@@ -125,10 +125,10 @@ class SearchView(RefreshOnShowView):
         self._search_generation = 0
         self._requested_page = 0
         self._pending_search = None
-        self._page_vm = TaskViewModel(self)
+        self._page_vm = TaskViewModel(self, task_store=self.db_service)
         self._page_vm.finished.connect(self._on_page_loaded)
         self._page_vm.error.connect(self._on_page_load_error)
-        self._export_vm = TaskViewModel(self)
+        self._export_vm = TaskViewModel(self, task_store=self.db_service)
         self._export_vm.progress.connect(self._on_export_progress)
         self._export_vm.finished.connect(self._on_export_finished)
         self._export_vm.error.connect(self._on_export_error)

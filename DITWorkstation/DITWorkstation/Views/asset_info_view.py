@@ -168,10 +168,10 @@ class AssetInfoView(RefreshOnShowView):
         self._asset_next_cursor = None
         self._asset_load_generation = 0
         self._pending_asset_load = None
-        self._asset_page_vm = TaskViewModel(self)
+        self._asset_page_vm = TaskViewModel(self, task_store=self.db_service)
         self._asset_page_vm.finished.connect(self._on_asset_page_finished)
         self._asset_page_vm.error.connect(self._on_asset_page_error)
-        self._export_vm = TaskViewModel(self)
+        self._export_vm = TaskViewModel(self, task_store=self.db_service)
         self._export_vm.progress.connect(self._on_export_progress)
         self._export_vm.finished.connect(self._on_export_finished)
         self._export_vm.error.connect(self._on_export_error)

@@ -38,19 +38,21 @@ if errorlevel 1 (
     exit /b 1
 )
 
-if defined MEDIAINFO_DLL (
-    if not exist "%MEDIAINFO_DLL%" (
-        echo 错误：MediaInfo.dll 路径无效：%MEDIAINFO_DLL%
-        exit /b 1
-    )
-    echo MediaInfo.dll: %MEDIAINFO_DLL%
-) else (
-    where mediainfo >nul 2>&1
-    if errorlevel 1 (
-        echo 警告：未安装 MediaInfo，视频元数据功能将受限
-        echo       请从 https://mediaarea.net/en/MediaInfo 下载安装
+if not defined MEDIAINFO_DLL (
+    for %%D in ("%ProgramFiles%\MediaInfo\MediaInfo.dll" "%ProgramFiles(x86)%\MediaInfo\MediaInfo.dll") do (
+        if exist "%%~fD" set "MEDIAINFO_DLL=%%~fD"
     )
 )
+if not defined MEDIAINFO_DLL (
+    echo 错误：未找到 MediaInfo.dll。正式构建要求视频元数据依赖完整。
+    echo       请安装 MediaInfo，或设置 MEDIAINFO_DLL 指向该 DLL。
+    exit /b 1
+)
+if not exist "%MEDIAINFO_DLL%" (
+    echo 错误：MediaInfo.dll 路径无效：%MEDIAINFO_DLL%
+    exit /b 1
+)
+echo MediaInfo.dll: %MEDIAINFO_DLL%
 
 echo === [2/5] 创建/复用 venv ===
 if not exist ".venv" (
@@ -60,19 +62,11 @@ call .venv\Scripts\activate.bat
 
 echo === [3/5] 安装依赖 ===
 python -m pip install --upgrade pip >nul
-REM rawpy 为可选依赖（部分平台无预编译 wheel），从主依赖列表单独过滤安装
-REM 注意：requirements.txt 已固定 pyinstaller==6.21.0，无需单独安装
-findstr /v /b rawpy requirements.txt > requirements-core.txt
-python -m pip install -r requirements-core.txt >nul
+REM RAW 与 PyAV 是正式交付依赖；安装失败即中止。
+python -m pip install -r requirements.txt >nul
 if errorlevel 1 (
-    del requirements-core.txt >nul 2>&1
     echo 错误：依赖安装失败，打包中止
     exit /b 1
-)
-del requirements-core.txt
-python -m pip install "rawpy>=0.21.0" >nul
-if errorlevel 1 (
-    echo 警告：rawpy 安装失败（可选），RAW 缩略图将降级为 EXIF 内嵌预览
 )
 
 echo === [4/5] 运行单元测试 ===

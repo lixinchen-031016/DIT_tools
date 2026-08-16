@@ -13,6 +13,7 @@ DITWorkstation PyInstaller 打包配置
 import os
 import sys
 import platform
+import subprocess
 from datetime import date
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules
@@ -56,9 +57,39 @@ def _collect_mediainfo_binaries():
         if os.path.exists(c):
             binaries.append((c, "."))
             print(f"[spec] bundled MediaInfo lib: {c}")
+            # Homebrew 的 libmediainfo 依赖 libzen 等非系统 dylib。明确交给
+            # PyInstaller 分析，令其在 .app 中重写加载路径并一起签名。
+            if system == "Darwin":
+                pending, seen = [Path(c)], set()
+                while pending:
+                    library = pending.pop()
+                    if library in seen:
+                        continue
+                    seen.add(library)
+                    try:
+                        output = subprocess.check_output(
+                            ["otool", "-L", str(library)], text=True, stderr=subprocess.DEVNULL,
+                        )
+                    except (OSError, subprocess.CalledProcessError):
+                        continue
+                    for line in output.splitlines()[1:]:
+                        dependency = line.strip().split(" ", 1)[0]
+                        dep_path = Path(dependency)
+                        if not dep_path.is_absolute() or not dep_path.exists():
+                            continue
+                        if not str(dep_path).startswith(("/opt/homebrew/", "/usr/local/")):
+                            continue
+                        if dep_path not in seen:
+                            binaries.append((str(dep_path), "."))
+                            pending.append(dep_path)
+                            print(f"[spec] bundled MediaInfo dependency: {dep_path}")
             break
     else:
-        print("[spec] warning: MediaInfo lib not found, video metadata will be limited")
+        if system in ("Darwin", "Windows"):
+            raise SystemExit(
+                "MediaInfo 动态库缺失：正式 macOS/Windows 构建必须提供视频元数据依赖"
+            )
+        print("[spec] warning: MediaInfo lib not found")
     return binaries
 
 
@@ -74,6 +105,9 @@ hiddenimports = [
     "pymediainfo",
     "xxhash",
     "reportlab",
+    # 缩略图服务内部动态导入；正式构建必须随包提供。
+    "rawpy",
+    "av",
 ]
 # reportlab 的标准 14 字体宽度表与编码表是按需动态 import 的子模块
 # （reportlab 5.0 起模块名变化，逐个列举易失效），整体收集最稳妥

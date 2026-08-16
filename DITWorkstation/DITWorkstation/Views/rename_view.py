@@ -11,7 +11,8 @@ from pathlib import Path
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import RenameRule
 from DITWorkstation.Services.rename_service import RenameService
-from DITWorkstation.Utils import WorkerThread, safe_slot, get_db_service, logger, pick_directory
+from DITWorkstation.Utils import safe_slot, get_db_service, logger, pick_directory
+from DITWorkstation.ViewModels import TaskViewModel
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
 from DITWorkstation.Views.Widgets.error_dialog import show_error
 from DITWorkstation.Views.Widgets.status_panel import StatusPanel
@@ -31,7 +32,10 @@ class RenameView(QWidget):
         # 共享 db_service 单例，用于重命名后同步 DB 中 asset 的 file_path/file_name
         self.db_service = get_db_service()
         self.selected_files = []
-        self._worker = None
+        self.task_vm = TaskViewModel(self, task_store=self.db_service)
+        self.task_vm.finished.connect(self._on_task_finished)
+        self.task_vm.error.connect(self._on_rename_error)
+        self._task_kind = None
         self._last_rename_id = None
         self._setup_ui()
         self._progress_sig.connect(self._on_progress)
@@ -226,7 +230,7 @@ class RenameView(QWidget):
             return
 
         # 防止重复启动
-        if self._worker is not None and self._worker.isRunning():
+        if self.task_vm.is_running():
             QMessageBox.information(self, "提示", "正在执行重命名，请稍候。")
             return
 
@@ -251,17 +255,15 @@ class RenameView(QWidget):
 
         # 后台线程执行，避免阻塞主线程
         # 通过 lambda 将服务回调桥接到跨线程信号（current, total, filename）
-        self._worker = WorkerThread(
+        self._task_kind = "rename"
+        self.task_vm.start(
             self.rename_service.execute_rename,
             self.selected_files,
             rule,
             progress_callback=lambda c, t, f: self._progress_sig.emit(c, t, f),
+            task_name="批量重命名",
+            recovery_info={"folder": self.folder_edit.text(), "file_count": len(self.selected_files)},
         )
-        self._worker.finished.connect(self._on_rename_finished)
-        self._worker.error.connect(self._on_rename_error)
-        # 线程结束后自动释放，避免 QThread 对象泄漏
-        self._worker.thread_finished.connect(self._worker.deleteLater)
-        self._worker.start()
 
     @Slot(int, int, str)
     def _on_progress(self, current: int, total: int, filename: str):
@@ -274,8 +276,6 @@ class RenameView(QWidget):
     def _on_rename_finished(self, results):
         self.progress_bar.setValue(100)
         self._restore_ui()
-        # worker 已连 deleteLater，这里清空引用避免悬挂
-        self._worker = None
 
         # 数据闭环：把重命名结果回写到 DB 的 media_assets.file_path/file_name
         synced = 0
@@ -333,17 +333,23 @@ class RenameView(QWidget):
         if reply != QMessageBox.Yes:
             return
         self.undo_btn.setEnabled(False)
-        self._worker = WorkerThread(
+        self._task_kind = "undo"
+        self.task_vm.start(
             self.rename_service.rollback_rename, self.db_service, self._last_rename_id,
+            task_name="回退重命名",
+            recovery_info={"rename_id": self._last_rename_id},
         )
-        self._worker.finished.connect(self._on_undo_finished)
-        self._worker.error.connect(self._on_rename_error)
-        self._worker.thread_finished.connect(self._worker.deleteLater)
-        self._worker.start()
+
+    @Slot(object)
+    def _on_task_finished(self, result):
+        kind, self._task_kind = self._task_kind, None
+        if kind == "rename":
+            self._on_rename_finished(result)
+        elif kind == "undo":
+            self._on_undo_finished(result)
 
     @Slot(object)
     def _on_undo_finished(self, result):
-        self._worker = None
         if not result:
             QMessageBox.warning(self, "无法回退", result.message)
             self.undo_btn.setEnabled(True)
@@ -360,8 +366,8 @@ class RenameView(QWidget):
 
     @Slot(str)
     def _on_rename_error(self, error: str):
+        self._task_kind = None
         self._restore_ui()
-        self._worker = None
         show_error(
             title="重命名出错",
             description=error,

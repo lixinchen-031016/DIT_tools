@@ -8,7 +8,7 @@ from PySide6.QtCore import Slot, Qt
 
 from DITWorkstation.Services.report_service import ReportService
 from DITWorkstation.Utils import get_db_service, safe_slot, pick_save_file
-from DITWorkstation.Utils.workers import SimpleWorkerThread
+from DITWorkstation.ViewModels import TaskViewModel
 from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
 from DITWorkstation.Views.Widgets.error_dialog import show_error
 from DITWorkstation.Views.Widgets.status_panel import StatusPanel
@@ -22,7 +22,9 @@ class ReportView(RefreshOnShowView):
         super().__init__()
         self.db_service = get_db_service()
         self.report_service = ReportService()
-        self.worker = None
+        self.task_vm = TaskViewModel(self, task_store=self.db_service)
+        self.task_vm.finished.connect(self._on_finished)
+        self.task_vm.error.connect(self._on_error)
         self._setup_ui()
         # 项目切换由共享控件广播，本视图无需额外处理（生成时实时读取选中项目）
 
@@ -149,24 +151,20 @@ class ReportView(RefreshOnShowView):
         output_path = self.output_edit.text().strip() or None
         report_type = self.report_type_combo.currentIndex()
 
-        # 备份报告功能尚未对接历史记录，提前告知用户
-        if report_type == 0:
-            QMessageBox.information(
-                self, "提示",
-                "数据备份报告当前不会包含具体备份记录（备份历史功能尚未对接），\n"
-                "生成的报告仅含项目基本信息。如需完整素材统计，请选择「素材统计报告」。"
-            )
-
         self.generate_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.status_label.setText("正在生成报告...")
         self._log(f"开始生成报告: {project.name}")
 
         if report_type == 0:
-            # 备份报告（使用空jobs列表，实际可从历史记录获取）
-            self.worker = SimpleWorkerThread(
-                self.report_service.generate_backup_report, project, [], output_path,
-            )
+            def generate_backup_report_task(cancel_check):
+                if cancel_check():
+                    raise InterruptedError("报告生成已取消")
+                return self.report_service.generate_backup_report(
+                    project, self.db_service.get_backup_jobs(project_id), output_path,
+                )
+            task = generate_backup_report_task
+            task_name = "backup_report"
         else:
             # 资产读取、统计和 PDF 写入都在工作线程中进行，避免大项目在
             # 点击“生成报告”时先阻塞主线程构造完整素材列表。
@@ -179,16 +177,12 @@ class ReportView(RefreshOnShowView):
                     total=self.db_service.count_project_assets(project_id),
                     cancel_check=cancel_check,
                 )
-            self.worker = SimpleWorkerThread(
-                generate_asset_report_task,
-                inject_cancel_check=True,
-            )
-
-        self.worker.finished.connect(self._on_finished)
-        self.worker.error.connect(self._on_error)
-        # 线程结束后自动释放，避免 QThread 对象泄漏
-        self.worker.thread_finished.connect(self.worker.deleteLater)
-        self.worker.start()
+            task = generate_asset_report_task
+            task_name = "asset_report"
+        self.task_vm.start(
+            task, inject_cancel_check=True, task_name=task_name, project_id=project_id,
+            recovery_info={"output_path": output_path or "", "report_type": report_type},
+        )
 
     @Slot(object)
     def _on_finished(self, result):
@@ -196,8 +190,6 @@ class ReportView(RefreshOnShowView):
         self.cancel_btn.setEnabled(False)
         self.status_label.setText(f"✅ 报告已生成: {result}")
         self._log(f"报告生成成功: {result}")
-        # worker 已连 deleteLater，这里清空引用避免悬挂
-        self.worker = None
         QMessageBox.information(self, "完成", f"报告已生成:\n{result}")
 
     @Slot(str)
@@ -206,7 +198,6 @@ class ReportView(RefreshOnShowView):
         self.cancel_btn.setEnabled(False)
         self.status_label.setText(f"❌ 生成失败: {error}")
         self._log(f"错误: {error}")
-        self.worker = None
         show_error(
             title="报告生成失败",
             description=error,
@@ -215,10 +206,10 @@ class ReportView(RefreshOnShowView):
         )
 
     def _cancel_generation(self):
-        if self.worker is not None and self.worker.isRunning():
+        if self.task_vm.is_running():
             self.cancel_btn.setEnabled(False)
             self.status_label.setText("正在取消，当前批次完成后停止...")
-            self.worker.cancel()
+            self.task_vm.cancel()
 
     def _log(self, message: str):
         self.status_panel.log(message)

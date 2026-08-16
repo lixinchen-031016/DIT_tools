@@ -125,7 +125,6 @@ class TestThumbnailService(unittest.TestCase):
         png = self._png_bytes()
         with mock.patch.object(self.service, "_ffmpeg_frame", return_value=None), \
              mock.patch.object(self.service, "_qlmanage_frame", return_value=None), \
-             mock.patch.object(self.service, "_opencv_frame", return_value=None), \
              mock.patch.object(self.service, "_av_frame", return_value=png):
             data = self.service._gen_video(str(video), 64)
         self.assertEqual(data, png)
@@ -135,19 +134,13 @@ class TestThumbnailService(unittest.TestCase):
         video = self._make_fake_video()
         with mock.patch.object(self.service, "_ffmpeg_frame", return_value=None), \
              mock.patch.object(self.service, "_qlmanage_frame", return_value=None), \
-             mock.patch.object(self.service, "_av_frame", return_value=None), \
-             mock.patch.object(self.service, "_opencv_frame", return_value=None):
+             mock.patch.object(self.service, "_av_frame", return_value=None):
             data = self.service._gen_video(str(video), 64)
         self.assertIsNone(data)
 
     def test_av_frame_missing_lib_or_bad_file_returns_none(self):
         """PyAV 未安装或文件不可解码时静默返回 None"""
         data = self.service._av_frame(str(Path(self.temp_dir) / "nope.mp4"), 64)
-        self.assertIsNone(data)
-
-    def test_opencv_frame_missing_lib_or_bad_file_returns_none(self):
-        """OpenCV 未安装或文件不可解码时静默返回 None"""
-        data = self.service._opencv_frame(str(Path(self.temp_dir) / "nope.mp4"), 64)
         self.assertIsNone(data)
 
     def test_qlmanage_frame_missing_file_returns_none(self):

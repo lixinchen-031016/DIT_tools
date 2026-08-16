@@ -1453,6 +1453,22 @@ class TestWorkspaceManagement(unittest.TestCase):
         self.assertEqual(len(by_project), 2)
         self.assertTrue(all(o["project_id"] == p.project_id for o in by_project))
 
+    def test_operation_log_combined_filters(self):
+        """审计查看器的项目、事件、状态和对象筛选可组合使用。"""
+        p = self.db.create_project(name="筛选项目")
+        self.db.record_operation(
+            "数据备份", "失败", project_id=p.project_id, status="error",
+            object_type="backup_job", object_id="job-1",
+        )
+        self.db.record_operation(
+            "数据备份", "成功", project_id=p.project_id, status="success",
+            object_type="backup_job", object_id="job-2",
+        )
+        rows = self.db.get_recent_operations(
+            project_id=p.project_id, event="备份", status="error", object_type="backup_job",
+        )
+        self.assertEqual([row["object_id"] for row in rows], ["job-1"])
+
 
 class TestMissingFileDetection(unittest.TestCase):
     """文件存在性验证与批量删除失效记录（对应素材信息模块的丢失检测功能）"""

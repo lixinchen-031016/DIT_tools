@@ -128,3 +128,30 @@ def test_generate_asset_report_accepts_generator_and_honors_cancel(tmp_dir):
             project, (_asset() for _ in range(1)), [], str(tmp_dir / "cancelled.pdf"),
             cancel_check=lambda: True,
         )
+
+
+def test_generate_backup_report_from_persisted_job_shape(tmp_dir):
+    """真实 backup_jobs 字典可直接生成交付报告，损坏历史时间会降级处理。"""
+    output = tmp_dir / "backup.pdf"
+    job = {
+        "job_id": "job-1", "source_path": "/media/card", "algorithm": "xxhash64",
+        "status": "completed", "total_files": 3, "total_bytes": 2048,
+        "created_at": "not-a-date", "completed_at": None,
+        "targets": [{
+            "path": "/backup/A", "name": "A", "status": "completed",
+            "total_files": 3, "completed_files": 3, "total_bytes": 2048,
+            "copied_bytes": 2048, "verified": True, "failed_files": [],
+        }],
+    }
+    ReportService().generate_backup_report(Project(project_id="p1", name="交付项目"), [job], str(output))
+    assert output.exists() and output.stat().st_size > 0
+
+
+def test_generate_report_falls_back_to_builtin_cjk_font(tmp_dir, monkeypatch):
+    """精简系统缺少字体文件时，报告仍通过 ReportLab CID 字体生成。"""
+    service = ReportService()
+    monkeypatch.setattr(service, "_get_system_font_paths", lambda: [])
+    output = tmp_dir / "fallback-font.pdf"
+    service.generate_asset_report(Project(project_id="p1", name="中文项目"), [], [], str(output))
+    assert service._chinese_font_name == "STSong-Light"
+    assert output.exists() and output.stat().st_size > 0

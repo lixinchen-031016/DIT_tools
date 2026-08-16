@@ -11,11 +11,13 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
 
 from DITWorkstation.App import config
 from DITWorkstation.Models import (
-    Project, BackupJob, MediaAsset, ShootingLog, RATING_LABELS, AssetRating
+    Project, BackupJob, BackupTarget, BackupStatus, CopyStatus, ChecksumAlgorithm,
+    MediaAsset, ShootingLog, RATING_LABELS, AssetRating,
 )
 from DITWorkstation.Utils import format_size, logger
 
@@ -45,7 +47,12 @@ class ReportService:
                     logger.warning(f"注册字体失败 {fp}: {e}")
                     continue
 
-        logger.warning("未找到中文字体，使用默认字体")
+        # ReportLab 内置 CID 字体不依赖系统字体文件，在精简 Windows/macOS
+        # 设备上也能生成中文 PDF。它不嵌入字体，但不会导致报告任务失败。
+        self._chinese_font_name = "STSong-Light"
+        pdfmetrics.registerFont(UnicodeCIDFont(self._chinese_font_name))
+        self._font_registered = True
+        logger.warning("未找到系统中文字体，使用 ReportLab CID 字体 STSong-Light")
 
     def _get_system_font_paths(self) -> List[str]:
         """获取系统字体路径（跨平台）"""
@@ -78,10 +85,57 @@ class ReportService:
 
         return font_paths
 
+    @staticmethod
+    def _coerce_backup_job(record) -> BackupJob:
+        """将数据库备份历史或领域对象统一为 ``BackupJob``。"""
+        if isinstance(record, BackupJob):
+            return record
+        targets = []
+        for raw in record.get("targets", []):
+            try:
+                status = CopyStatus(raw.get("status", CopyStatus.PENDING.value))
+            except ValueError:
+                status = CopyStatus.FAILED
+            targets.append(BackupTarget(
+                path=raw.get("path", ""), name=raw.get("name", ""), status=status,
+                total_files=int(raw.get("total_files", 0)), completed_files=int(raw.get("completed_files", 0)),
+                total_bytes=int(raw.get("total_bytes", 0)), copied_bytes=int(raw.get("copied_bytes", 0)),
+                verified=bool(raw.get("verified", False)), error_message=raw.get("error_message", ""),
+                failed_files=list(raw.get("failed_files", [])), pending_files=list(raw.get("pending_files", [])),
+            ))
+        try:
+            status = BackupStatus(record.get("status", BackupStatus.IDLE.value))
+        except ValueError:
+            status = BackupStatus.FAILED
+        try:
+            algorithm = ChecksumAlgorithm(record.get("algorithm", ChecksumAlgorithm.XXHASH64.value))
+        except ValueError:
+            algorithm = ChecksumAlgorithm.XXHASH64
+        created_at = ReportService._safe_datetime(record.get("created_at")) or datetime.now()
+        completed_at = ReportService._safe_datetime(record.get("completed_at"))
+        return BackupJob(
+            job_id=record.get("job_id", "unknown"), source_path=record.get("source_path", ""),
+            targets=targets, status=status, algorithm=algorithm,
+            total_files=int(record.get("total_files", 0)), total_bytes=int(record.get("total_bytes", 0)),
+            created_at=created_at,
+            completed_at=completed_at,
+        )
+
+    @staticmethod
+    def _safe_datetime(value) -> Optional[datetime]:
+        if isinstance(value, datetime):
+            return value
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            return None
+
     def generate_backup_report(
         self,
         project: Optional[Project],
-        jobs: List[BackupJob],
+        jobs: List[BackupJob | dict],
         output_path: Optional[str] = None
     ) -> str:
         """
@@ -96,6 +150,7 @@ class ReportService:
             报告文件路径
         """
         self._register_fonts()
+        jobs = [self._coerce_backup_job(job) for job in jobs]
 
         if not output_path:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

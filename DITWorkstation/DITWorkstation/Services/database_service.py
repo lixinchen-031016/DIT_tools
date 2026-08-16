@@ -27,6 +27,18 @@ def _chunked(seq, size):
 class DatabaseService:
     """数据库服务 - SQLite持久化"""
 
+    @staticmethod
+    def _parse_datetime(value) -> Optional[datetime]:
+        """解析历史时间字段；损坏的旧值不应阻断列表或报告读取。"""
+        if isinstance(value, datetime):
+            return value
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            return None
+
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = db_path or config.db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -213,12 +225,29 @@ class DatabaseService:
                     total_bytes INTEGER DEFAULT 0,
                     status TEXT DEFAULT 'idle',
                     targets_json TEXT DEFAULT '[]',
+                    snapshot_json TEXT DEFAULT '[]',
                     created_at TEXT NOT NULL,
                     completed_at TEXT,
                     FOREIGN KEY (project_id) REFERENCES projects(project_id)
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_backup_jobs_project ON backup_jobs(project_id);
+
+                CREATE TABLE IF NOT EXISTS task_history (
+                    task_id TEXT PRIMARY KEY,
+                    task_name TEXT NOT NULL,
+                    project_id TEXT,
+                    state TEXT NOT NULL,
+                    parameters_json TEXT DEFAULT '{}',
+                    recovery_json TEXT DEFAULT '{}',
+                    output_json TEXT DEFAULT '{}',
+                    error_summary TEXT DEFAULT '',
+                    started_at TEXT,
+                    completed_at TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_task_history_project ON task_history(project_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_task_history_state ON task_history(state, created_at);
 
                 CREATE TABLE IF NOT EXISTS operation_logs (
                     log_id TEXT PRIMARY KEY,
@@ -307,7 +336,7 @@ class DatabaseService:
                 pass
 
     # 当前数据库 schema 版本：每次结构变更 +1，并在 _migrate_db 中补充对应迁移
-    _DB_VERSION = 5
+    _DB_VERSION = 7
 
     def _migrate_db(self):
         """按 PRAGMA user_version 分版本迁移数据库。
@@ -342,6 +371,14 @@ class DatabaseService:
                 self._migrate_v5(conn)
                 self._set_user_version(conn, 5)
                 logger.info("数据库迁移完成: v5")
+            if version < 6:
+                self._migrate_v6(conn)
+                self._set_user_version(conn, 6)
+                logger.info("数据库迁移完成: v6")
+            if version < 7:
+                self._migrate_v7(conn)
+                self._set_user_version(conn, 7)
+                logger.info("数据库迁移完成: v7")
 
             # FTS 创建必须晚于迁移前备份，否则备份会混入新建索引表。
             # v3 数据库若因中断或旧版本缺失索引，也在这里补建并重建一次。
@@ -555,6 +592,46 @@ class DatabaseService:
                 created_at TEXT NOT NULL,
                 reverted_at TEXT
             )"""
+        )
+
+    def _migrate_v6(self, conn):
+        """v6：统一任务历史及备份源文件快照。"""
+        backup_columns = {row["name"] for row in conn.execute("PRAGMA table_info(backup_jobs)")}
+        if "snapshot_json" not in backup_columns:
+            conn.execute("ALTER TABLE backup_jobs ADD COLUMN snapshot_json TEXT DEFAULT '[]'")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS task_history (
+                task_id TEXT PRIMARY KEY,
+                task_name TEXT NOT NULL,
+                project_id TEXT,
+                state TEXT NOT NULL,
+                parameters_json TEXT DEFAULT '{}',
+                recovery_json TEXT DEFAULT '{}',
+                output_json TEXT DEFAULT '{}',
+                error_summary TEXT DEFAULT '',
+                started_at TEXT,
+                completed_at TEXT,
+                created_at TEXT NOT NULL
+            )"""
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_task_history_project ON task_history(project_id, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_task_history_state ON task_history(state, created_at)")
+
+    def _migrate_v7(self, conn):
+        """v7：项目健康页所需的备份目标容量历史。"""
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS storage_health_snapshots (
+                snapshot_id TEXT PRIMARY KEY,
+                project_id TEXT,
+                target_path TEXT NOT NULL,
+                total_bytes INTEGER NOT NULL,
+                free_bytes INTEGER NOT NULL,
+                captured_at TEXT NOT NULL
+            )"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_storage_health_project "
+            "ON storage_health_snapshots(project_id, captured_at)"
         )
 
     @staticmethod
@@ -2404,21 +2481,40 @@ class DatabaseService:
     def get_recent_operations(
         self,
         limit: int = 10,
-        project_id: Optional[str] = None
+        project_id: Optional[str] = None,
+        event: str = "",
+        status: str = "",
+        object_type: str = "",
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
     ) -> List[dict]:
-        """获取最近的操作审计日志（按时间倒序）。"""
+        """按项目、事件、结果、对象与时间筛选审计日志（按时间倒序）。"""
+        limit = max(1, min(int(limit), 5000))
+        clauses, values = [], []
+        if project_id:
+            clauses.append("project_id = ?")
+            values.append(project_id)
+        if event:
+            clauses.append("event LIKE ?")
+            values.append(f"%{event}%")
+        if status:
+            clauses.append("result_status = ?")
+            values.append(status)
+        if object_type:
+            clauses.append("object_type = ?")
+            values.append(object_type)
+        if date_from:
+            clauses.append("created_at >= ?")
+            values.append(date_from.isoformat())
+        if date_to:
+            clauses.append("created_at <= ?")
+            values.append(date_to.isoformat())
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connection() as conn:
-            if project_id:
-                rows = conn.execute(
-                    "SELECT * FROM operation_logs WHERE project_id = ? "
-                    "ORDER BY created_at DESC LIMIT ?",
-                    (project_id, limit)
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM operation_logs ORDER BY created_at DESC LIMIT ?",
-                    (limit,)
-                ).fetchall()
+            rows = conn.execute(
+                f"SELECT * FROM operation_logs{where} ORDER BY created_at DESC LIMIT ?",
+                (*values, limit),
+            ).fetchall()
             results = []
             for r in rows:
                 try:
@@ -2437,6 +2533,121 @@ class DatabaseService:
                     "created_at": created_at,
                 })
             return results
+
+    # ===== 统一任务历史 =====
+
+    def create_task_history(
+        self, task_name: str, project_id: Optional[str] = None, *,
+        state: str = "queued", parameters: Optional[dict] = None,
+        recovery_info: Optional[dict] = None,
+    ) -> str:
+        """创建可审计的后台任务记录，返回稳定任务 ID。"""
+        task_id = str(uuid.uuid4())
+        now = datetime.now().isoformat()
+        with self._transaction() as conn:
+            conn.execute(
+                "INSERT INTO task_history "
+                "(task_id, task_name, project_id, state, parameters_json, recovery_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    task_id, task_name, project_id, state,
+                    json.dumps(parameters or {}, ensure_ascii=False, default=str),
+                    json.dumps(recovery_info or {}, ensure_ascii=False, default=str), now,
+                ),
+            )
+        return task_id
+
+    def update_task_history(
+        self, task_id: str, state: str, *, output: Optional[dict] = None,
+        error_summary: str = "", recovery_info: Optional[dict] = None,
+    ) -> bool:
+        """更新任务状态与可恢复上下文；终态自动写入结束时间。"""
+        terminal = {"completed", "failed", "cancelled", "recoverable"}
+        try:
+            with self._transaction() as conn:
+                current = conn.execute(
+                    "SELECT recovery_json FROM task_history WHERE task_id = ?", (task_id,)
+                ).fetchone()
+                if current is None:
+                    return False
+                merged_recovery = json.loads(current["recovery_json"] or "{}")
+                if recovery_info:
+                    merged_recovery.update(recovery_info)
+                conn.execute(
+                    "UPDATE task_history SET state = ?, output_json = ?, error_summary = ?, "
+                    "recovery_json = ?, started_at = COALESCE(started_at, ?), "
+                    "completed_at = CASE WHEN ? THEN ? ELSE completed_at END WHERE task_id = ?",
+                    (
+                        state, json.dumps(output or {}, ensure_ascii=False, default=str), error_summary,
+                        json.dumps(merged_recovery, ensure_ascii=False, default=str), datetime.now().isoformat(),
+                        int(state in terminal), datetime.now().isoformat(), task_id,
+                    ),
+                )
+            return True
+        except (sqlite3.Error, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning(f"更新任务历史失败 {task_id}: {exc}")
+            return False
+
+    def get_task_history(self, project_id: Optional[str] = None, limit: int = 100) -> List[dict]:
+        """读取最近任务，供健康页、审计与恢复入口使用。"""
+        with self._connection() as conn:
+            if project_id:
+                rows = conn.execute(
+                    "SELECT * FROM task_history WHERE project_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (project_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM task_history ORDER BY created_at DESC LIMIT ?", (limit,)
+                ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            for key in ("parameters_json", "recovery_json", "output_json"):
+                try:
+                    item[key[:-5]] = json.loads(item.get(key) or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    item[key[:-5]] = {}
+            result.append(item)
+        return result
+
+    # ===== 项目健康容量快照 =====
+
+    def record_storage_health_snapshot(
+        self, project_id: Optional[str], target_path: str, total_bytes: int, free_bytes: int,
+    ) -> bool:
+        """记录可达备份目标的容量，用于健康页展示近期趋势。"""
+        try:
+            with self._transaction() as conn:
+                conn.execute(
+                    "INSERT INTO storage_health_snapshots "
+                    "(snapshot_id, project_id, target_path, total_bytes, free_bytes, captured_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (str(uuid.uuid4()), project_id, target_path, int(total_bytes), int(free_bytes),
+                     datetime.now().isoformat()),
+                )
+            return True
+        except sqlite3.Error as exc:
+            logger.warning(f"记录存储健康快照失败: {exc}")
+            return False
+
+    def get_storage_health_snapshots(self, project_id: Optional[str], limit: int = 60) -> List[dict]:
+        """读取项目近期的目标容量快照，按采集时间正序返回。"""
+        limit = max(1, min(int(limit), 5000))
+        with self._connection() as conn:
+            if project_id:
+                rows = conn.execute(
+                    "SELECT * FROM storage_health_snapshots WHERE project_id = ? "
+                    "ORDER BY captured_at DESC LIMIT ?", (project_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM storage_health_snapshots ORDER BY captured_at DESC LIMIT ?", (limit,)
+                ).fetchall()
+        result = [dict(row) for row in reversed(rows)]
+        for item in result:
+            item["captured_at"] = self._parse_datetime(item.get("captured_at"))
+        return result
 
     # ===== 备份作业持久化 =====
 
@@ -2478,17 +2689,22 @@ class DatabaseService:
             {"path": t.path, "files": list(t.failed_files)}
             for t in job.targets if t.failed_files
         ], ensure_ascii=False)
+        snapshots_json = json.dumps(
+            list(getattr(job, "_files_cache", []) or []),
+            ensure_ascii=False,
+            default=str,
+        )
 
         try:
             with self._transaction() as conn:
                 conn.execute(
                     """INSERT OR REPLACE INTO backup_jobs
                        (job_id, project_id, source_path, algorithm, total_files, total_bytes,
-                        status, targets_json, failed_files_json, created_at, completed_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        status, targets_json, failed_files_json, snapshot_json, created_at, completed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (job.job_id, project_id, job.source_path, job.algorithm.value,
                      job.total_files, job.total_bytes, job.status.value, targets_json,
-                     failed_files_json, job.created_at.isoformat(),
+                     failed_files_json, snapshots_json, job.created_at.isoformat(),
                      job.completed_at.isoformat() if job.completed_at else None)
                 )
                 logger.info(f"持久化备份作业: {job.job_id} (project={project_id})")
@@ -2542,6 +2758,10 @@ class DatabaseService:
                     failed = json.loads(r["failed_files_json"]) if r["failed_files_json"] else []
                 except (json.JSONDecodeError, TypeError):
                     failed = []
+                try:
+                    snapshots = json.loads(r["snapshot_json"]) if r["snapshot_json"] else []
+                except (json.JSONDecodeError, TypeError):
+                    snapshots = []
                 failed_by_target = {f["path"]: f.get("files", []) for f in failed}
                 results.append({
                     "job_id": r["job_id"],
@@ -2552,9 +2772,10 @@ class DatabaseService:
                     "total_bytes": r["total_bytes"],
                     "status": r["status"],
                     "targets": targets,
-                    "created_at": datetime.fromisoformat(r["created_at"]),
+                    "created_at": self._parse_datetime(r["created_at"]),
                     "completed_at": completed_at,
                     "failed_files_by_target": failed_by_target,
+                    "file_snapshots": snapshots,
                 })
             return results
 

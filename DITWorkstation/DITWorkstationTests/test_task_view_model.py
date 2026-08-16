@@ -74,6 +74,23 @@ def test_task_view_model_records_observability_baseline():
     assert record.state is TaskState.COMPLETED
 
 
+def test_task_view_model_persists_history(db_service, project):
+    """统一任务模型会把终态、输出和恢复上下文写入任务历史表。"""
+    vm = TaskViewModel(task_store=db_service)
+    _wait_for_signal(
+        vm.finished,
+        start=lambda: vm.start(
+            lambda: {"written": 2}, task_name="test_export", project_id=project.project_id,
+            recovery_info={"output_path": "/tmp/test.csv"},
+        ),
+    )
+    rows = db_service.get_task_history(project.project_id)
+    assert rows[0]["task_name"] == "test_export"
+    assert rows[0]["state"] == TaskState.COMPLETED.value
+    assert rows[0]["output"] == {"result": {"written": 2}}
+    assert rows[0]["recovery"]["output_path"] == "/tmp/test.csv"
+
+
 def test_worker_cleanup_waits_for_native_thread_completion():
     worker = WorkerThread(lambda: "done")
     events = []

@@ -36,8 +36,9 @@ if ! "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)
 fi
 
 if ! command -v mediainfo >/dev/null 2>&1; then
-    echo "警告：未安装 MediaInfo，视频元数据功能将受限"
+    echo "错误：未安装 MediaInfo。正式构建要求视频元数据依赖完整。"
     echo "      请运行：brew install mediainfo"
+    exit 1
 fi
 
 echo "=== [2/6] 创建/复用 venv ==="
@@ -49,15 +50,8 @@ source .venv/bin/activate
 
 echo "=== [3/6] 安装依赖 ==="
 python -m pip install --upgrade pip >/dev/null
-# rawpy 为可选依赖（部分平台无预编译 wheel），从主依赖列表单独过滤安装
-# 注意：requirements.txt 已固定 pyinstaller==6.21.0，无需单独安装
-TMP_REQ="${TMPDIR:-/tmp}/dit-requirements-core.txt"
-grep -v '^rawpy' requirements.txt > "$TMP_REQ"
-python -m pip install -r "$TMP_REQ" >/dev/null
-rm -f "$TMP_REQ"
-if ! python -m pip install "rawpy>=0.21.0" >/dev/null; then
-    echo "警告：rawpy 安装失败（可选），RAW 缩略图将降级为 EXIF 内嵌预览"
-fi
+# RAW 与 PyAV 是正式交付依赖；安装失败即中止，避免构建出功能不完整的包。
+python -m pip install -r requirements.txt >/dev/null
 
 echo "=== [4/6] 运行单元测试 ==="
 cd DITWorkstation
