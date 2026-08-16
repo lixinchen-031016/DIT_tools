@@ -39,6 +39,11 @@ data/*.db-shm
 data/*.db-wal
 data/*.log
 data/*.json
+# 运行时产物：迁移备份、本地配置、日志与缩略图缓存
+data/*.bak
+data/settings.json
+data/logs/
+data/thumbnails/
 # 如需保留 data/ 目录本身（无内容），取消下一行注释：
 # !data/.gitkeep
 
