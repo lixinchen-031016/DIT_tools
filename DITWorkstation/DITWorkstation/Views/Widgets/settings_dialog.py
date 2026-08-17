@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QGroupBox, QFormLayout, QCheckBox, QMessageBox, QApplication, QComboBox,
+    QGroupBox, QFormLayout, QCheckBox, QMessageBox, QApplication, QComboBox, QFileDialog,
     QScrollArea, QWidget,
 )
 from PySide6.QtCore import Qt, QProcess
@@ -17,7 +17,7 @@ from DITWorkstation.App.feature_flags import (
 from DITWorkstation.Services.thumbnail_service import ThumbnailService
 from DITWorkstation.Utils import (
     format_size, clear_recent_paths, count_recent_paths, open_in_file_manager,
-    save_app_settings, pick_directory, get_db_service, logger,
+    save_app_settings, pick_directory, get_db_service, logger, export_settings, import_settings,
     log_files_summary, delete_log_files,
 )
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS
@@ -220,6 +220,19 @@ class SettingsDialog(QDialog):
         ]
         for w in self._automation_widgets:
             w.setVisible(is_enabled("card_automation"))
+
+        settings_io_group = QGroupBox("设置迁移")
+        settings_io_layout = QHBoxLayout(settings_io_group)
+        settings_io_hint = QLabel("导入的设置将在重启应用后生效")
+        settings_io_hint.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY};")
+        settings_io_layout.addWidget(settings_io_hint, 1)
+        self.export_settings_btn = QPushButton("导出设置...")
+        self.export_settings_btn.clicked.connect(self._export_settings)
+        settings_io_layout.addWidget(self.export_settings_btn)
+        self.import_settings_btn = QPushButton("导入设置...")
+        self.import_settings_btn.clicked.connect(self._import_settings)
+        settings_io_layout.addWidget(self.import_settings_btn)
+        layout.addWidget(settings_io_group)
 
         layout.addStretch()
         scroll.setWidget(content)
@@ -498,6 +511,31 @@ class SettingsDialog(QDialog):
         count = clear_recent_paths("all")
         self._refresh_states()
         QMessageBox.information(self, "清理完成", f"已清空 {count} 条最近路径记录")
+
+    def _export_settings(self):
+        default_path = str(Path.home() / "DITWorkstation_settings.json")
+        path, _ = QFileDialog.getSaveFileName(self, "导出设置", default_path, "JSON 文件 (*.json)")
+        if not path:
+            return
+        if export_settings(path):
+            QMessageBox.information(self, "导出成功", f"设置已导出到：\n{path}")
+        else:
+            QMessageBox.warning(self, "导出失败", "无法写入设置文件，请检查目标目录权限。")
+
+    def _import_settings(self):
+        path, _ = QFileDialog.getOpenFileName(self, "导入设置", str(Path.home()), "JSON 文件 (*.json)")
+        if not path:
+            return
+        reply = QMessageBox.question(
+            self, "确认导入", "导入将合并同名配置项，重启应用后生效。是否继续？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        if import_settings(path, merge=True):
+            QMessageBox.information(self, "导入成功", "设置已导入。请重启应用以使更改生效。")
+        else:
+            QMessageBox.warning(self, "导入失败", "文件不是有效的设置 JSON，或无法保存导入结果。")
 
     # ===== 运行参数 =====
 

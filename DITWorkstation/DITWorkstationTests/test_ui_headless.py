@@ -141,6 +141,8 @@ def test_settings_dialog_has_location_and_cleanup_controls(tmp_dir, monkeypatch)
     assert hasattr(dlg, "auto_card_automation_check")
     assert hasattr(dlg, "auto_card_project_combo")
     assert hasattr(dlg, "auto_card_template_combo")
+    assert hasattr(dlg, "export_settings_btn")
+    assert hasattr(dlg, "import_settings_btn")
 
 
 def test_settings_dialog_change_db_dir_moves_database(tmp_dir, monkeypatch):

@@ -85,6 +85,53 @@ def test_save_settings_does_not_clobber_recent_paths(tmp_path, monkeypatch):
     assert raw["app_config"]["verify_after_copy"] is False
 
 
+def test_export_settings_writes_validated_json(tmp_path, monkeypatch):
+    _patch_settings_path(monkeypatch, tmp_path)
+    common.save_app_settings(verify_after_copy=False)
+    target = tmp_path / "export.json"
+
+    assert common.export_settings(target)
+    import json
+    assert json.loads(target.read_text(encoding="utf-8")) == {
+        "app_config": {"verify_after_copy": False}
+    }
+
+
+def test_import_settings_deep_merge_preserves_local_values(tmp_path, monkeypatch):
+    target = _patch_settings_path(monkeypatch, tmp_path)
+    common._save_settings({
+        "app_config": {"verify_after_copy": False, "auto_detect_volume": True},
+        "recent_directories_import_source": ["/local/source"],
+    })
+    source = tmp_path / "import.json"
+    source.write_text(
+        '{"app_config": {"max_parallel_copies": 8}, "future_section": {"enabled": true}}',
+        encoding="utf-8",
+    )
+
+    assert common.import_settings(source, merge=True)
+    import json
+    assert json.loads(target.read_text(encoding="utf-8")) == {
+        "app_config": {
+            "verify_after_copy": False,
+            "auto_detect_volume": True,
+            "max_parallel_copies": 8,
+        },
+        "recent_directories_import_source": ["/local/source"],
+        "future_section": {"enabled": True},
+    }
+
+
+def test_invalid_import_does_not_overwrite_current_settings(tmp_path, monkeypatch):
+    target = _patch_settings_path(monkeypatch, tmp_path)
+    common.save_app_settings(verify_after_copy=False)
+    source = tmp_path / "invalid.json"
+    source.write_text('{"app_config": ', encoding="utf-8")
+
+    assert not common.import_settings(source)
+    assert target.read_text(encoding="utf-8") == '{\n  "app_config": {\n    "verify_after_copy": false\n  }\n}'
+
+
 def test_apply_saved_config_sets_known_fields(tmp_path, monkeypatch):
     _patch_settings_path(monkeypatch, tmp_path)
     common.save_app_settings(verify_after_copy=False, auto_detect_volume=False, unknown_key=1)

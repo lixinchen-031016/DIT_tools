@@ -9,7 +9,7 @@ from .common import (
     safe_slot, pick_directory, pick_save_file, pick_open_file,
     open_in_file_manager, find_overwrite_conflicts,
     add_recent_path, get_recent_paths, clear_recent_paths, count_recent_paths,
-    load_app_settings, save_app_settings, apply_saved_config,
+    load_app_settings, save_app_settings, apply_saved_config, export_settings, import_settings,
     log_files_summary, delete_log_files,
 )
 from .workers import WorkerSignals, WorkerThread, SimpleWorkerThread
@@ -27,6 +27,6 @@ __all__ = [
     'safe_slot', 'pick_directory', 'pick_save_file', 'pick_open_file',
     'open_in_file_manager', 'find_overwrite_conflicts',
     'add_recent_path', 'get_recent_paths', 'clear_recent_paths', 'count_recent_paths',
-    'load_app_settings', 'save_app_settings', 'apply_saved_config',
+    'load_app_settings', 'save_app_settings', 'apply_saved_config', 'export_settings', 'import_settings',
     'log_files_summary', 'delete_log_files',
 ]

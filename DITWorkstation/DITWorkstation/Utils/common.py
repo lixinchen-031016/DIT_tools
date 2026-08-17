@@ -288,12 +288,10 @@ def _load_settings() -> dict:
         return {}
 
 
-def _save_settings(settings: dict) -> bool:
-    """原子保存 settings.json，避免进程中断留下半写入文件。"""
-    path = _get_settings_path()
+def _write_settings_file(path: Path, settings: dict) -> bool:
+    """Atomically write an already validated settings envelope to ``path``."""
     temporary_path = None
     try:
-        settings = _validate_settings(settings)
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", dir=path.parent,
@@ -314,6 +312,56 @@ def _save_settings(settings: dict) -> bool:
                 temporary_path.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def _save_settings(settings: dict) -> bool:
+    """原子保存 settings.json，避免进程中断留下半写入文件。"""
+    try:
+        return _write_settings_file(_get_settings_path(), _validate_settings(settings))
+    except (TypeError, ValueError) as exc:
+        logger.warning(f"保存 settings.json 失败: {exc}")
+        return False
+
+
+def _merge_settings(current: dict, imported: dict) -> dict:
+    """Deep-merge settings envelopes without discarding unknown future sections."""
+    merged = dict(current)
+    for key, value in imported.items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = _merge_settings(existing, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def export_settings(target_path: str | Path) -> bool:
+    """Export the current validated settings snapshot using an atomic file replacement."""
+    try:
+        target = Path(target_path)
+        if not target.name:
+            return False
+        return _write_settings_file(target, _load_settings())
+    except (OSError, TypeError, ValueError) as exc:
+        logger.warning(f"导出设置失败 {target_path}: {exc}")
+        return False
+
+
+def import_settings(source_path: str | Path, *, merge: bool = True) -> bool:
+    """Validate an external JSON settings file and atomically save it locally.
+
+    ``merge=True`` keeps local settings not mentioned by the imported file and
+    recursively merges mapping sections such as ``app_config``.
+    """
+    try:
+        source = Path(source_path)
+        with open(source, "r", encoding="utf-8") as file:
+            imported = _validate_settings(json.load(file))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        logger.warning(f"导入设置失败 {source_path}: {exc}")
+        return False
+    settings = _merge_settings(_load_settings(), imported) if merge else imported
+    return _save_settings(settings)
 
 
 def add_recent_path(path: str, category: str = "default"):
