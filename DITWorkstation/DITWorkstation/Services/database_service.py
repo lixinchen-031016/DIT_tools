@@ -16,6 +16,14 @@ from DITWorkstation.Models import (
     ChecksumAlgorithm, OperationResult, OperationStatus,
 )
 from DITWorkstation.Utils import logger, normalize_path
+from DITWorkstation.Services.repositories.field_registry import (
+    BACKUP_TEMPLATE_FIELDS,
+    MEDIA_ASSET_FIELDS,
+    PROJECT_FIELDS,
+    PROJECT_TEMPLATE_FIELDS,
+    WORKSPACE_FIELDS,
+    build_update_clause,
+)
 
 
 def _chunked(seq, size):
@@ -806,26 +814,15 @@ class DatabaseService:
 
     def update_workspace(self, workspace_id: str, **kwargs) -> bool:
         """更新工作区（支持 name / path / description）"""
-        if not kwargs:
+        sql, params = build_update_clause(
+            WORKSPACE_FIELDS, "workspaces", "workspace_id", workspace_id, **kwargs
+        )
+        if not sql:
             return False
-        fields = []
-        params = []
-        for key, value in kwargs.items():
-            if key in ['name', 'path', 'description']:
-                fields.append(f"{key} = ?")
-                params.append(value)
-        if not fields:
-            return False
-        fields.append("updated_at = ?")
-        params.append(datetime.now().isoformat())
-        params.append(workspace_id)
 
         try:
             with self._transaction() as conn:
-                cursor = conn.execute(
-                    f"UPDATE workspaces SET {', '.join(fields)} WHERE workspace_id = ?",
-                    params,
-                )
+                cursor = conn.execute(sql, params)
                 if cursor.rowcount != 1:
                     logger.warning(f"工作区不存在，未更新: {workspace_id}")
                     return False
@@ -951,28 +948,8 @@ class DatabaseService:
             return self._row_to_project(row) if row else None
 
     def _legacy_update_project(self, project_id: str, **kwargs) -> bool:
-        """更新项目"""
-        if not kwargs:
-            return False
-
-        fields = []
-        params = []
-        for key, value in kwargs.items():
-            if key in ['name', 'description', 'base_path', 'workspace_id']:
-                fields.append(f"{key} = ?")
-                params.append(value)
-        fields.append("updated_at = ?")
-        params.append(datetime.now().isoformat())
-        params.append(project_id)
-
-        try:
-            with self._transaction() as conn:
-                conn.execute(f"UPDATE projects SET {', '.join(fields)} WHERE project_id = ?", params)
-                logger.info(f"更新项目: {project_id}")
-                return True
-        except Exception as e:
-            logger.error(f"更新项目失败 {project_id}: {e}")
-            return False
+        """兼容旧内部调用，委托给当前项目更新入口。"""
+        return bool(self.update_project_result(project_id, **kwargs))
 
     def _legacy_delete_project(self, project_id: str):
         """删除项目（事务级联清理 media_assets + shooting_logs + projects）
@@ -996,20 +973,16 @@ class DatabaseService:
             logger.info(f"删除项目: {project_id}")
 
     def update_project_result(self, project_id: str, **kwargs) -> OperationResult:
-        fields, params = [], []
-        for key, value in kwargs.items():
-            if key in {'name', 'description', 'base_path', 'workspace_id'}:
-                fields.append(f"{key} = ?")
-                params.append(value)
-        if not fields:
+        sql, params = build_update_clause(
+            PROJECT_FIELDS, "projects", "project_id", project_id, **kwargs
+        )
+        if not sql:
             return OperationResult(OperationStatus.INVALID, "没有可更新的项目字段")
-        fields.append("updated_at = ?")
-        params.append(datetime.now().isoformat())
         try:
             with self._transaction() as conn:
                 if conn.execute("SELECT 1 FROM projects WHERE project_id = ?", (project_id,)).fetchone() is None:
                     return OperationResult(OperationStatus.NOT_FOUND, f"项目不存在: {project_id}")
-                conn.execute(f"UPDATE projects SET {', '.join(fields)} WHERE project_id = ?", (*params, project_id))
+                conn.execute(sql, params)
                 self._record_operation_in_transaction(
                     conn, "更新项目", project_id=project_id, object_type="project", object_id=project_id,
                 )
@@ -1109,25 +1082,14 @@ class DatabaseService:
 
     def update_project_template(self, template_id: str, **kwargs) -> bool:
         """更新项目模板（支持 name / description / base_path / notes）。"""
-        if not kwargs:
+        sql, params = build_update_clause(
+            PROJECT_TEMPLATE_FIELDS, "project_templates", "template_id", template_id, **kwargs
+        )
+        if not sql:
             return False
-        fields = []
-        params = []
-        for key, value in kwargs.items():
-            if key in ['name', 'description', 'base_path', 'notes']:
-                fields.append(f"{key} = ?")
-                params.append(value)
-        if not fields:
-            return False
-        fields.append("updated_at = ?")
-        params.append(datetime.now().isoformat())
-        params.append(template_id)
         try:
             with self._transaction() as conn:
-                conn.execute(
-                    f"UPDATE project_templates SET {', '.join(fields)} WHERE template_id = ?",
-                    params,
-                )
+                conn.execute(sql, params)
                 logger.info(f"更新项目模板: {template_id}")
                 return True
         except Exception as e:
@@ -1209,31 +1171,13 @@ class DatabaseService:
 
     def update_backup_template(self, template_id: str, **kwargs) -> bool:
         """更新备份模板字段。"""
-        allowed = {
-            "name", "target_paths", "algorithm", "verify_after_copy", "description"
-        }
-        fields = []
-        params = []
-        for key, value in kwargs.items():
-            if key not in allowed:
-                continue
-            if key == "target_paths":
-                value = json.dumps(list(value), ensure_ascii=False)
-            elif key == "algorithm":
-                value = value.value if isinstance(value, ChecksumAlgorithm) else str(value)
-            elif key == "verify_after_copy":
-                value = int(bool(value))
-            fields.append(f"{key} = ?")
-            params.append(value)
-        if not fields:
+        sql, params = build_update_clause(
+            BACKUP_TEMPLATE_FIELDS, "backup_templates", "template_id", template_id, **kwargs
+        )
+        if not sql:
             return False
-        fields.append("updated_at = ?")
-        params.extend([datetime.now().isoformat(), template_id])
         with self._transaction() as conn:
-            cursor = conn.execute(
-                f"UPDATE backup_templates SET {', '.join(fields)} WHERE template_id = ?",
-                params,
-            )
+            cursor = conn.execute(sql, params)
             return cursor.rowcount > 0
 
     def delete_backup_template(self, template_id: str) -> bool:
@@ -1528,44 +1472,8 @@ class DatabaseService:
             return self._row_to_asset(row) if row else None
 
     def _legacy_update_media_asset(self, asset_id: str, **kwargs) -> bool:
-        """更新素材资产"""
-        if not kwargs:
-            return False
-
-        fields = []
-        params = []
-        for key, value in kwargs.items():
-            if key in ['file_path', 'file_name', 'file_size', 'file_type',
-                       'asset_type', 'checksum_algorithm', 'checksum_value',
-                       'scene', 'shot', 'take', 'date_taken',
-                       'camera_make', 'camera_model',
-                       'backup_locations', 'log_id',
-                       'is_working_copy', 'original_path',
-                       'width', 'height', 'duration_seconds',
-                       'lens_model', 'focal_length', 'video_metadata',
-                       'rating', 'tags', 'notes']:
-                if key == 'backup_locations' and isinstance(value, list):
-                    value = "|".join(value)
-                if key == 'is_working_copy' and isinstance(value, bool):
-                    value = 1 if value else 0
-                if key == 'date_taken' and hasattr(value, 'isoformat'):
-                    value = value.isoformat()
-                fields.append(f"{key} = ?")
-                params.append(value)
-        tags_updated = 'tags' in kwargs
-        params.append(asset_id)
-
-        try:
-            with self._transaction() as conn:
-                conn.execute(f"UPDATE media_assets SET {', '.join(fields)} WHERE asset_id = ?", params)
-                if tags_updated:
-                    self._sync_asset_tags(conn, asset_id, kwargs.get('tags') or '')
-                self._refresh_asset_fts(conn, asset_id)
-                logger.info(f"更新素材资产: {asset_id}")
-                return True
-        except Exception as e:
-            logger.error(f"更新素材资产失败 {asset_id}: {e}")
-            return False
+        """兼容旧内部调用，委托给当前素材更新入口。"""
+        return bool(self.update_media_asset_result(asset_id, **kwargs))
 
     def _legacy_delete_media_asset(self, asset_id: str) -> bool:
         """删除素材资产"""
@@ -1630,15 +1538,6 @@ class DatabaseService:
         logger.info(f"批量删除素材资产: 成功 {deleted}/{len(asset_ids)}")
         return deleted
 
-    _ASSET_WRITABLE_FIELDS = {
-        'file_path', 'file_name', 'file_size', 'file_type', 'asset_type',
-        'checksum_algorithm', 'checksum_value', 'scene', 'shot', 'take',
-        'date_taken', 'camera_make', 'camera_model', 'backup_locations',
-        'log_id', 'is_working_copy', 'original_path', 'width', 'height',
-        'duration_seconds', 'lens_model', 'focal_length', 'video_metadata',
-        'rating', 'tags', 'notes',
-    }
-
     def _record_operation_in_transaction(
         self, conn, event: str, detail: str = "", project_id: Optional[str] = None,
         status: str = OperationStatus.SUCCESS.value, object_type: str = "",
@@ -1686,26 +1585,18 @@ class DatabaseService:
 
     def update_media_asset_result(self, asset_id: str, **kwargs) -> OperationResult:
         """更新素材并区分参数、未找到与数据库错误。"""
-        fields, params = [], []
-        for key, value in kwargs.items():
-            if key not in self._ASSET_WRITABLE_FIELDS:
-                continue
-            if key == 'backup_locations' and isinstance(value, list):
-                value = "|".join(value)
-            elif key == 'is_working_copy' and isinstance(value, bool):
-                value = int(value)
-            elif key == 'date_taken' and hasattr(value, 'isoformat'):
-                value = value.isoformat()
-            fields.append(f"{key} = ?")
-            params.append(value)
-        if not fields:
+        sql, params = build_update_clause(
+            MEDIA_ASSET_FIELDS, "media_assets", "asset_id", asset_id,
+            touch_updated_at=False, **kwargs,
+        )
+        if not sql:
             return OperationResult(OperationStatus.INVALID, "没有可更新的素材字段")
         try:
             with self._transaction() as conn:
                 exists = conn.execute("SELECT 1 FROM media_assets WHERE asset_id = ?", (asset_id,)).fetchone()
                 if exists is None:
                     return OperationResult(OperationStatus.NOT_FOUND, f"素材不存在: {asset_id}")
-                conn.execute(f"UPDATE media_assets SET {', '.join(fields)} WHERE asset_id = ?", (*params, asset_id))
+                conn.execute(sql, params)
                 if 'tags' in kwargs:
                     self._sync_asset_tags(conn, asset_id, kwargs.get('tags') or '')
                 self._refresh_asset_fts(conn, asset_id)

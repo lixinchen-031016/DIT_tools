@@ -14,7 +14,7 @@ from DITWorkstation.Models import (
     CopyTask, ChecksumAlgorithm
 )
 from DITWorkstation.Services.checksum_service import ChecksumService
-from DITWorkstation.Utils import logger, get_checksum_service, scan_files
+from DITWorkstation.Utils import calculate_speed, logger, get_checksum_service, scan_files
 
 
 class BackupService:
@@ -881,10 +881,3 @@ class BackupService:
 
         lines.append('</hashlist>')
         return "\n".join(lines)
-
-
-def calculate_speed(elapsed_seconds: float, bytes_transferred: int) -> float:
-    """计算传输速度（Mbps）"""
-    if elapsed_seconds <= 0:
-        return 0.0
-    return (bytes_transferred / 1024 / 1024) / elapsed_seconds
