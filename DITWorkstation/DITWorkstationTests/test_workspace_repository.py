@@ -1,7 +1,7 @@
 """Repository integration tests sharing the database facade's storage."""
 from datetime import datetime
 
-from DITWorkstation.Models import MediaAsset, ShootingLog
+from DITWorkstation.Models import BackupJob, MediaAsset, ShootingLog
 
 
 def test_workspace_repository_and_database_facade_share_storage(db_service):
@@ -76,3 +76,26 @@ def test_asset_repository_read_paths_and_facade_share_storage(db_service):
     )
     assert [asset.asset_id for asset in first + second] == ["asset-c", "asset-b", "asset-a"]
     assert final_cursor is None
+
+
+def test_lifecycle_and_operation_repositories_share_facade_storage(db_service):
+    project = db_service.create_project("生命周期仓储项目")
+    asset = MediaAsset("repo-lifecycle", project.project_id, "/media/clip.mov", "clip.mov")
+    db_service.assets.create(asset)
+
+    deleted = db_service.assets.delete_result([asset.asset_id])
+    assert deleted
+    assert db_service.recycle.list_items(project.project_id)[0]["recycle_id"] == deleted.recovery_id
+    assert db_service.recycle.restore_item(deleted.recovery_id)
+    assert db_service.get_media_asset(asset.asset_id) is not None
+
+    rename = db_service.renames.create([("/media/clip.mov", "/media/clip-v2.mov")], project.project_id)
+    assert db_service.get_rename_history(rename.recovery_id)
+
+    task_id = db_service.tasks.create("仓储任务", project.project_id)
+    assert db_service.update_task_history(task_id, "completed")
+    assert db_service.get_task_history(project.project_id)[0]["task_id"] == task_id
+
+    job = BackupJob("repo-job", "/media")
+    assert db_service.backup_jobs.save(job, project.project_id)
+    assert db_service.get_backup_job(job.job_id)["project_id"] == project.project_id
