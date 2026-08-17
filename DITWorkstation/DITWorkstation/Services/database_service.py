@@ -24,6 +24,8 @@ from DITWorkstation.Services.repositories.field_registry import (
     WORKSPACE_FIELDS,
     build_update_clause,
 )
+from DITWorkstation.Services.repositories.workspace_repository import WorkspaceRepository
+from DITWorkstation.Services.repositories.template_repository import TemplateRepository
 
 
 def _chunked(seq, size):
@@ -56,6 +58,8 @@ class DatabaseService:
         self._had_existing_db = self.db_path.exists() and self.db_path.stat().st_size > 0
         self._fts_available = False
         self._init_db()
+        self.workspaces = WorkspaceRepository(self)
+        self.templates = TemplateRepository(self)
 
     def _create_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
@@ -753,44 +757,16 @@ class DatabaseService:
     # ===== 工作区管理 =====
 
     def create_workspace(self, name: str, path: str = "", description: str = "") -> Workspace:
-        """创建工作区
-
-        Args:
-            name: 工作区名称（如「2026 春季广告片」）
-            path: 工作区对应的物理目录路径（作为该工作区下项目的默认工作目录根）
-            description: 工作区描述
-        """
-        workspace = Workspace(
-            workspace_id=str(uuid.uuid4())[:8],
-            name=name,
-            path=path,
-            description=description
-        )
-        with self._transaction() as conn:
-            conn.execute(
-                "INSERT INTO workspaces (workspace_id, name, path, description, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (workspace.workspace_id, workspace.name, workspace.path, workspace.description,
-                 workspace.created_at.isoformat(), workspace.updated_at.isoformat())
-            )
-            logger.info(f"创建工作区: {workspace.workspace_id} - {workspace.name} (path={workspace.path})")
-        return workspace
+        """创建工作区。"""
+        return self.workspaces.create(name, path, description)
 
     def get_workspaces(self) -> List[Workspace]:
         """获取所有工作区，按创建时间倒序"""
-        with self._connection() as conn:
-            rows = conn.execute(
-                "SELECT * FROM workspaces ORDER BY created_at DESC"
-            ).fetchall()
-            return [self._row_to_workspace(r) for r in rows]
+        return self.workspaces.list_all()
 
     def get_workspace(self, workspace_id: str) -> Optional[Workspace]:
         """获取单个工作区"""
-        with self._connection() as conn:
-            row = conn.execute(
-                "SELECT * FROM workspaces WHERE workspace_id = ?", (workspace_id,)
-            ).fetchone()
-            return self._row_to_workspace(row) if row else None
+        return self.workspaces.get(workspace_id)
 
     def get_or_create_default_workspace(self) -> Workspace:
         """获取或创建 id='default' 的默认工作区。
@@ -798,39 +774,11 @@ class DatabaseService:
         个人模式不显式创建工作区，项目（workspace_id=None）自动归入此处；
         首启向导与启动兼容检查依赖本方法确保该工作区一定存在（path 可能为空）。
         """
-        now = datetime.now().isoformat()
-        with self._transaction() as conn:
-            conn.execute(
-                "INSERT INTO workspaces "
-                "(workspace_id, name, path, description, created_at, updated_at) "
-                "VALUES ('default', ?, ?, ?, ?, ?) "
-                "ON CONFLICT(workspace_id) DO NOTHING",
-                ("默认工作区", "", "默认工作区", now, now),
-            )
-        workspace = self.get_workspace("default")
-        if workspace is None:
-            raise RuntimeError("创建默认工作区后仍无法读取")
-        return workspace
+        return self.workspaces.get_or_create_default()
 
     def update_workspace(self, workspace_id: str, **kwargs) -> bool:
         """更新工作区（支持 name / path / description）"""
-        sql, params = build_update_clause(
-            WORKSPACE_FIELDS, "workspaces", "workspace_id", workspace_id, **kwargs
-        )
-        if not sql:
-            return False
-
-        try:
-            with self._transaction() as conn:
-                cursor = conn.execute(sql, params)
-                if cursor.rowcount != 1:
-                    logger.warning(f"工作区不存在，未更新: {workspace_id}")
-                    return False
-                logger.info(f"更新工作区: {workspace_id}")
-                return True
-        except Exception as e:
-            logger.error(f"更新工作区失败 {workspace_id}: {e}")
-            return False
+        return self.workspaces.update(workspace_id, **kwargs)
 
     def delete_workspace(self, workspace_id: str, reassign_to: Optional[str] = None) -> bool:
         """删除工作区。
@@ -843,51 +791,7 @@ class DatabaseService:
         Returns:
             是否成功（默认工作区 'default' 不可删除，防止误操作）
         """
-        if workspace_id == "default":
-            logger.warning("拒绝删除默认工作区")
-            return False
-
-        try:
-            with self._transaction() as conn:
-                default_exists = conn.execute(
-                    "SELECT 1 FROM workspaces WHERE workspace_id = 'default'"
-                ).fetchone()
-                if default_exists is None:
-                    now = datetime.now().isoformat()
-                    conn.execute(
-                        "INSERT INTO workspaces "
-                        "(workspace_id, name, path, description, created_at, updated_at) "
-                        "VALUES ('default', ?, '', ?, ?, ?)",
-                        ("默认工作区", "默认工作区", now, now),
-                    )
-                if reassign_to:
-                    conn.execute(
-                        "UPDATE projects SET workspace_id = ? WHERE workspace_id = ?",
-                        (reassign_to, workspace_id)
-                    )
-                else:
-                    # 置 NULL，迁移逻辑会在下次启动时归入默认工作区；
-                    # 此处也立即归集以保持运行期一致性
-                    conn.execute(
-                        "UPDATE projects SET workspace_id = 'default' WHERE workspace_id = ?",
-                        (workspace_id,)
-                    )
-                conn.execute("DELETE FROM workspaces WHERE workspace_id = ?", (workspace_id,))
-                logger.info(f"删除工作区: {workspace_id}（项目已归入 default）")
-                return True
-        except Exception as e:
-            logger.error(f"删除工作区失败 {workspace_id}: {e}")
-            return False
-
-    def _row_to_workspace(self, row: sqlite3.Row) -> Workspace:
-        return Workspace(
-            workspace_id=row["workspace_id"],
-            name=row["name"],
-            path=row["path"],
-            description=row["description"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"])
-        )
+        return self.workspaces.delete(workspace_id, reassign_to)
 
     # ===== 项目管理 =====
 
@@ -1043,82 +947,23 @@ class DatabaseService:
         notes: str = "",
     ) -> ProjectTemplate:
         """创建项目模板。"""
-        template = ProjectTemplate(
-            template_id=str(uuid.uuid4())[:8],
-            name=name,
-            description=description,
-            base_path=base_path,
-            notes=notes,
-        )
-        with self._transaction() as conn:
-            conn.execute(
-                "INSERT INTO project_templates "
-                "(template_id, name, description, base_path, notes, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    template.template_id, template.name, template.description,
-                    template.base_path, template.notes,
-                    template.created_at.isoformat(), template.updated_at.isoformat(),
-                ),
-            )
-            logger.info(f"创建项目模板: {template.template_id} - {template.name}")
-        return template
+        return self.templates.create_project(name, description, base_path, notes)
 
     def get_project_templates(self) -> List[ProjectTemplate]:
         """获取所有项目模板，按创建时间倒序。"""
-        with self._connection() as conn:
-            rows = conn.execute(
-                "SELECT * FROM project_templates ORDER BY created_at DESC"
-            ).fetchall()
-            return [self._row_to_template(r) for r in rows]
+        return self.templates.list_projects()
 
     def get_project_template(self, template_id: str) -> Optional[ProjectTemplate]:
         """获取单个项目模板。"""
-        with self._connection() as conn:
-            row = conn.execute(
-                "SELECT * FROM project_templates WHERE template_id = ?", (template_id,)
-            ).fetchone()
-            return self._row_to_template(row) if row else None
+        return self.templates.get_project(template_id)
 
     def update_project_template(self, template_id: str, **kwargs) -> bool:
         """更新项目模板（支持 name / description / base_path / notes）。"""
-        sql, params = build_update_clause(
-            PROJECT_TEMPLATE_FIELDS, "project_templates", "template_id", template_id, **kwargs
-        )
-        if not sql:
-            return False
-        try:
-            with self._transaction() as conn:
-                conn.execute(sql, params)
-                logger.info(f"更新项目模板: {template_id}")
-                return True
-        except Exception as e:
-            logger.error(f"更新项目模板失败 {template_id}: {e}")
-            return False
+        return self.templates.update_project(template_id, **kwargs)
 
     def delete_project_template(self, template_id: str) -> bool:
         """删除项目模板。"""
-        try:
-            with self._transaction() as conn:
-                conn.execute(
-                    "DELETE FROM project_templates WHERE template_id = ?", (template_id,)
-                )
-                logger.info(f"删除项目模板: {template_id}")
-                return True
-        except Exception as e:
-            logger.error(f"删除项目模板失败 {template_id}: {e}")
-            return False
-
-    def _row_to_template(self, row: sqlite3.Row) -> ProjectTemplate:
-        return ProjectTemplate(
-            template_id=row["template_id"],
-            name=row["name"],
-            description=row["description"],
-            base_path=row["base_path"],
-            notes=row["notes"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
-        )
+        return self.templates.delete_project(template_id)
 
     # ===== 备份方案模板 =====
 
@@ -1131,79 +976,23 @@ class DatabaseService:
         description: str = "",
     ) -> BackupTemplate:
         """创建备份方案模板。目标路径支持 ``{source_name}`` 占位符。"""
-        template = BackupTemplate(
-            template_id=str(uuid.uuid4())[:8],
-            name=name,
-            target_paths=list(target_paths),
-            algorithm=algorithm,
-            verify_after_copy=verify_after_copy,
-            description=description,
+        return self.templates.create_backup(
+            name, target_paths, algorithm, verify_after_copy, description
         )
-        with self._transaction() as conn:
-            conn.execute(
-                "INSERT INTO backup_templates "
-                "(template_id, name, target_paths, algorithm, verify_after_copy, "
-                "description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    template.template_id, template.name,
-                    json.dumps(template.target_paths, ensure_ascii=False),
-                    template.algorithm.value, int(template.verify_after_copy),
-                    template.description, template.created_at.isoformat(),
-                    template.updated_at.isoformat(),
-                ),
-            )
-        return template
 
     def get_backup_templates(self) -> List[BackupTemplate]:
         """获取备份方案模板，按创建时间倒序。"""
-        with self._connection() as conn:
-            rows = conn.execute(
-                "SELECT * FROM backup_templates ORDER BY created_at DESC"
-            ).fetchall()
-            return [self._row_to_backup_template(row) for row in rows]
+        return self.templates.list_backups()
 
     def get_backup_template(self, template_id: str) -> Optional[BackupTemplate]:
-        with self._connection() as conn:
-            row = conn.execute(
-                "SELECT * FROM backup_templates WHERE template_id = ?", (template_id,)
-            ).fetchone()
-            return self._row_to_backup_template(row) if row else None
+        return self.templates.get_backup(template_id)
 
     def update_backup_template(self, template_id: str, **kwargs) -> bool:
         """更新备份模板字段。"""
-        sql, params = build_update_clause(
-            BACKUP_TEMPLATE_FIELDS, "backup_templates", "template_id", template_id, **kwargs
-        )
-        if not sql:
-            return False
-        with self._transaction() as conn:
-            cursor = conn.execute(sql, params)
-            return cursor.rowcount > 0
+        return self.templates.update_backup(template_id, **kwargs)
 
     def delete_backup_template(self, template_id: str) -> bool:
-        with self._transaction() as conn:
-            cursor = conn.execute(
-                "DELETE FROM backup_templates WHERE template_id = ?", (template_id,)
-            )
-            return cursor.rowcount > 0
-
-    @staticmethod
-    def _row_to_backup_template(row: sqlite3.Row) -> BackupTemplate:
-        try:
-            paths = json.loads(row["target_paths"] or "[]")
-        except (TypeError, ValueError):
-            paths = []
-        try:
-            algorithm = ChecksumAlgorithm(row["algorithm"] or ChecksumAlgorithm.XXHASH64.value)
-        except ValueError:
-            algorithm = ChecksumAlgorithm.XXHASH64
-        return BackupTemplate(
-            template_id=row["template_id"], name=row["name"], target_paths=paths,
-            algorithm=algorithm, verify_after_copy=bool(row["verify_after_copy"]),
-            description=row["description"] or "",
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
-        )
+        return self.templates.delete_backup(template_id)
 
     # ===== 拍摄日志 =====
 
