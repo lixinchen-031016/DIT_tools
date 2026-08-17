@@ -26,6 +26,7 @@ from DITWorkstation.Services.repositories.field_registry import (
 )
 from DITWorkstation.Services.repositories.workspace_repository import WorkspaceRepository
 from DITWorkstation.Services.repositories.template_repository import TemplateRepository
+from DITWorkstation.Services.repositories.project_repository import ProjectRepository
 
 
 def _chunked(seq, size):
@@ -60,6 +61,7 @@ class DatabaseService:
         self._init_db()
         self.workspaces = WorkspaceRepository(self)
         self.templates = TemplateRepository(self)
+        self.projects = ProjectRepository(self)
 
     def _create_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
@@ -807,27 +809,7 @@ class DatabaseService:
         workspace_id 指定所属工作区；为 None 时归入"默认工作区"（id='default'），
         保证新项目不会成为孤儿。
         """
-        # 兜底：未指定 workspace_id，或显式指定 default 但旧库尚未建默认工作区时，
-        # 都确保默认工作区存在。
-        if workspace_id is None or workspace_id == "default":
-            workspace_id = self.get_or_create_default_workspace().workspace_id
-
-        project = Project(
-            project_id=str(uuid.uuid4())[:8],
-            name=name,
-            description=description,
-            base_path=base_path,
-            workspace_id=workspace_id
-        )
-        with self._transaction() as conn:
-            conn.execute(
-                "INSERT INTO projects (project_id, name, description, base_path, workspace_id, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (project.project_id, project.name, project.description, project.base_path,
-                 project.workspace_id, project.created_at.isoformat(), project.updated_at.isoformat())
-            )
-            logger.info(f"创建项目: {project.project_id} - {project.name} (workspace={workspace_id})")
-        return project
+        return self.projects.create(name, description, base_path, workspace_id)
 
     def get_projects(self, workspace_id: Optional[str] = None) -> List[Project]:
         """获取项目列表。
@@ -835,21 +817,11 @@ class DatabaseService:
         Args:
             workspace_id: 指定则只返回该工作区下的项目；None 返回所有项目
         """
-        with self._connection() as conn:
-            if workspace_id:
-                rows = conn.execute(
-                    "SELECT * FROM projects WHERE workspace_id = ? ORDER BY created_at DESC",
-                    (workspace_id,)
-                ).fetchall()
-            else:
-                rows = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
-            return [self._row_to_project(r) for r in rows]
+        return self.projects.list_all(workspace_id)
 
     def get_project(self, project_id: str) -> Optional[Project]:
         """获取单个项目"""
-        with self._connection() as conn:
-            row = conn.execute("SELECT * FROM projects WHERE project_id = ?", (project_id,)).fetchone()
-            return self._row_to_project(row) if row else None
+        return self.projects.get(project_id)
 
     def _legacy_update_project(self, project_id: str, **kwargs) -> bool:
         """兼容旧内部调用，委托给当前项目更新入口。"""
@@ -860,79 +832,17 @@ class DatabaseService:
 
         注意：backup_jobs 表无 project_id 外键，保留备份历史记录不级联删除。
         """
-        with self._transaction() as conn:
-            # 备份历史需要保留，但启用外键后必须先解除项目关联。
-            conn.execute(
-                "UPDATE backup_jobs SET project_id = NULL WHERE project_id = ?",
-                (project_id,)
-            )
-            conn.execute(
-                "DELETE FROM asset_tags WHERE asset_id IN "
-                "(SELECT asset_id FROM media_assets WHERE project_id = ?)",
-                (project_id,)
-            )
-            conn.execute("DELETE FROM media_assets WHERE project_id = ?", (project_id,))
-            conn.execute("DELETE FROM shooting_logs WHERE project_id = ?", (project_id,))
-            conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
-            logger.info(f"删除项目: {project_id}")
+        self.projects.delete_legacy(project_id)
 
     def update_project_result(self, project_id: str, **kwargs) -> OperationResult:
-        sql, params = build_update_clause(
-            PROJECT_FIELDS, "projects", "project_id", project_id, **kwargs
-        )
-        if not sql:
-            return OperationResult(OperationStatus.INVALID, "没有可更新的项目字段")
-        try:
-            with self._transaction() as conn:
-                if conn.execute("SELECT 1 FROM projects WHERE project_id = ?", (project_id,)).fetchone() is None:
-                    return OperationResult(OperationStatus.NOT_FOUND, f"项目不存在: {project_id}")
-                conn.execute(sql, params)
-                self._record_operation_in_transaction(
-                    conn, "更新项目", project_id=project_id, object_type="project", object_id=project_id,
-                )
-            return OperationResult(OperationStatus.SUCCESS, affected_count=1)
-        except sqlite3.Error as exc:
-            logger.error(f"更新项目失败 {project_id}: {exc}")
-            return OperationResult(OperationStatus.ERROR, str(exc))
+        return self.projects.update_result(project_id, **kwargs)
 
     def update_project(self, project_id: str, **kwargs) -> bool:
         return bool(self.update_project_result(project_id, **kwargs))
 
     def delete_project_result(self, project_id: str, retention_days: int = 30) -> OperationResult:
         """软删除项目，保留素材、标签、日志和备份关联快照。"""
-        try:
-            with self._transaction() as conn:
-                project = conn.execute("SELECT * FROM projects WHERE project_id = ?", (project_id,)).fetchone()
-                if project is None:
-                    return OperationResult(OperationStatus.NOT_FOUND, f"项目不存在: {project_id}")
-                asset_rows = conn.execute(
-                    "SELECT * FROM media_assets WHERE project_id = ?", (project_id,)
-                ).fetchall()
-                snapshot = {
-                    "project": dict(project),
-                    "assets": [self._asset_snapshot(conn, row) for row in asset_rows],
-                    "shooting_logs": [dict(row) for row in conn.execute(
-                        "SELECT * FROM shooting_logs WHERE project_id = ?", (project_id,)
-                    )],
-                    "backup_job_ids": [row["job_id"] for row in conn.execute(
-                        "SELECT job_id FROM backup_jobs WHERE project_id = ?", (project_id,)
-                    )],
-                }
-                recovery_id = self._store_recycle_snapshot(
-                    conn, "project", project_id, project_id, snapshot, retention_days,
-                )
-                conn.execute("UPDATE backup_jobs SET project_id = NULL WHERE project_id = ?", (project_id,))
-                self._delete_asset_rows(conn, [row["asset_id"] for row in asset_rows])
-                conn.execute("DELETE FROM shooting_logs WHERE project_id = ?", (project_id,))
-                conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
-                self._record_operation_in_transaction(
-                    conn, "删除项目", "项目记录已移入回收站", project_id,
-                    object_type="project", object_id=project_id, recovery_id=recovery_id,
-                )
-            return OperationResult(OperationStatus.SUCCESS, affected_count=1, recovery_id=recovery_id)
-        except sqlite3.Error as exc:
-            logger.error(f"软删除项目失败 {project_id}: {exc}")
-            return OperationResult(OperationStatus.ERROR, str(exc))
+        return self.projects.delete_result(project_id, retention_days)
 
     def delete_project(self, project_id: str) -> bool:
         return bool(self.delete_project_result(project_id))
@@ -2526,19 +2436,6 @@ class DatabaseService:
             return 0
 
     # ===== 辅助方法 =====
-
-    def _row_to_project(self, row: sqlite3.Row) -> Project:
-        # workspace_id 是迁移新增列，旧数据库可能无此列；用 keys() 兜底
-        workspace_id = row["workspace_id"] if "workspace_id" in row.keys() else None
-        return Project(
-            project_id=row["project_id"],
-            name=row["name"],
-            description=row["description"],
-            base_path=row["base_path"],
-            workspace_id=workspace_id,
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"])
-        )
 
     def _row_to_log(self, row: sqlite3.Row) -> ShootingLog:
         return ShootingLog(

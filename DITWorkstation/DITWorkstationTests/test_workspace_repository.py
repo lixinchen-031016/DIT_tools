@@ -23,3 +23,11 @@ def test_template_repository_and_database_facade_share_storage(db_service):
     assert db_service.get_project_template(template.template_id) == template
     assert db_service.templates.update_project(template.template_id, notes="更新")
     assert db_service.get_project_template(template.template_id).notes == "更新"
+
+
+def test_project_repository_and_database_facade_share_storage(db_service):
+    project = db_service.projects.create("仓储项目", description="待更新")
+
+    assert db_service.get_project(project.project_id) == project
+    assert db_service.projects.update_result(project.project_id, name="已更新")
+    assert db_service.get_project(project.project_id).name == "已更新"
