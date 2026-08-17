@@ -18,16 +18,15 @@ from DITWorkstation.Models import (
 from DITWorkstation.Utils import logger, normalize_path
 from DITWorkstation.Services.repositories.field_registry import (
     BACKUP_TEMPLATE_FIELDS,
-    MEDIA_ASSET_FIELDS,
     PROJECT_FIELDS,
     PROJECT_TEMPLATE_FIELDS,
     WORKSPACE_FIELDS,
-    build_update_clause,
 )
 from DITWorkstation.Services.repositories.workspace_repository import WorkspaceRepository
 from DITWorkstation.Services.repositories.template_repository import TemplateRepository
 from DITWorkstation.Services.repositories.project_repository import ProjectRepository
 from DITWorkstation.Services.repositories.log_repository import LogRepository
+from DITWorkstation.Services.repositories.asset_repository import AssetRepository
 
 
 def _chunked(seq, size):
@@ -64,6 +63,7 @@ class DatabaseService:
         self.templates = TemplateRepository(self)
         self.projects = ProjectRepository(self)
         self.logs = LogRepository(self)
+        self.assets = AssetRepository(self)
 
     def _create_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
@@ -955,86 +955,15 @@ class DatabaseService:
 
     def _sync_asset_tags(self, conn, asset_id: str, tags: str):
         """把 tags 逗号字符串同步到 asset_tags 关联表（须在事务内调用）。"""
-        conn.execute("DELETE FROM asset_tags WHERE asset_id = ?", (asset_id,))
-        for tag in self._split_tags(tags):
-            conn.execute(
-                "INSERT OR IGNORE INTO asset_tags (asset_id, tag) VALUES (?, ?)",
-                (asset_id, tag),
-            )
+        self.assets.sync_tags(conn, asset_id, tags)
 
     def add_media_asset(self, asset: MediaAsset) -> MediaAsset:
         """添加素材资产"""
-        with self._transaction() as conn:
-            conn.execute(
-                """INSERT INTO media_assets
-                   (asset_id, project_id, file_path, file_name, file_size, file_type,
-                    asset_type, checksum_algorithm, checksum_value, scene, shot, take, date_imported,
-                    date_taken, camera_make, camera_model, backup_locations, log_id,
-                    is_working_copy, original_path, width, height, duration_seconds,
-                    lens_model, focal_length, video_metadata, rating, tags, notes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (asset.asset_id, asset.project_id, asset.file_path, asset.file_name,
-                 asset.file_size, asset.file_type, asset.asset_type,
-                 asset.checksum_algorithm, asset.checksum_value,
-                 asset.scene, asset.shot, asset.take,
-                 asset.date_imported.isoformat(),
-                 asset.date_taken.isoformat() if asset.date_taken else None,
-                 asset.camera_make, asset.camera_model,
-                 "|".join(asset.backup_locations), asset.log_id,
-                 1 if asset.is_working_copy else 0,
-                 asset.original_path,
-                 asset.width, asset.height, asset.duration_seconds,
-                 asset.lens_model, asset.focal_length, asset.video_metadata,
-                 asset.rating, asset.tags, asset.notes)
-            )
-            self._sync_asset_tags(conn, asset.asset_id, asset.tags)
-            self._sync_asset_fts(
-                conn, asset.asset_id, file_name=asset.file_name, scene=asset.scene,
-                shot=asset.shot, notes=asset.notes, tags=asset.tags,
-            )
-            logger.info(f"添加素材资产: {asset.asset_id} - {asset.file_name}")
-        return asset
+        return self.assets.create(asset)
 
     def add_media_assets_batch(self, assets: List[MediaAsset]) -> int:
         """批量添加素材资产"""
-        if not assets:
-            return 0
-
-        try:
-            with self._transaction() as conn:
-                for asset in assets:
-                    conn.execute(
-                        """INSERT INTO media_assets
-                           (asset_id, project_id, file_path, file_name, file_size, file_type,
-                            asset_type, checksum_algorithm, checksum_value, scene, shot, take, date_imported,
-                            date_taken, camera_make, camera_model, backup_locations, log_id,
-                           is_working_copy, original_path, width, height, duration_seconds,
-                           lens_model, focal_length, video_metadata, rating, tags, notes)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (asset.asset_id, asset.project_id, asset.file_path, asset.file_name,
-                         asset.file_size, asset.file_type, asset.asset_type,
-                         asset.checksum_algorithm, asset.checksum_value,
-                         asset.scene, asset.shot, asset.take,
-                         asset.date_imported.isoformat(),
-                         asset.date_taken.isoformat() if asset.date_taken else None,
-                         asset.camera_make, asset.camera_model,
-                         "|".join(asset.backup_locations), asset.log_id,
-                         1 if asset.is_working_copy else 0,
-                         asset.original_path,
-                         asset.width, asset.height, asset.duration_seconds,
-                         asset.lens_model, asset.focal_length, asset.video_metadata,
-                         asset.rating, asset.tags, asset.notes)
-                    )
-                    self._sync_asset_tags(conn, asset.asset_id, asset.tags)
-                    self._sync_asset_fts(
-                        conn, asset.asset_id, file_name=asset.file_name, scene=asset.scene,
-                        shot=asset.shot, notes=asset.notes, tags=asset.tags,
-                    )
-                logger.info(f"批量添加素材资产: {len(assets)} 个")
-                return len(assets)
-        except Exception as e:
-            logger.error(f"批量添加素材资产失败: {e}")
-            return 0
+        return self.assets.create_batch(assets)
 
     def get_media_assets(
         self, project_id: str, limit: Optional[int] = None, offset: Optional[int] = None,
@@ -1044,69 +973,25 @@ class DatabaseService:
         新代码必须使用 ``iter_project_assets``、``get_project_asset_page`` 或
         ``get_search_asset_page``；当未提供 ``limit`` 时本接口会物化整个项目。
         """
-        query = (
-            "SELECT * FROM media_assets WHERE project_id = ? "
-            "ORDER BY date_imported DESC, asset_id DESC"
-        )
-        params = [project_id]
-        if limit is not None and limit > 0:
-            query += " LIMIT ?"
-            params.append(limit)
-            if offset is not None and offset > 0:
-                query += " OFFSET ?"
-                params.append(offset)
-        with self._connection() as conn:
-            rows = conn.execute(query, params).fetchall()
-            return [self._row_to_asset(r) for r in rows]
+        return self.assets.list_all(project_id, limit, offset)
 
     def iter_project_assets(self, project_id: str, batch_size: int = 500):
         """以固定批次迭代项目素材，供导出、归档和校验等长任务使用。"""
-        with self._connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM media_assets WHERE project_id = ? "
-                "ORDER BY date_imported DESC, asset_id DESC", (project_id,)
-            )
-            while True:
-                rows = cursor.fetchmany(max(1, batch_size))
-                if not rows:
-                    return
-                for row in rows:
-                    yield self._row_to_asset(row)
+        yield from self.assets.iter_project(project_id, batch_size)
 
     def count_project_assets(self, project_id: str) -> int:
-        with self._connection() as conn:
-            return conn.execute(
-                "SELECT COUNT(*) FROM media_assets WHERE project_id = ?", (project_id,)
-            ).fetchone()[0]
+        return self.assets.count_project(project_id)
 
     def get_project_asset_page(
         self, project_id: str, page_size: int = 500,
         cursor: Optional[tuple[str, str]] = None,
     ) -> tuple[List[MediaAsset], Optional[tuple[str, str]]]:
         """基于 ``date_imported, asset_id`` 的 keyset 分页读取项目素材。"""
-        page_size = max(1, page_size)
-        query = "SELECT * FROM media_assets WHERE project_id = ?"
-        params = [project_id]
-        if cursor:
-            query += " AND (date_imported < ? OR (date_imported = ? AND asset_id < ?))"
-            params.extend([cursor[0], cursor[0], cursor[1]])
-        query += " ORDER BY date_imported DESC, asset_id DESC LIMIT ?"
-        params.append(page_size + 1)
-        with self._connection() as conn:
-            rows = conn.execute(query, params).fetchall()
-        has_next = len(rows) > page_size
-        rows = rows[:page_size]
-        assets = [self._row_to_asset(row) for row in rows]
-        next_cursor = None
-        if has_next and rows:
-            next_cursor = (rows[-1]["date_imported"], rows[-1]["asset_id"])
-        return assets, next_cursor
+        return self.assets.get_page(project_id, page_size, cursor)
 
     def get_media_asset(self, asset_id: str) -> Optional[MediaAsset]:
         """获取单个素材资产"""
-        with self._connection() as conn:
-            row = conn.execute("SELECT * FROM media_assets WHERE asset_id = ?", (asset_id,)).fetchone()
-            return self._row_to_asset(row) if row else None
+        return self.assets.get(asset_id)
 
     def _legacy_update_media_asset(self, asset_id: str, **kwargs) -> bool:
         """兼容旧内部调用，委托给当前素材更新入口。"""
@@ -1216,28 +1101,7 @@ class DatabaseService:
 
     def update_media_asset_result(self, asset_id: str, **kwargs) -> OperationResult:
         """更新素材并区分参数、未找到与数据库错误。"""
-        sql, params = build_update_clause(
-            MEDIA_ASSET_FIELDS, "media_assets", "asset_id", asset_id,
-            touch_updated_at=False, **kwargs,
-        )
-        if not sql:
-            return OperationResult(OperationStatus.INVALID, "没有可更新的素材字段")
-        try:
-            with self._transaction() as conn:
-                exists = conn.execute("SELECT 1 FROM media_assets WHERE asset_id = ?", (asset_id,)).fetchone()
-                if exists is None:
-                    return OperationResult(OperationStatus.NOT_FOUND, f"素材不存在: {asset_id}")
-                conn.execute(sql, params)
-                if 'tags' in kwargs:
-                    self._sync_asset_tags(conn, asset_id, kwargs.get('tags') or '')
-                self._refresh_asset_fts(conn, asset_id)
-                self._record_operation_in_transaction(
-                    conn, "更新素材", project_id=None, object_type="asset", object_id=asset_id,
-                )
-            return OperationResult(OperationStatus.SUCCESS, affected_count=1)
-        except sqlite3.Error as exc:
-            logger.error(f"更新素材资产失败 {asset_id}: {exc}")
-            return OperationResult(OperationStatus.ERROR, str(exc))
+        return self.assets.update_result(asset_id, **kwargs)
 
     def update_media_asset(self, asset_id: str, **kwargs) -> bool:
         """兼容旧调用方的布尔更新接口。"""
@@ -2322,35 +2186,7 @@ class DatabaseService:
 
     # ===== 辅助方法 =====
 
-    def _row_to_asset(self, row: sqlite3.Row) -> MediaAsset:
-        return MediaAsset(
-            asset_id=row["asset_id"],
-            project_id=row["project_id"],
-            file_path=row["file_path"],
-            file_name=row["file_name"],
-            file_size=row["file_size"],
-            file_type=row["file_type"],
-            asset_type=row["asset_type"] if "asset_type" in row.keys() else "other",
-            checksum_algorithm=row["checksum_algorithm"],
-            checksum_value=row["checksum_value"],
-            scene=row["scene"],
-            shot=row["shot"],
-            take=row["take"],
-            date_imported=datetime.fromisoformat(row["date_imported"]),
-            date_taken=datetime.fromisoformat(row["date_taken"]) if row["date_taken"] else None,
-            camera_make=row["camera_make"],
-            camera_model=row["camera_model"],
-            backup_locations=row["backup_locations"].split("|") if row["backup_locations"] else [],
-            log_id=row["log_id"],
-            is_working_copy=bool(row["is_working_copy"]) if "is_working_copy" in row.keys() else False,
-            original_path=row["original_path"] if "original_path" in row.keys() else "",
-            width=row["width"] if "width" in row.keys() else 0,
-            height=row["height"] if "height" in row.keys() else 0,
-            duration_seconds=row["duration_seconds"] if "duration_seconds" in row.keys() else 0.0,
-            lens_model=row["lens_model"] if "lens_model" in row.keys() else "",
-            focal_length=row["focal_length"] if "focal_length" in row.keys() else "",
-            video_metadata=row["video_metadata"] if "video_metadata" in row.keys() else "",
-            rating=row["rating"] if "rating" in row.keys() else 0,
-            tags=row["tags"] if "tags" in row.keys() else "",
-            notes=row["notes"] if "notes" in row.keys() else "",
-        )
+    @staticmethod
+    def _row_to_asset(row: sqlite3.Row) -> MediaAsset:
+        """兼容仍在门面层的搜索和恢复流程，复用素材仓储的行映射。"""
+        return AssetRepository._row_to_asset(row)

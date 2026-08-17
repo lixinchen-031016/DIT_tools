@@ -1,5 +1,7 @@
-"""Workspace repository integration tests."""
-from DITWorkstation.Models import ShootingLog
+"""Repository integration tests sharing the database facade's storage."""
+from datetime import datetime
+
+from DITWorkstation.Models import MediaAsset, ShootingLog
 
 
 def test_workspace_repository_and_database_facade_share_storage(db_service):
@@ -42,3 +44,35 @@ def test_log_repository_and_database_facade_share_storage(db_service):
     assert db_service.get_shooting_log(log.log_id) == log
     assert db_service.logs.record("仓储测试", project_id=project.project_id)
     assert db_service.get_recent_operations(project_id=project.project_id)[0]["event"] == "仓储测试"
+
+
+def test_asset_repository_read_paths_and_facade_share_storage(db_service):
+    project = db_service.create_project("素材仓储项目")
+    imported_at = datetime(2026, 1, 1, 12, 0, 0)
+    assets = [
+        MediaAsset(
+            asset_id=asset_id,
+            project_id=project.project_id,
+            file_path=f"/media/{asset_id}.mov",
+            file_name=f"{asset_id}.mov",
+            date_imported=imported_at,
+        )
+        for asset_id in ("asset-a", "asset-b", "asset-c")
+    ]
+    db_service.assets.create(assets[0])
+    db_service.add_media_asset(assets[1])
+    assert db_service.assets.create_batch([assets[2]]) == 1
+    assert db_service.assets.update_result("asset-b", tags="夜戏")
+
+    assert db_service.assets.get("asset-b") == db_service.get_media_asset("asset-b")
+    assert db_service.get_media_asset("asset-b").tags == "夜戏"
+    assert db_service.assets.count_project(project.project_id) == 3
+    assert [asset.asset_id for asset in db_service.assets.iter_project(project.project_id, 1)] == [
+        "asset-c", "asset-b", "asset-a",
+    ]
+    first, cursor = db_service.assets.get_page(project.project_id, page_size=2)
+    second, final_cursor = db_service.get_project_asset_page(
+        project.project_id, page_size=2, cursor=cursor,
+    )
+    assert [asset.asset_id for asset in first + second] == ["asset-c", "asset-b", "asset-a"]
+    assert final_cursor is None
