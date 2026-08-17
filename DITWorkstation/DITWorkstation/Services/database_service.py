@@ -27,6 +27,7 @@ from DITWorkstation.Services.repositories.field_registry import (
 from DITWorkstation.Services.repositories.workspace_repository import WorkspaceRepository
 from DITWorkstation.Services.repositories.template_repository import TemplateRepository
 from DITWorkstation.Services.repositories.project_repository import ProjectRepository
+from DITWorkstation.Services.repositories.log_repository import LogRepository
 
 
 def _chunked(seq, size):
@@ -62,6 +63,7 @@ class DatabaseService:
         self.workspaces = WorkspaceRepository(self)
         self.templates = TemplateRepository(self)
         self.projects = ProjectRepository(self)
+        self.logs = LogRepository(self)
 
     def _create_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
@@ -908,46 +910,19 @@ class DatabaseService:
 
     def create_shooting_log(self, log: ShootingLog) -> ShootingLog:
         """创建拍摄日志"""
-        with self._transaction() as conn:
-            conn.execute(
-                """INSERT INTO shooting_logs
-                   (log_id, project_id, scene, shot, take, description, camera, lens, iso, aperture, shutter_speed, notes, file_paths, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (log.log_id, log.project_id, log.scene, log.shot, log.take,
-                 log.description, log.camera, log.lens, log.iso, log.aperture,
-                 log.shutter_speed, log.notes, "|".join(log.file_paths),
-                 log.created_at.isoformat())
-            )
-            logger.info(f"创建拍摄日志: {log.log_id} - {log.scene}/{log.shot}/{log.take}")
-        return log
+        return self.logs.create_shooting(log)
 
     def get_shooting_logs(self, project_id: str) -> List[ShootingLog]:
         """获取项目的拍摄日志"""
-        with self._connection() as conn:
-            rows = conn.execute(
-                "SELECT * FROM shooting_logs WHERE project_id = ? ORDER BY created_at DESC",
-                (project_id,)
-            ).fetchall()
-            return [self._row_to_log(r) for r in rows]
+        return self.logs.list_shooting(project_id)
 
     def get_shooting_log(self, log_id: str) -> Optional[ShootingLog]:
         """获取单个拍摄日志"""
-        with self._connection() as conn:
-            row = conn.execute("SELECT * FROM shooting_logs WHERE log_id = ?", (log_id,)).fetchone()
-            return self._row_to_log(row) if row else None
+        return self.logs.get_shooting(log_id)
 
     def update_shooting_log(self, log: ShootingLog):
         """更新拍摄日志"""
-        with self._transaction() as conn:
-            conn.execute(
-                """UPDATE shooting_logs SET scene=?, shot=?, take=?, description=?, camera=?,
-                   lens=?, iso=?, aperture=?, shutter_speed=?, notes=?, file_paths=?
-                   WHERE log_id=?""",
-                (log.scene, log.shot, log.take, log.description, log.camera,
-                 log.lens, log.iso, log.aperture, log.shutter_speed, log.notes,
-                 "|".join(log.file_paths), log.log_id)
-            )
-            logger.info(f"更新拍摄日志: {log.log_id}")
+        self.logs.update_shooting(log)
 
     def delete_shooting_log(self, log_id: str):
         """删除拍摄日志（级联清除关联素材的 log_id 与 scene/shot）
@@ -957,17 +932,7 @@ class DatabaseService:
         scene/shot，导致后续检索/报告把残留字段当作有效数据。
         故删除日志时一并清空 scene/shot，保持数据一致性。
         """
-        try:
-            with self._transaction() as conn:
-                conn.execute(
-                    "UPDATE media_assets SET log_id = NULL, scene = '', shot = '' WHERE log_id = ?",
-                    (log_id,)
-                )
-                conn.execute("DELETE FROM shooting_logs WHERE log_id = ?", (log_id,))
-                logger.info(f"删除拍摄日志: {log_id}（已级联清空关联素材的 scene/shot）")
-        except Exception as e:
-            logger.error(f"删除拍摄日志失败 {log_id}: {e}")
-            raise
+        self.logs.delete_shooting(log_id)
 
     def create_log_with_assets(
         self,
@@ -984,34 +949,7 @@ class DatabaseService:
         Returns:
             已创建的 log
         """
-        try:
-            with self._transaction() as conn:
-                conn.execute(
-                    """INSERT INTO shooting_logs
-                       (log_id, project_id, scene, shot, take, description, camera, lens, iso, aperture, shutter_speed, notes, file_paths, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (log.log_id, log.project_id, log.scene, log.shot, log.take,
-                     log.description, log.camera, log.lens, log.iso, log.aperture,
-                     log.shutter_speed, log.notes, "|".join(log.file_paths),
-                     log.created_at.isoformat())
-                )
-                if sync_scene_shot:
-                    for aid in asset_ids:
-                        conn.execute(
-                            "UPDATE media_assets SET log_id = ?, scene = ?, shot = ? WHERE asset_id = ?",
-                            (log.log_id, log.scene, log.shot, aid)
-                        )
-                else:
-                    for aid in asset_ids:
-                        conn.execute(
-                            "UPDATE media_assets SET log_id = ? WHERE asset_id = ?",
-                            (log.log_id, aid)
-                        )
-                logger.info(f"创建日志并关联素材: {log.log_id} - {len(asset_ids)} 个素材")
-        except Exception as e:
-            logger.error(f"create_log_with_assets 失败: {e}")
-            raise
-        return log
+        return self.logs.create_shooting_with_assets(log, asset_ids, sync_scene_shot)
 
     # ===== 素材资产 =====
 
@@ -1242,15 +1180,9 @@ class DatabaseService:
         status: str = OperationStatus.SUCCESS.value, object_type: str = "",
         object_id: str = "", recovery_id: str = "",
     ) -> str:
-        log_id = str(uuid.uuid4())[:8]
-        conn.execute(
-            "INSERT INTO operation_logs "
-            "(log_id, project_id, event, detail, result_status, object_type, object_id, recovery_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (log_id, project_id, event, detail, status, object_type, object_id,
-             recovery_id, datetime.now().isoformat()),
+        return self.logs.record_in_transaction(
+            conn, event, detail, project_id, status, object_type, object_id, recovery_id,
         )
-        return log_id
 
     def _store_recycle_snapshot(
         self, conn, entity_type: str, entity_id: str, project_id: Optional[str], snapshot: dict,
@@ -2058,15 +1990,9 @@ class DatabaseService:
         Returns:
             是否写入成功
         """
-        try:
-            with self._transaction() as conn:
-                self._record_operation_in_transaction(
-                    conn, event, detail, project_id, status, object_type, object_id, recovery_id,
-                )
-                return True
-        except sqlite3.Error as e:
-            logger.error(f"记录操作日志失败: {e}")
-            return False
+        return self.logs.record(
+            event, detail, project_id, status, object_type, object_id, recovery_id,
+        )
 
     def get_recent_operations(
         self,
@@ -2079,50 +2005,9 @@ class DatabaseService:
         date_to: Optional[datetime] = None,
     ) -> List[dict]:
         """按项目、事件、结果、对象与时间筛选审计日志（按时间倒序）。"""
-        limit = max(1, min(int(limit), 5000))
-        clauses, values = [], []
-        if project_id:
-            clauses.append("project_id = ?")
-            values.append(project_id)
-        if event:
-            clauses.append("event LIKE ?")
-            values.append(f"%{event}%")
-        if status:
-            clauses.append("result_status = ?")
-            values.append(status)
-        if object_type:
-            clauses.append("object_type = ?")
-            values.append(object_type)
-        if date_from:
-            clauses.append("created_at >= ?")
-            values.append(date_from.isoformat())
-        if date_to:
-            clauses.append("created_at <= ?")
-            values.append(date_to.isoformat())
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        with self._connection() as conn:
-            rows = conn.execute(
-                f"SELECT * FROM operation_logs{where} ORDER BY created_at DESC LIMIT ?",
-                (*values, limit),
-            ).fetchall()
-            results = []
-            for r in rows:
-                try:
-                    created_at = datetime.fromisoformat(r["created_at"])
-                except ValueError:
-                    created_at = None
-                results.append({
-                    "log_id": r["log_id"],
-                    "project_id": r["project_id"],
-                    "event": r["event"],
-                    "detail": r["detail"],
-                    "status": r["result_status"] if "result_status" in r.keys() else "success",
-                    "object_type": r["object_type"] if "object_type" in r.keys() else "",
-                    "object_id": r["object_id"] if "object_id" in r.keys() else "",
-                    "recovery_id": r["recovery_id"] if "recovery_id" in r.keys() else "",
-                    "created_at": created_at,
-                })
-            return results
+        return self.logs.list_recent(
+            limit, project_id, event, status, object_type, date_from, date_to,
+        )
 
     # ===== 统一任务历史 =====
 
@@ -2436,24 +2321,6 @@ class DatabaseService:
             return 0
 
     # ===== 辅助方法 =====
-
-    def _row_to_log(self, row: sqlite3.Row) -> ShootingLog:
-        return ShootingLog(
-            log_id=row["log_id"],
-            project_id=row["project_id"],
-            scene=row["scene"],
-            shot=row["shot"],
-            take=row["take"],
-            description=row["description"],
-            camera=row["camera"],
-            lens=row["lens"],
-            iso=row["iso"],
-            aperture=row["aperture"],
-            shutter_speed=row["shutter_speed"],
-            notes=row["notes"],
-            file_paths=row["file_paths"].split("|") if row["file_paths"] else [],
-            created_at=datetime.fromisoformat(row["created_at"])
-        )
 
     def _row_to_asset(self, row: sqlite3.Row) -> MediaAsset:
         return MediaAsset(

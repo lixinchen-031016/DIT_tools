@@ -1,4 +1,5 @@
 """Workspace repository integration tests."""
+from DITWorkstation.Models import ShootingLog
 
 
 def test_workspace_repository_and_database_facade_share_storage(db_service):
@@ -31,3 +32,13 @@ def test_project_repository_and_database_facade_share_storage(db_service):
     assert db_service.get_project(project.project_id) == project
     assert db_service.projects.update_result(project.project_id, name="已更新")
     assert db_service.get_project(project.project_id).name == "已更新"
+
+
+def test_log_repository_and_database_facade_share_storage(db_service):
+    project = db_service.create_project("日志仓储项目")
+    log = ShootingLog("repo-log", project.project_id, "S001", "001A", "01")
+
+    assert db_service.logs.create_shooting(log) == log
+    assert db_service.get_shooting_log(log.log_id) == log
+    assert db_service.logs.record("仓储测试", project_id=project.project_id)
+    assert db_service.get_recent_operations(project_id=project.project_id)[0]["event"] == "仓储测试"
