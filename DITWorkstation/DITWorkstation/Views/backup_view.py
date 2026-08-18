@@ -549,6 +549,8 @@ class BackupView(RefreshOnShowView):
             self.backup_service.retry_failed_files,
             job_id,
             project_id=project_id,
+            task_name="重试备份",
+            recovery_info={"job_id": job_id},
             verify=self.verify_check.isChecked(),
             inject_progress=True,
             inject_file_completed=True,
@@ -788,6 +790,8 @@ class BackupView(RefreshOnShowView):
             self.backup_service.execute_backup,
             self.current_job,
             project_id=project_id,
+            task_name="数据备份",
+            recovery_info={"job_id": self.current_job.job_id},
             verify=self.verify_check.isChecked(),
             inject_progress=True,
             inject_file_completed=True,
@@ -820,6 +824,8 @@ class BackupView(RefreshOnShowView):
         self.task_vm.start(
             self.backup_service.verify_backup,
             project_id,
+            task_name="备份完整性校验",
+            recovery_info={"project_id": project_id},
             progress_callback=lambda cur, tot, msg: self._verify_progress.emit(cur, tot, msg),
             inject_cancel_check=True,
         )

@@ -7,8 +7,9 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from DITWorkstation.Services.checksum_service import ChecksumService
 from DITWorkstation.Models import ChecksumAlgorithm
+from DITWorkstation.Services.checksum_service import ChecksumService
+from DITWorkstation.Services.database_service import DatabaseService
 
 
 class TestChecksumService(unittest.TestCase):
@@ -176,6 +177,40 @@ class TestChecksumService(unittest.TestCase):
         )
         with open(self.test_file, "rb") as a, open(dest, "rb") as b:
             self.assertEqual(a.read(), b.read())
+
+    def test_persistent_cache_survives_service_restart_and_invalidates(self):
+        """持久化缓存可跨服务实例复用，文件变化后必须重新计算。"""
+        db_path = Path(self.temp_dir) / "checksum-cache.db"
+        first_db = DatabaseService(db_path=db_path)
+        first_service = ChecksumService(db_service=first_db)
+        first = first_service.compute_file_checksum(self.test_file)
+        self.assertEqual(first_db.count_checksum_cache(), 1)
+        first_db.close_all()
+
+        second_db = DatabaseService(db_path=db_path)
+        second_service = ChecksumService(db_service=second_db)
+        original_compute = second_service._compute_hash
+        compute_calls = []
+
+        def tracked_compute(*args, **kwargs):
+            compute_calls.append(True)
+            return original_compute(*args, **kwargs)
+
+        second_service._compute_hash = tracked_compute
+        restored = second_service.compute_file_checksum(self.test_file)
+        self.assertEqual(restored.hash_value, first.hash_value)
+        self.assertEqual(compute_calls, [])
+
+        original_size = Path(self.test_file).stat().st_size
+        with open(self.test_file, "wb") as file:
+            file.write(b"Z" * original_size)
+        stat = Path(self.test_file).stat()
+        os.utime(self.test_file, ns=(stat.st_atime_ns, first.mtime_ns + 1_000_000_000))
+
+        changed = second_service.compute_file_checksum(self.test_file)
+        self.assertNotEqual(changed.hash_value, first.hash_value)
+        self.assertEqual(len(compute_calls), 1)
+        second_db.close_all()
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 """无头 UI 测试：布局、分页、设置持久化与模板入口（复用 conftest 的 offscreen QApplication）"""
-from PySide6.QtWidgets import QGridLayout, QPushButton, QComboBox
 from PySide6.QtGui import QShortcut
+from PySide6.QtWidgets import QComboBox, QGridLayout, QPushButton
 
 from DITWorkstation.Services.database_service import DatabaseService
 from DITWorkstation.Views.Widgets.workspace_project_selector import (
@@ -164,6 +164,48 @@ def test_settings_dialog_persists_toggles(tmp_dir, monkeypatch):
     cfg = load_app_settings()
     assert cfg["verify_after_copy"] is False
     assert cfg["auto_detect_volume"] is False
+
+
+def test_task_history_dialog_shows_recoverable_backup_and_retry_entry(tmp_dir):
+    """任务中心展示恢复上下文，并仅对可恢复备份启用重试。"""
+    from DITWorkstation.Views.Widgets.task_history_dialog import TaskHistoryDialog
+
+    db = DatabaseService(db_path=tmp_dir / "task-history.db")
+    project = db.create_project(name="任务中心项目")
+    task_id = db.create_task_history(
+        "数据备份", project.project_id,
+        state="recoverable", recovery_info={"job_id": "job-123"},
+    )
+    db.update_task_history(
+        task_id, "recoverable", error_summary="目标介质暂时不可用",
+        output={"failed_files": ["clip.mov"]},
+    )
+
+    dialog = TaskHistoryDialog(db_service=db)
+    assert dialog.task_table.rowCount() == 1
+    assert dialog.task_table.item(0, 1).text() == "数据备份"
+    assert dialog.task_table.item(0, 3).text() == "可恢复"
+
+    dialog.task_table.selectRow(0)
+    assert "job-123" in dialog.detail_edit.toPlainText()
+    assert "目标介质暂时不可用" in dialog.detail_edit.toPlainText()
+    assert dialog.retry_btn.isEnabled()
+
+    retry_call = {}
+    dialog.task_vm.start = lambda *args, **kwargs: (
+        retry_call.update(args=args, kwargs=kwargs) or True
+    )
+    dialog._retry_selected()
+    assert retry_call["args"][1] == "job-123"
+    assert retry_call["kwargs"]["project_id"] == project.project_id
+    assert retry_call["kwargs"]["recovery_info"] == {"job_id": "job-123"}
+
+    failed_id = db.create_task_history("素材导入", project.project_id, state="failed")
+    db.update_task_history(failed_id, "failed", error_summary="导入失败")
+    dialog._reload()
+    dialog.task_table.selectRow(0)
+    assert not dialog.retry_btn.isEnabled()
+    dialog.close()
 
 
 def test_settings_dialog_has_location_and_cleanup_controls(tmp_dir, monkeypatch):

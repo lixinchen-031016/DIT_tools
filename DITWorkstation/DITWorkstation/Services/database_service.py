@@ -22,6 +22,9 @@ from DITWorkstation.Services.repositories.asset_repository import AssetRepositor
 from DITWorkstation.Services.repositories.backup_job_repository import (
     BackupJobRepository,
 )
+from DITWorkstation.Services.repositories.checksum_cache_repository import (
+    ChecksumCacheRepository,
+)
 from DITWorkstation.Services.repositories.log_repository import LogRepository
 from DITWorkstation.Services.repositories.project_repository import ProjectRepository
 from DITWorkstation.Services.repositories.recycle_repository import RecycleRepository
@@ -73,6 +76,7 @@ class DatabaseService:
         self.renames = RenameRepository(self)
         self.backup_jobs = BackupJobRepository(self)
         self.tasks = TaskRepository(self)
+        self.checksum_cache = ChecksumCacheRepository(self)
         self.cleanup_history()
 
     def _create_conn(self) -> sqlite3.Connection:
@@ -333,6 +337,18 @@ class DatabaseService:
 
                 CREATE INDEX IF NOT EXISTS idx_backup_templates_created
                     ON backup_templates(created_at);
+
+                CREATE TABLE IF NOT EXISTS checksum_cache (
+                    file_path TEXT NOT NULL,
+                    file_size INTEGER NOT NULL,
+                    mtime_ns INTEGER NOT NULL,
+                    algorithm TEXT NOT NULL,
+                    hash_value TEXT NOT NULL,
+                    accessed_at TEXT NOT NULL,
+                    PRIMARY KEY (file_path, file_size, mtime_ns, algorithm)
+                );
+                CREATE INDEX IF NOT EXISTS idx_checksum_cache_accessed
+                    ON checksum_cache(accessed_at);
             """)
             conn.commit()
         finally:
@@ -362,7 +378,7 @@ class DatabaseService:
                 pass
 
     # 当前数据库 schema 版本：每次结构变更 +1，并在 _migrate_db 中补充对应迁移
-    _DB_VERSION = 8
+    _DB_VERSION = 9
 
     def _migrate_db(self):
         """按 PRAGMA user_version 分版本迁移数据库。
@@ -409,6 +425,10 @@ class DatabaseService:
                 self._migrate_v8(conn)
                 self._set_user_version(conn, 8)
                 logger.info("数据库迁移完成: v8")
+            if version < 9:
+                self._migrate_v9(conn)
+                self._set_user_version(conn, 9)
+                logger.info("数据库迁移完成: v9")
 
             # FTS 创建必须晚于迁移前备份，否则备份会混入新建索引表。
             # v3 数据库若因中断或旧版本缺失索引，也在这里补建并重建一次。
@@ -670,6 +690,25 @@ class DatabaseService:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_assets_taken "
             "ON media_assets(date_taken, project_id)"
+        )
+
+    @staticmethod
+    def _migrate_v9(conn):
+        """v9：跨会话校验和缓存。"""
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS checksum_cache (
+                file_path TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                mtime_ns INTEGER NOT NULL,
+                algorithm TEXT NOT NULL,
+                hash_value TEXT NOT NULL,
+                accessed_at TEXT NOT NULL,
+                PRIMARY KEY (file_path, file_size, mtime_ns, algorithm)
+            )"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_checksum_cache_accessed "
+            "ON checksum_cache(accessed_at)"
         )
 
     @staticmethod
@@ -1450,6 +1489,27 @@ class DatabaseService:
     def get_task_history(self, project_id: str | None = None, limit: int = 100) -> list[dict]:
         """读取最近任务，供健康页、审计与恢复入口使用。"""
         return self.tasks.list_all(project_id, limit)
+
+    # ===== 持久化校验和缓存 =====
+
+    def get_checksum_cache(
+        self, file_path: str, file_size: int, mtime_ns: int, algorithm: str,
+    ) -> str | None:
+        return self.checksum_cache.get(file_path, file_size, mtime_ns, algorithm)
+
+    def put_checksum_cache(
+        self, file_path: str, file_size: int, mtime_ns: int, algorithm: str,
+        hash_value: str, limit: int = 100_000,
+    ) -> None:
+        self.checksum_cache.put(
+            file_path, file_size, mtime_ns, algorithm, hash_value, limit,
+        )
+
+    def clear_checksum_cache(self) -> None:
+        self.checksum_cache.clear()
+
+    def count_checksum_cache(self) -> int:
+        return self.checksum_cache.count()
 
     # ===== 项目健康容量快照 =====
 

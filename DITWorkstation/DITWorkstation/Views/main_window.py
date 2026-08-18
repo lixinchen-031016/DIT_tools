@@ -214,6 +214,11 @@ class MainWindow(QMainWindow):
         log_viewer_action.setToolTip("在应用内查看日志文件内容")
         log_viewer_action.triggered.connect(self._show_log_viewer)
 
+        task_history_action = settings_menu.addAction("任务中心…")
+        task_history_action.setToolTip("查看后台任务历史、错误摘要和可恢复任务")
+        task_history_action.triggered.connect(self._show_task_center)
+        task_history_action.setVisible(is_enabled("task_history"))
+
         # 帮助菜单
         help_menu = menubar.addMenu("帮助(&H)")
 
@@ -301,6 +306,11 @@ class MainWindow(QMainWindow):
         """打开日志查看器对话框。"""
         from DITWorkstation.Views.Widgets.log_viewer_dialog import LogViewerDialog
         LogViewerDialog(self).exec()
+
+    def _show_task_center(self):
+        """打开后台任务历史中心。"""
+        from DITWorkstation.Views.Widgets.task_history_dialog import TaskHistoryDialog
+        TaskHistoryDialog(self).exec()
 
     def _wrap_scrollable(self, view: QWidget) -> QScrollArea:
         """把视图包裹在 QScrollArea 中，内容超出时自动出现滚动条。

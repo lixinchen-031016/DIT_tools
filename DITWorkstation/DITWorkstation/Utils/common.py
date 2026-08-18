@@ -886,10 +886,13 @@ def get_checksum_service():
     """
     global _shared_checksum_service
     if _shared_checksum_service is None:
+        # get_db_service() 也使用 _singleton_lock，必须在取得本锁前完成，
+        # 否则首次初始化校验和服务时会发生非可重入锁死锁。
+        db_service = get_db_service()
         with _singleton_lock:
             if _shared_checksum_service is None:
                 from DITWorkstation.Services.checksum_service import ChecksumService
-                _shared_checksum_service = ChecksumService()
+                _shared_checksum_service = ChecksumService(db_service=db_service)
     return _shared_checksum_service
 
 

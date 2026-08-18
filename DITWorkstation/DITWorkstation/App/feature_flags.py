@@ -59,6 +59,7 @@ _TEAM_ONLY_FEATURES = frozenset({
     "audit_panel",          # 最近操作审计面板
     "sop_guide",            # SOP 团队引导（含日志/报告流程的文案与入口）
     "card_automation",      # 存储卡自动导入/备份
+    "task_history",         # 后台任务历史中心
 })
 
 

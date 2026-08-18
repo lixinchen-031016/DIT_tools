@@ -222,8 +222,8 @@ DIT_tools/
     │   ├── Models/
     │   │   └── __init__.py         # 数据模型（dataclass + Enum + RATING_LABELS）
     │   ├── Services/               # 业务逻辑层
-    │   │   ├── database_service.py     # 数据库服务（SQLite，13 张业务表 + 连接池 + FTS5）
-    │   │   ├── checksum_service.py     # 校验和服务（带缓存）
+    │   │   ├── database_service.py     # 数据库服务（SQLite，14 张业务表 + 连接池 + FTS5）
+    │   │   ├── checksum_service.py     # 校验和服务（内存 + 跨会话持久化缓存）
     │   │   ├── media_import_service.py # 媒体导入服务
     │   │   ├── metadata_service.py     # 元数据读取服务（EXIF/视频）
     │   │   ├── backup_service.py       # 备份服务（含快照持久化）
@@ -263,8 +263,9 @@ DIT_tools/
     │           ├── backup_template_dialog.py     # 备份方案对话框
     │           ├── status_panel.py               # 进度/状态/日志面板
     │           ├── table_factory.py              # 表格工厂
-    │           └── empty_state.py                # 空状态占位
-    ├── DITWorkstationTests/           # 测试套件（当前 392 个测试）
+    │           ├── empty_state.py                # 空状态占位
+    │           └── task_history_dialog.py        # 后台任务历史中心
+    ├── DITWorkstationTests/           # 测试套件（当前 394 个测试）
     │   ├── conftest.py                 # 共享 fixture
     │   ├── test_database.py            # 数据库服务测试（65）
     │   ├── test_media_import.py        # 媒体导入测试（28）
@@ -279,9 +280,9 @@ DIT_tools/
     │   ├── test_tags.py                # 标签测试（9）
     │   ├── test_models.py              # 数据模型测试（8）
     │   ├── test_rename.py             # 重命名测试（7）
-    │   ├── test_checksum.py           # 校验和服务测试（11）
+    │   ├── test_checksum.py           # 校验和服务测试（15）
     │   ├── test_workers.py            # 后台线程测试（7）
-    │   ├── test_ui_headless.py        # 无头 UI 与模式切换测试（19）
+    │   ├── test_ui_headless.py        # 无头 UI 与模式切换测试（28）
     │   └── test_feature_flags.py      # 功能模式开关测试（15）
     └── docs/
         └── 用户手册.md                 # 用户操作手册
@@ -350,12 +351,12 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 
 | 测试文件 | 覆盖范围 | 测试数量 |
 |----------|----------|----------|
-| `test_database.py` | 数据库服务（13 张业务表 CRUD + 版本化迁移 + FTS5 + 连接池 + 拍摄日期时间线） | 73 |
+| `test_database.py` | 数据库服务（14 张业务表 CRUD + 版本化迁移 + FTS5 + 连接池 + 拍摄日期时间线） | 73 |
 | `test_utils.py` | 工具函数（format_size / sanitize_filename 等） | 38 |
 | `test_media_import.py` | 媒体导入服务 | 30 |
 | `test_backup.py` | 备份服务 | 16 |
 | `test_thumbnail.py` | 缩略图服务 | 11 |
-| `test_checksum.py` | 校验和服务 | 14 |
+| `test_checksum.py` | 校验和服务（含跨会话持久化缓存） | 15 |
 | `test_backup_resume.py` | 备份断点续传 / 失败重试 | 12 |
 | `test_session_context.py` | EventBus + 全局项目/工作区状态联动 | 10 |
 | `test_settings.py` | 应用设置持久化 | 19 |
@@ -364,7 +365,7 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 | `test_tags.py` | 素材标签关联表与检索 | 9 |
 | `test_models.py` | 数据模型（AssetRating / RATING_LABELS） | 8 |
 | `test_rename.py` | 重命名服务 | 7 |
-| `test_ui_headless.py` | 无头 UI：布局/分页/设置/模板入口/模式切换/文件状态扫描/拍摄时间线下钻 | 27 |
+| `test_ui_headless.py` | 无头 UI：布局/分页/设置/模板入口/模式切换/文件状态扫描/拍摄时间线下钻/任务中心 | 28 |
 | `test_volume_monitor.py` | 存储卡识别 | 7 |
 | `test_workers.py` | 后台线程 WorkerThread | 7 |
 | `test_templates.py` | 项目模板 CRUD 与默认模板 | 6 |
@@ -380,11 +381,11 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 | `test_workspace_repository.py` | 工作区及仓储门面一致性 | 7 |
 | `test_recovery.py` | 回收站恢复、重新链接与重命名回退 | 9 |
 | `test_version_and_recycle_bin.py` | alpha 版本格式与回收站 UI 恢复入口 | 3 |
-| **合计** | | **392** |
+| **合计** | | **394** |
 
 测试共享 fixture（`conftest.py`）提供隔离的数据库实例、临时目录与工厂函数，保证测试间互不干扰。
 
-当前本地验证环境为 macOS arm64、Python 3.13、PySide6 6.11.1，执行结果为 `392 passed`。测试使用 Qt `offscreen` 平台，不能替代 Windows/Linux 原生 GUI、文件系统和打包产物验证。
+当前本地验证环境为 macOS arm64、Python 3.13、PySide6 6.11.1，执行结果为 `394 passed`。测试使用 Qt `offscreen` 平台，不能替代 Windows/Linux 原生 GUI、文件系统和打包产物验证。
 
 ---
 
@@ -495,7 +496,7 @@ App（配置/会话）→ Models（数据模型）→ Services（业务逻辑）
 ### 数据库结构
 
 - **模式**：SQLite，启用 WAL（Write-Ahead Logging）模式
-- **表**：13 张业务表（另有 1 张可选的 FTS5 虚拟表）
+- **表**：14 张业务表（另有 1 张可选的 FTS5 虚拟表）
   - `workspaces` — 工作区（工作区-项目两级结构的父级）
   - `projects` — 项目（归属于工作区）
   - `shooting_logs` — 拍摄日志
@@ -509,8 +510,9 @@ App（配置/会话）→ Models（数据模型）→ Services（业务逻辑）
   - `backup_templates` — 备份方案模板
   - `task_history` — 后台任务历史与恢复上下文
   - `storage_health_snapshots` — 备份目标容量历史
-- **索引**：20 个显式索引，覆盖常用查询字段及拍摄日期时间线聚合以保证检索性能
-- **迁移**：`PRAGMA user_version` 版本化迁移（v1–v8），幂等可重复执行；升级前自动生成 `*.pre-migration.bak` 备份，失败可回滚
+  - `checksum_cache` — 跨会话校验和缓存（按路径、大小、修改时间和算法校验有效性）
+- **索引**：21 个显式索引，覆盖常用查询字段、拍摄日期时间线聚合和校验和缓存淘汰以保证检索性能
+- **迁移**：`PRAGMA user_version` 版本化迁移（v1–v9），幂等可重复执行；升级前自动生成 `*.pre-migration.bak` 备份，失败可回滚
 
 ---
 

@@ -109,6 +109,7 @@ class AppConfig:
     default_checksum_algorithm: str = "xxhash64"  # xxhash64 或 md5
     checksum_buffer_size: int = 1024 * 1024 * 4  # 4MB 缓冲区
     checksum_cache_size: int = 10_000  # 校验和内存缓存最大条数
+    checksum_persistent_cache_size: int = 100_000  # 校验和持久化缓存最大条数
 
     # 历史记录保留策略
     operation_log_retention_days: int = 180  # 操作审计日志保留天数

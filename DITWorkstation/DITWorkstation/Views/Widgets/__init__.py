@@ -8,6 +8,7 @@ from .error_dialog import ErrorDialog, show_error
 from .recycle_bin_dialog import RecycleBinDialog
 from .workspace_dialog import WorkspaceDialog
 from .workspace_project_selector import WorkspaceProjectSelector
+from .task_history_dialog import TaskHistoryDialog
 
 __all__ = [
     'AssetTableModel',
@@ -19,6 +20,7 @@ __all__ = [
     'RefreshOnShowView',
     'WorkspaceDialog',
     'WorkspaceProjectSelector',
+    'TaskHistoryDialog',
     'edit_backup_template',
     'show_error',
 ]

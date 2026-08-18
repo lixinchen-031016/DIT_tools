@@ -15,7 +15,10 @@ from DITWorkstation.Utils import logger
 class ChecksumService:
     """校验和计算服务"""
 
-    def __init__(self, buffer_size: int | None = None, cache_size: int | None = None):
+    def __init__(
+        self, buffer_size: int | None = None, cache_size: int | None = None,
+        db_service=None, persistent_cache_size: int | None = None,
+    ):
         self.buffer_size = buffer_size or config.checksum_buffer_size
         self._max_cache_size = (
             config.checksum_cache_size if cache_size is None else cache_size
@@ -26,6 +29,54 @@ class ChecksumService:
             raise ValueError("cache_size 必须是正整数")
         self._cache: OrderedDict[str, FileChecksum] = OrderedDict()
         self._cache_lock = threading.Lock()
+        self._db_service = db_service
+        self._persistent_cache_size = (
+            config.checksum_persistent_cache_size
+            if persistent_cache_size is None else persistent_cache_size
+        )
+        if not isinstance(self._persistent_cache_size, int) or self._persistent_cache_size <= 0:
+            raise ValueError("persistent_cache_size 必须是正整数")
+
+    @staticmethod
+    def _cache_key(file_path: str, file_size: int, mtime_ns: int, algorithm: ChecksumAlgorithm) -> str:
+        return f"{file_path}_{file_size}_{mtime_ns}_{algorithm.value}"
+
+    def _load_persistent(self, path: Path, file_size: int, mtime_ns: int,
+                         algorithm: ChecksumAlgorithm) -> FileChecksum | None:
+        if self._db_service is None:
+            return None
+        try:
+            hash_value = self._db_service.get_checksum_cache(
+                str(path), file_size, mtime_ns, algorithm.value,
+            )
+        except Exception as exc:
+            logger.debug(f"读取持久化校验和缓存失败: {exc}")
+            return None
+        if not hash_value:
+            return None
+        return FileChecksum(
+            file_path=str(path), algorithm=algorithm, hash_value=hash_value,
+            file_size=file_size, mtime_ns=mtime_ns,
+        )
+
+    def _remember(self, checksum: FileChecksum) -> None:
+        key = self._cache_key(
+            checksum.file_path, checksum.file_size, checksum.mtime_ns, checksum.algorithm,
+        )
+        with self._cache_lock:
+            self._cache[key] = checksum
+            self._cache.move_to_end(key)
+            while len(self._cache) > self._max_cache_size:
+                self._cache.popitem(last=False)
+        if self._db_service is not None:
+            try:
+                self._db_service.put_checksum_cache(
+                    checksum.file_path, checksum.file_size, checksum.mtime_ns,
+                    checksum.algorithm.value, checksum.hash_value,
+                    limit=self._persistent_cache_size,
+                )
+            except Exception as exc:
+                logger.debug(f"写入持久化校验和缓存失败: {exc}")
 
     def compute_file_checksum(
         self,
@@ -54,7 +105,7 @@ class ChecksumService:
         file_size = stat.st_size
         mtime_ns = stat.st_mtime_ns
         # 缓存键含修改时间：同尺寸但内容变更的文件不会命中过期哈希
-        file_key = f"{file_path}_{file_size}_{mtime_ns}_{algorithm.value}"
+        file_key = self._cache_key(str(path), file_size, mtime_ns, algorithm)
 
         with self._cache_lock:
             cached = self._cache.get(file_key)
@@ -64,6 +115,12 @@ class ChecksumService:
                     logger.debug(f"使用缓存的校验和: {file_path}")
                     return cached
                 self._cache.pop(file_key, None)
+
+        persistent = self._load_persistent(path, file_size, mtime_ns, algorithm)
+        if persistent is not None:
+            self._remember(persistent)
+            logger.debug(f"使用持久化缓存的校验和: {file_path}")
+            return persistent
 
         hash_value = self._compute_hash(
             path, algorithm, file_size, progress_callback, cancel_check
@@ -77,11 +134,7 @@ class ChecksumService:
             mtime_ns=mtime_ns
         )
 
-        with self._cache_lock:
-            self._cache[file_key] = checksum
-            self._cache.move_to_end(file_key)
-            while len(self._cache) > self._max_cache_size:
-                self._cache.popitem(last=False)
+        self._remember(checksum)
 
         return checksum
 
@@ -178,13 +231,15 @@ class ChecksumService:
                 if progress_callback and file_size > 0:
                     progress_callback(bytes_read / file_size)
 
-        return FileChecksum(
+        checksum = FileChecksum(
             file_path=str(src),
             algorithm=algorithm,
             hash_value=hasher.hexdigest(),
             file_size=file_size,
             mtime_ns=stat.st_mtime_ns,
         )
+        self._remember(checksum)
+        return checksum
 
     def verify_file(
         self,
@@ -210,11 +265,10 @@ class ChecksumService:
         if not path.exists():
             raise FileNotFoundError(f"文件不存在: {file_path}")
 
-        file_size = path.stat().st_size
-        computed_hash = self._compute_hash(
-            path, algorithm, file_size, progress_callback, cancel_check
+        computed = self.compute_file_checksum(
+            str(path), algorithm, progress_callback, cancel_check,
         )
-        return computed_hash == expected_hash
+        return computed.hash_value == expected_hash
 
     def verify_files_batch(
         self,
@@ -314,7 +368,9 @@ class ChecksumService:
         """清空校验和缓存"""
         with self._cache_lock:
             self._cache.clear()
-            logger.info("校验和缓存已清空")
+        if self._db_service is not None:
+            self._db_service.clear_checksum_cache()
+        logger.info("校验和缓存已清空")
 
     def cache_size(self) -> int:
         """返回当前内存缓存条数。"""
