@@ -9,14 +9,18 @@ import shutil
 import tempfile
 import uuid
 import zipfile
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Callable, Dict, List, Optional
 
 from DITWorkstation.Models import MediaAsset, Project, ShootingLog
 from DITWorkstation.Services.checksum_service import ChecksumService
-from DITWorkstation.Utils import logger, get_checksum_service, sanitize_filename
-
+from DITWorkstation.Utils import (
+    get_checksum_service,
+    logger,
+    now_local,
+    sanitize_filename,
+)
 
 _ARCHIVE_VERSION = 1
 _MANIFEST = "manifest.json"
@@ -31,7 +35,7 @@ _MAX_ARCHIVE_TOTAL_BYTES = 200 * 1024 * 1024 * 1024  # 200 GiB
 class ArchiveService:
     """项目归档/恢复服务"""
 
-    def __init__(self, db_service=None, checksum_service: Optional[ChecksumService] = None):
+    def __init__(self, db_service=None, checksum_service: ChecksumService | None = None):
         self.db_service = db_service
         self.checksum_service = checksum_service or get_checksum_service()
 
@@ -42,8 +46,8 @@ class ArchiveService:
         project_id: str,
         output_path: str,
         include_files: bool = False,
-        progress_callback: Optional[Callable[[int, int, str], None]] = None,
-        cancel_check: Optional[Callable[[], bool]] = None
+        progress_callback: Callable[[int, int, str], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None
     ) -> str:
         """把项目归档为 zip 包。
 
@@ -104,7 +108,7 @@ class ArchiveService:
             with zipfile.ZipFile(archive_temp_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 manifest = {
                     "version": _ARCHIVE_VERSION,
-                    "exported_at": datetime.now().isoformat(),
+                    "exported_at": now_local().isoformat(),
                     "project": {
                         "project_id": project.project_id,
                         "name": project.name,
@@ -170,7 +174,7 @@ class ArchiveService:
         return f"{index:05d}_{name}"
 
     @staticmethod
-    def _asset_to_dict(asset: MediaAsset) -> Dict:
+    def _asset_to_dict(asset: MediaAsset) -> dict:
         return {
             "asset_id": asset.asset_id,
             "project_id": asset.project_id,
@@ -204,7 +208,7 @@ class ArchiveService:
         }
 
     @staticmethod
-    def _log_to_dict(log: ShootingLog) -> Dict:
+    def _log_to_dict(log: ShootingLog) -> dict:
         return {
             "log_id": log.log_id,
             "project_id": log.project_id,
@@ -227,13 +231,13 @@ class ArchiveService:
     def restore_project(
         self,
         archive_path: str,
-        workspace_id: Optional[str] = None,
+        workspace_id: str | None = None,
         restore_files: bool = True,
-        files_dest: Optional[str] = None,
+        files_dest: str | None = None,
         verify: bool = True,
-        progress_callback: Optional[Callable[[int, int, str], None]] = None,
-        cancel_check: Optional[Callable[[], bool]] = None
-    ) -> Dict:
+        progress_callback: Callable[[int, int, str], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None
+    ) -> dict:
         """从归档 zip 恢复项目。
 
         - 重建项目（新 project_id；与目标工作区内重名时自动追加时间戳后缀）
@@ -486,7 +490,7 @@ class ArchiveService:
         return target
 
     @staticmethod
-    def _checksum_algorithm(value: Optional[str]):
+    def _checksum_algorithm(value: str | None):
         try:
             from DITWorkstation.Models import ChecksumAlgorithm
             return ChecksumAlgorithm(value or ChecksumAlgorithm.XXHASH64.value)
@@ -495,7 +499,7 @@ class ArchiveService:
             return ChecksumAlgorithm.XXHASH64
 
     def _create_restored_project(
-        self, old_name: str, project_info: Dict, workspace_id: Optional[str]
+        self, old_name: str, project_info: dict, workspace_id: str | None
     ) -> Project:
         """创建恢复后的项目；重名时自动追加时间戳后缀避免混淆。"""
         ws_id = workspace_id
@@ -507,7 +511,7 @@ class ArchiveService:
             p.name for p in self.db_service.get_projects(workspace_id=ws_id)
         }
         if name in existing:
-            name = f"{old_name} (恢复 {datetime.now().strftime('%Y%m%d%H%M%S')})"
+            name = f"{old_name} (恢复 {now_local().strftime('%Y%m%d%H%M%S')})"
         desc = project_info.get("description", "")
         return self.db_service.create_project(
             name=name,
@@ -517,7 +521,7 @@ class ArchiveService:
         )
 
     @staticmethod
-    def _read_json_list(zf: zipfile.ZipFile, name: str) -> List[Dict]:
+    def _read_json_list(zf: zipfile.ZipFile, name: str) -> list[dict]:
         if name not in zf.namelist():
             return []
         try:

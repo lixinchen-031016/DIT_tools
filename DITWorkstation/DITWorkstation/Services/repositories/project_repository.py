@@ -1,8 +1,7 @@
 """Project persistence operations, including recoverable deletion."""
-from datetime import datetime
 import sqlite3
 import uuid
-from typing import Optional
+from datetime import datetime
 
 from DITWorkstation.Models import OperationResult, OperationStatus, Project
 from DITWorkstation.Utils import logger
@@ -19,7 +18,7 @@ class ProjectRepository(BaseRepository):
         name: str,
         description: str = "",
         base_path: str = "",
-        workspace_id: Optional[str] = None,
+        workspace_id: str | None = None,
     ) -> Project:
         if workspace_id is None or workspace_id == "default":
             workspace_id = self._database.get_or_create_default_workspace().workspace_id
@@ -48,7 +47,7 @@ class ProjectRepository(BaseRepository):
             logger.info(f"创建项目: {project.project_id} - {project.name} (workspace={workspace_id})")
         return project
 
-    def list_all(self, workspace_id: Optional[str] = None) -> list[Project]:
+    def list_all(self, workspace_id: str | None = None) -> list[Project]:
         with self._connection() as conn:
             if workspace_id:
                 rows = conn.execute(
@@ -59,7 +58,7 @@ class ProjectRepository(BaseRepository):
                 rows = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
         return [self._row_to_project(row) for row in rows]
 
-    def get(self, project_id: str) -> Optional[Project]:
+    def get(self, project_id: str) -> Project | None:
         with self._connection() as conn:
             row = conn.execute("SELECT * FROM projects WHERE project_id = ?", (project_id,)).fetchone()
         return self._row_to_project(row) if row else None

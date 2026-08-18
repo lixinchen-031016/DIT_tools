@@ -17,11 +17,10 @@
 - 不改变原有表格结构和布局，零侵入接入
 - 跨平台：使用标准 QLabel + QSS，无平台依赖
 """
-from PySide6.QtWidgets import QLabel, QTableView
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLabel, QTableView
 
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE
-
 
 _EMPTY_STATE_ATTR = "_empty_state_widget"
 

@@ -3,7 +3,6 @@
 将 NAV_ITEMS 从 main_window 抽离到独立模块，消除 Views↔main_window 循环依赖。
 视图跳转应通过 get_nav_index 查询索引，或通过 data_bus 发 navigate_to 信号。
 """
-from typing import Optional
 
 # 导航项单一事实源：顺序即 SOP 流程顺序
 NAV_ITEMS = [
@@ -19,7 +18,7 @@ NAV_ITEMS = [
 ]
 
 
-def get_nav_index(key: str) -> Optional[int]:
+def get_nav_index(key: str) -> int | None:
     """按 key 查询导航索引，未找到或当前模式下未激活时返回 None。
 
     索引基于「当前激活导航列表」（功能模式过滤后），与主窗口导航列表、

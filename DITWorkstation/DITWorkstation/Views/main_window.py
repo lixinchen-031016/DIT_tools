@@ -1,50 +1,57 @@
 """主窗口与导航框架"""
-from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QListWidget, QListWidgetItem, QStackedWidget, QScrollArea,
-    QMessageBox, QLabel
-)
-from PySide6.QtCore import Qt, QSize, QTimer, Slot
-from PySide6.QtGui import QShortcut, QKeySequence
 from pathlib import Path
+
+from PySide6.QtCore import QSize, QTimer, Slot
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QScrollArea,
+    QStackedWidget,
+    QWidget,
+)
+
+from DITWorkstation.App import config
+
+# 功能模式开关：主窗口按「当前激活导航列表」构建（个人模式隐藏 log/report）
+from DITWorkstation.App.feature_flags import (
+    get_active_nav_items,
+    is_enabled,
+    is_nav_enabled,
+)
+
+# 导航配置（NAV_ITEMS / get_nav_index）已抽离到 App/navigation.py 作为单一事实源，
+# 消除 Views ↔ main_window 的循环依赖。视图跳转请直接从 App.navigation 导入。
+from DITWorkstation.App.navigation import get_nav_index
 
 # 会话上下文（EventBus + 全局项目/工作区状态）已抽离到 App/session_context.py
 # [DEPRECATED] 此处 re-export 仅为向后兼容；新代码应直接从 App.session_context 导入，
 # 避免形成 main_window ↔ Views 的逻辑循环依赖。
 from DITWorkstation.App.session_context import (
     get_data_bus,
-    get_current_project_id,
     set_current_project,
-    get_current_workspace_id,
     set_current_workspace,
 )
-
+from DITWorkstation.App.version import APP_VERSION
+from DITWorkstation.Services.card_automation_service import CardAutomationService
+from DITWorkstation.Services.volume_monitor import VolumeMonitor
+from DITWorkstation.Utils import get_db_service, logger
+from DITWorkstation.Utils.workers import WorkerThread
+from DITWorkstation.Views.asset_info_view import AssetInfoView
 from DITWorkstation.Views.backup_view import BackupView
+from DITWorkstation.Views.first_run_wizard import _SOP_GUIDE_TEXT, FirstRunWizard
+from DITWorkstation.Views.media_import_view import MediaImportView
+from DITWorkstation.Views.project_dashboard_view import ProjectDashboardView
 from DITWorkstation.Views.raw_extraction_view import RawExtractionView
 from DITWorkstation.Views.rename_view import RenameView
-from DITWorkstation.Views.shooting_log_view import ShootingLogView
-from DITWorkstation.Views.search_view import SearchView
 from DITWorkstation.Views.report_view import ReportView
-from DITWorkstation.Views.media_import_view import MediaImportView
-from DITWorkstation.Views.asset_info_view import AssetInfoView
-from DITWorkstation.Views.project_dashboard_view import ProjectDashboardView
-from DITWorkstation.Views.first_run_wizard import FirstRunWizard, _SOP_GUIDE_TEXT
+from DITWorkstation.Views.search_view import SearchView
+from DITWorkstation.Views.shooting_log_view import ShootingLogView
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS
-from DITWorkstation.App import config
-from DITWorkstation.App.version import APP_VERSION
-from DITWorkstation.Utils import logger, get_db_service
-from DITWorkstation.Services.volume_monitor import VolumeMonitor
-from DITWorkstation.Services.card_automation_service import CardAutomationService
-from DITWorkstation.Utils.workers import WorkerThread
-
-
-# 导航配置（NAV_ITEMS / get_nav_index）已抽离到 App/navigation.py 作为单一事实源，
-# 消除 Views ↔ main_window 的循环依赖。视图跳转请直接从 App.navigation 导入。
-from DITWorkstation.App.navigation import NAV_ITEMS, get_nav_index
-# 功能模式开关：主窗口按「当前激活导航列表」构建（个人模式隐藏 log/report）
-from DITWorkstation.App.feature_flags import (
-    get_active_nav_items, is_nav_enabled, is_enabled,
-)
 
 
 class MainWindow(QMainWindow):
@@ -69,6 +76,19 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        self._build_navigation()
+        self._build_view_stack()
+        layout.addWidget(self.nav_list)
+        layout.addWidget(self.stack, 1)
+
+        bus = get_data_bus()
+        bus.data_changed.connect(self._on_data_changed)
+        self._build_shortcuts()
+        self._build_status_bar(bus)
+        self._build_background_services()
+
+    def _build_navigation(self):
+        """创建左侧导航列表。"""
         # 左侧导航栏（顺序由「当前激活导航列表」决定：个人模式隐藏 log/report）
         self.active_nav_items = get_active_nav_items()
         self.nav_list = QListWidget()
@@ -85,6 +105,8 @@ class MainWindow(QMainWindow):
         self.nav_list.setCurrentRow(0)
         self.nav_list.currentRowChanged.connect(self._on_nav_changed)
 
+    def _build_view_stack(self):
+        """实例化视图并按当前功能模式填充内容栈。"""
         # 右侧内容区：第一版不做视图懒加载，仍实例化全部视图
         # （关闭事件、后台 worker、数据总线和跨视图跳转直接引用视图属性，
         #  不实例化隐藏视图会扩大改动范围并可能遗漏后台任务收尾），
@@ -118,14 +140,8 @@ class MainWindow(QMainWindow):
         for key, _text, _tooltip in self.active_nav_items:
             self.stack.addWidget(self._wrap_scrollable(self.view_by_key[key]))
 
-        # 连接跨视图刷新信号总线
-        bus = get_data_bus()
-        bus.data_changed.connect(self._on_data_changed)
-
-        layout.addWidget(self.nav_list)
-        layout.addWidget(self.stack, 1)
-
-        # 全局快捷键
+    def _build_shortcuts(self):
+        """注册全局导航、刷新和取消快捷键。"""
         QShortcut(QKeySequence("Ctrl+F"), self, activated=self._focus_search)
         QShortcut(QKeySequence("Ctrl+I"), self, activated=self._focus_import)
         QShortcut(QKeySequence("Ctrl+B"), self, activated=self._focus_backup)
@@ -134,14 +150,15 @@ class MainWindow(QMainWindow):
             QShortcut(QKeySequence("Ctrl+L"), self, activated=self._focus_log)
         # Ctrl+1~N 切换到对应导航页（N = 激活导航项数量，个人模式为 7）
         for i in range(1, len(self.active_nav_items) + 1):
-            QShortcut(QKeySequence(f"Ctrl+{i}"), self,
-                      activated=lambda idx=i - 1: self.nav_list.setCurrentRow(idx))
-        # F5 刷新当前视图
+            QShortcut(
+                QKeySequence(f"Ctrl+{i}"), self,
+                activated=lambda idx=i - 1: self.nav_list.setCurrentRow(idx),
+            )
         QShortcut(QKeySequence("F5"), self, activated=self._refresh_current_view)
-        # Esc 取消当前后台任务
         QShortcut(QKeySequence("Esc"), self, activated=self._cancel_running_workers)
 
-        # 全局状态栏
+    def _build_status_bar(self, bus):
+        """创建状态栏并绑定会话上下文事件。"""
         self.status_bar = self.statusBar()  # QMainWindow 自带 statusBar()
         self.status_bar.setSizeGripEnabled(False)
         self.status_bar.setStyleSheet(f"""
@@ -161,19 +178,17 @@ class MainWindow(QMainWindow):
         self.status_bar.addWidget(self.status_label_project)
         self.status_bar.addPermanentWidget(self.status_label_task)
         self.status_bar.addPermanentWidget(self.status_label_version)
-
-        # 监听会话上下文：当前项目/工作区切换时更新状态栏
         bus.project_focus_changed.connect(self._on_project_focus_changed)
         bus.workspace_focus_changed.connect(self._on_workspace_focus_changed)
 
-        # 后台任务状态轮询（每 2 秒检查一次）
+    def _build_background_services(self):
+        """启动任务状态轮询和存储卡监控。"""
         self._status_timer = QTimer(self)
         self._status_timer.setInterval(2000)
         self._status_timer.timeout.connect(self._update_task_status)
         self._status_timer.start()
         self._update_task_status()
 
-        # 存储卡自动识别：插入媒体卡时自动跳转到导入视图并预填源目录
         self.volume_monitor = VolumeMonitor(self)
         self.volume_monitor.volume_mounted.connect(self._on_volume_mounted)
         self.volume_monitor.start()
@@ -454,7 +469,7 @@ class MainWindow(QMainWindow):
             "· 点击「取消」返回程序继续操作"
         )
         wait_btn = box.addButton("等待完成", QMessageBox.AcceptRole)
-        force_btn = box.addButton("立即退出", QMessageBox.DestructiveRole)
+        box.addButton("立即退出", QMessageBox.DestructiveRole)
         cancel_btn = box.addButton("取消", QMessageBox.RejectRole)
         box.exec()
 
@@ -499,8 +514,9 @@ class MainWindow(QMainWindow):
         template_id = getattr(config, "auto_card_template_id", "")
         do_import = getattr(config, "auto_card_import", True)
         do_backup = getattr(config, "auto_card_backup", False)
+        steps = getattr(config, "auto_card_steps", None) or None
         template = self.backup_view.db_service.get_backup_template(template_id) if template_id else None
-        if not project_id or (do_backup and template is None):
+        if not project_id or ((do_backup or (steps and "backup" in steps)) and template is None):
             self.status_label_task.setText("⚠ 相机卡自动化配置不完整，请检查设置")
             logger.warning(f"相机卡自动化配置不完整: project={project_id} template={template_id}")
             return
@@ -516,6 +532,12 @@ class MainWindow(QMainWindow):
             template=template,
             do_import=do_import,
             do_backup=do_backup,
+            steps=steps,
+            raw_config={"output_folder": getattr(config, "auto_card_raw_output_dir", "")}
+            if steps and "raw_extract" in steps else None,
+            rename_config={"rule": {"pattern": config.auto_card_rename_pattern}}
+            if steps and "rename" in steps and getattr(config, "auto_card_rename_pattern", "") else None,
+            report_path=getattr(config, "auto_card_report_path", "") or None,
             inject_progress=True,
             inject_cancel_check=True,
         )

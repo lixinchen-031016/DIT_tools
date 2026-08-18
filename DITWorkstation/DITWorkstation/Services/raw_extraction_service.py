@@ -1,24 +1,24 @@
 """JPG筛选后RAW文件提取服务"""
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import List, Optional, Callable, Tuple, Dict
 
 from DITWorkstation.App import config
 from DITWorkstation.Models import ChecksumAlgorithm
 from DITWorkstation.Services.checksum_service import ChecksumService
-from DITWorkstation.Utils import logger, get_checksum_service, normalize_name_key
+from DITWorkstation.Utils import get_checksum_service, logger, normalize_name_key
 
 
 class RawExtractionService:
     """JPG筛选后RAW文件提取服务"""
 
-    def __init__(self, checksum_service: Optional[ChecksumService] = None):
+    def __init__(self, checksum_service: ChecksumService | None = None):
         # 与 MediaImportService / BackupService 复用同一校验和缓存
         self.checksum_service = checksum_service or get_checksum_service()
         self._cancelled = False
         self._cancelled_lock = threading.Lock()
 
-    def scan_jpg_folder(self, jpg_folder: str) -> List[Path]:
+    def scan_jpg_folder(self, jpg_folder: str) -> list[Path]:
         """
         扫描JPG文件夹，获取筛选后的JPG文件列表
 
@@ -41,7 +41,7 @@ class RawExtractionService:
         logger.info(f"扫描JPG文件夹完成: {jpg_folder}, 发现 {len(jpg_files)} 个文件")
         return sorted(set(jpg_files))
 
-    def scan_raw_folder(self, raw_folder: str) -> Dict[str, Path]:
+    def scan_raw_folder(self, raw_folder: str) -> dict[str, Path]:
         """
         扫描RAW文件夹，建立文件名索引
 
@@ -67,9 +67,9 @@ class RawExtractionService:
 
     def match_raw_files(
         self,
-        jpg_files: List[Path],
-        raw_index: Dict[str, Path]
-    ) -> List[Tuple[Path, Optional[Path]]]:
+        jpg_files: list[Path],
+        raw_index: dict[str, Path]
+    ) -> list[tuple[Path, Path | None]]:
         """
         根据JPG文件名匹配对应RAW文件
 
@@ -97,8 +97,8 @@ class RawExtractionService:
         output_folder: str,
         verify: bool = True,
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
-        progress_callback: Optional[Callable[[int, int, str], None]] = None
-    ) -> Dict:
+        progress_callback: Callable[[int, int, str], None] | None = None
+    ) -> dict:
         """
         提取JPG对应的RAW文件到指定位置
 
@@ -165,7 +165,7 @@ class RawExtractionService:
                         cancel_check=self._is_cancelled,
                     )
                     if not verified:
-                        raise IOError(f"校验和验证失败: {raw_path.name}")
+                        raise OSError(f"校验和验证失败: {raw_path.name}")
 
                 extracted += 1
                 results["details"].append({
@@ -202,12 +202,12 @@ class RawExtractionService:
 
     def extract_raw_files_streaming(
         self,
-        matches: List[Tuple[Path, Optional[Path]]],
+        matches: list[tuple[Path, Path | None]],
         output_folder: str,
         verify: bool = True,
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
-        progress_callback: Optional[Callable[[int, int, str], None]] = None
-    ) -> Dict:
+        progress_callback: Callable[[int, int, str], None] | None = None
+    ) -> dict:
         """
         流式提取RAW文件（适合大量文件场景）
 
@@ -263,7 +263,7 @@ class RawExtractionService:
                         cancel_check=self._is_cancelled,
                     )
                     if not verified:
-                        raise IOError(f"校验和验证失败: {raw_path.name}")
+                        raise OSError(f"校验和验证失败: {raw_path.name}")
 
                 extracted += 1
                 results["details"].append({

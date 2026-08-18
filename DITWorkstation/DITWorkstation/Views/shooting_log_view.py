@@ -1,25 +1,44 @@
 """拍摄日志管理页面"""
 import uuid
-from typing import List, Optional
+
+from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QGroupBox, QFormLayout, QTableWidget,
-    QTableWidgetItem, QHeaderView, QMessageBox,
+    QAbstractItemView,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
     QTextEdit,
-    QDialog, QDialogButtonBox, QAbstractItemView, QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
-from PySide6.QtCore import Qt, Slot, QTimer
 
 from DITWorkstation.App.session_context import get_data_bus
-from DITWorkstation.Models import Project, ShootingLog, MediaAsset
+from DITWorkstation.Models import MediaAsset, Project, ShootingLog
 from DITWorkstation.Utils import (
-    format_size, get_db_service, get_metadata_service, safe_slot,
-    open_in_file_manager, normalize_name_key,
+    format_size,
+    get_db_service,
+    get_metadata_service,
+    normalize_name_key,
+    open_in_file_manager,
+    safe_slot,
 )
-from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
-from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
-from DITWorkstation.Views.Widgets.table_factory import make_table
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS
+from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
+from DITWorkstation.Views.Widgets.empty_state import (
+    attach_empty_state,
+    sync_empty_state,
+)
+from DITWorkstation.Views.Widgets.table_factory import make_table
 
 
 class ShootingLogView(RefreshOnShowView):
@@ -31,7 +50,7 @@ class ShootingLogView(RefreshOnShowView):
         self.metadata_service = get_metadata_service()
         self.current_project: Project = None
         self.current_log_id: str = None
-        self._pending_asset_ids: List[str] = []
+        self._pending_asset_ids: list[str] = []
         self._logs = []
         self._setup_ui()
 
@@ -460,7 +479,7 @@ class ShootingLogView(RefreshOnShowView):
 
     def _on_log_context_menu(self, pos):
         """日志表右键菜单：删除此日志 / 复制场景信息"""
-        from PySide6.QtWidgets import QMenu, QApplication
+        from PySide6.QtWidgets import QApplication, QMenu
         item = self.log_table.itemAt(pos)
         if not item:
             return
@@ -621,7 +640,7 @@ class ShootingLogView(RefreshOnShowView):
                 "  • 表单中相关字段已被填写（不会覆盖）"
             )
 
-    def _pick_representative_asset(self) -> Optional[MediaAsset]:
+    def _pick_representative_asset(self) -> MediaAsset | None:
         """弹对话框让用户从项目素材中选择一个代表素材，返回选中的素材（取消则 None）。"""
         if not self.current_project:
             QMessageBox.warning(self, "提示", "请先选择项目")
@@ -633,8 +652,10 @@ class ShootingLogView(RefreshOnShowView):
             return None
 
         # 单选对话框：用 QListWidget 让用户挑一个代表素材
-        from PySide6.QtWidgets import QDialog as _QDialog, QListWidget as _QListWidget, \
-            QDialogButtonBox as _QBB, QVBoxLayout as _QVL
+        from PySide6.QtWidgets import QDialog as _QDialog
+        from PySide6.QtWidgets import QDialogButtonBox as _QBB
+        from PySide6.QtWidgets import QListWidget as _QListWidget
+        from PySide6.QtWidgets import QVBoxLayout as _QVL
         dlg = _QDialog(self)
         dlg.setWindowTitle("选择代表素材以填充 EXIF")
         dlg.resize(520, 400)
@@ -659,7 +680,7 @@ class ShootingLogView(RefreshOnShowView):
             return None
         return all_assets[row]
 
-    def _apply_exif_to_form(self, asset) -> Optional[List[str]]:
+    def _apply_exif_to_form(self, asset) -> list[str] | None:
         """读取 asset 的 EXIF/视频元数据，仅在表单字段为空时填充。
 
         返回已填充字段名列表；文件不存在或读取失败时弹出警告并返回 None。

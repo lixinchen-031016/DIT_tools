@@ -5,9 +5,8 @@
 """
 import os
 import sys
-from pathlib import Path
-from typing import List
 from datetime import datetime
+from pathlib import Path
 
 from DITWorkstation.Models import MediaMetadata, VideoMetadata
 from DITWorkstation.Utils import logger
@@ -45,93 +44,92 @@ class MetadataService:
 
     def _read_exif(self, path: Path, metadata: MediaMetadata):
         """读取EXIF信息（支持 JPG/TIFF/RAW，使用 exifread）"""
-        # 1. 用 exifread 读取 EXIF（支持所有 RAW 和 JPG 格式）
         try:
-            import exifread
-
-            with open(path, 'rb') as fh:
-                tags = exifread.process_file(fh, details=False)
-
+            tags = self._load_exif_tags(path)
             if tags:
-                def _get(tag_name):
-                    """获取 exifread 标签的字符串值"""
-                    val = tags.get(tag_name)
-                    return str(val) if val else ""
-
-                make = _get("Image Make") or _get("EXIF Make")
-                if make:
-                    metadata.camera_make = make.strip()
-
-                model = _get("Image Model") or _get("EXIF Model")
-                if model:
-                    metadata.camera_model = model.strip()
-
-                lens = _get("EXIF LensModel") or _get("Image LensModel")
-                if lens:
-                    metadata.lens_model = lens.strip()
-
-                iso_str = _get("EXIF ISOSpeedRatings")
-                if iso_str:
-                    try:
-                        metadata.iso = int(iso_str)
-                    except ValueError:
-                        pass
-
-                fnumber_str = _get("EXIF FNumber")
-                if fnumber_str:
-                    try:
-                        # exifread 返回 "f/2.8" 或 "2.8" 格式
-                        val = fnumber_str.replace("f/", "").strip()
-                        metadata.aperture = f"f/{float(val):.1f}"
-                    except (ValueError, TypeError):
-                        metadata.aperture = fnumber_str
-
-                exposure_str = _get("EXIF ExposureTime")
-                if exposure_str:
-                    metadata.shutter_speed = exposure_str.strip()
-
-                focal_str = _get("EXIF FocalLength")
-                if focal_str:
-                    # exifread 返回 "50.0 mm" 格式
-                    metadata.focal_length = focal_str.strip()
-
-                dto_str = _get("EXIF DateTimeOriginal") or _get("Image DateTimeOriginal")
-                if dto_str:
-                    try:
-                        metadata.date_taken = datetime.strptime(
-                            dto_str.strip(), "%Y:%m:%d %H:%M:%S"
-                        )
-                    except (ValueError, TypeError):
-                        pass
-
-                # 从 EXIF 读取图像尺寸（支持 RAW 文件）
-                # EXIF 规范中高度标签名为 *Length 而非 *Height
-                for w_key, h_key in [("EXIF ExifImageWidth", "EXIF ExifImageLength"),
-                                     ("Image ImageWidth", "Image ImageLength")]:
-                    w_str = _get(w_key)
-                    h_str = _get(h_key)
-                    if w_str and h_str:
-                        try:
-                            metadata.width = int(str(w_str).split()[0])
-                            metadata.height = int(str(h_str).split()[0])
-                            break
-                        except (ValueError, TypeError):
-                            pass
+                self._apply_exif_tags(tags, metadata)
         except Exception as e:
             logger.debug(f"EXIF 读取失败 ({path}): {e}")
 
-        # 2. 用 Pillow 读取图像尺寸（仅对 Pillow 能打开的格式，作为补充）
         if not metadata.width or not metadata.height:
+            self._read_image_dimensions(path, metadata)
+
+    @staticmethod
+    def _load_exif_tags(path: Path):
+        """读取原始 EXIF 标签；依赖或文件问题由调用方统一降级。"""
+        import exifread
+
+        with open(path, "rb") as fh:
+            return exifread.process_file(fh, details=False)
+
+    @staticmethod
+    def _exif_value(tags: dict, *tag_names: str) -> str:
+        for tag_name in tag_names:
+            value = tags.get(tag_name)
+            if value:
+                return str(value)
+        return ""
+
+    def _apply_exif_tags(self, tags: dict, metadata: MediaMetadata):
+        """把 exifread 标签映射到领域模型。"""
+        metadata.camera_make = self._exif_value(tags, "Image Make", "EXIF Make").strip()
+        metadata.camera_model = self._exif_value(tags, "Image Model", "EXIF Model").strip()
+        metadata.lens_model = self._exif_value(tags, "EXIF LensModel", "Image LensModel").strip()
+
+        iso_value = self._exif_value(tags, "EXIF ISOSpeedRatings")
+        if iso_value:
             try:
-                from PIL import Image
+                metadata.iso = int(iso_value)
+            except ValueError:
+                pass
 
-                with Image.open(path) as img:
-                    metadata.width = img.width
-                    metadata.height = img.height
-            except Exception as e:
-                logger.debug(f"Pillow 读取尺寸失败 ({path}): {e}")
+        aperture = self._exif_value(tags, "EXIF FNumber")
+        if aperture:
+            try:
+                metadata.aperture = f"f/{float(aperture.replace('f/', '').strip()):.1f}"
+            except (ValueError, TypeError):
+                metadata.aperture = aperture
 
-    def batch_read_metadata(self, file_paths: List[str]) -> List[MediaMetadata]:
+        metadata.shutter_speed = self._exif_value(tags, "EXIF ExposureTime").strip()
+        metadata.focal_length = self._exif_value(tags, "EXIF FocalLength").strip()
+        date_value = self._exif_value(tags, "EXIF DateTimeOriginal", "Image DateTimeOriginal")
+        if date_value:
+            try:
+                metadata.date_taken = datetime.strptime(date_value.strip(), "%Y:%m:%d %H:%M:%S")
+            except (ValueError, TypeError):
+                pass
+        self._apply_exif_dimensions(tags, metadata)
+
+    @classmethod
+    def _apply_exif_dimensions(cls, tags: dict, metadata: MediaMetadata):
+        for width_key, height_key in (
+            ("EXIF ExifImageWidth", "EXIF ExifImageLength"),
+            ("Image ImageWidth", "Image ImageLength"),
+        ):
+            width = cls._exif_value(tags, width_key)
+            height = cls._exif_value(tags, height_key)
+            if not width or not height:
+                continue
+            try:
+                metadata.width = int(width.split()[0])
+                metadata.height = int(height.split()[0])
+                return
+            except (ValueError, TypeError):
+                continue
+
+    @staticmethod
+    def _read_image_dimensions(path: Path, metadata: MediaMetadata):
+        """用 Pillow 补充 EXIF 未提供的图像尺寸。"""
+        try:
+            from PIL import Image
+
+            with Image.open(path) as img:
+                metadata.width = img.width
+                metadata.height = img.height
+        except Exception as e:
+            logger.debug(f"Pillow 读取尺寸失败 ({path}): {e}")
+
+    def batch_read_metadata(self, file_paths: list[str]) -> list[MediaMetadata]:
         """批量读取元数据"""
         return [self.read_metadata(fp) for fp in file_paths]
 
@@ -145,52 +143,56 @@ class MetadataService:
         """
         vm = VideoMetadata()
         try:
-            from pymediainfo import MediaInfo
-
-            # 尝试自动加载，失败则按平台指定常见动态库路径
-            try:
-                media_info = MediaInfo.parse(file_path)
-            except OSError:
-                lib_paths = self._get_mediainfo_lib_paths()
-                media_info = None
-                for p in lib_paths:
-                    try:
-                        media_info = MediaInfo.parse(file_path, library_file=p)
-                        break
-                    except OSError:
-                        continue
-                if media_info is None:
-                    return vm
-
-            for track in media_info.tracks:
-                if track.track_type == "General":
-                    if track.duration:
-                        vm.duration_seconds = float(track.duration) / 1000.0
-                    if track.overall_bit_rate:
-                        vm.bit_rate = int(track.overall_bit_rate)
-                elif track.track_type == "Video":
-                    if track.width:
-                        vm.width = int(track.width)
-                    if track.height:
-                        vm.height = int(track.height)
-                    if track.codec_id or track.format:
-                        vm.codec = track.codec_id or track.format or ""
-                    if track.frame_rate:
-                        try:
-                            vm.frame_rate = float(track.frame_rate)
-                        except (ValueError, TypeError):
-                            pass
-                elif track.track_type == "Audio":
-                    if track.codec_id or track.format:
-                        vm.audio_codec = track.codec_id or track.format or ""
-                    if track.sampling_rate:
-                        vm.audio_sample_rate = int(track.sampling_rate)
+            media_info = self._parse_mediainfo(file_path)
+            if media_info is not None:
+                self._apply_video_tracks(media_info.tracks, vm)
         except Exception as e:
             logger.debug(f"视频元数据读取失败 ({file_path}): {e}")
         return vm
 
+    def _parse_mediainfo(self, file_path: str):
+        """加载 MediaInfo，主路径失败时按平台候选动态库重试。"""
+        from pymediainfo import MediaInfo
+
+        try:
+            return MediaInfo.parse(file_path)
+        except OSError:
+            for library_path in self._get_mediainfo_lib_paths():
+                try:
+                    return MediaInfo.parse(file_path, library_file=library_path)
+                except OSError:
+                    continue
+        return None
+
     @staticmethod
-    def _get_mediainfo_lib_paths() -> List[str]:
+    def _apply_video_tracks(tracks, metadata: VideoMetadata):
+        """映射 General/Video/Audio 轨道字段到视频元数据。"""
+        for track in tracks:
+            if track.track_type == "General":
+                if track.duration:
+                    metadata.duration_seconds = float(track.duration) / 1000.0
+                if track.overall_bit_rate:
+                    metadata.bit_rate = int(track.overall_bit_rate)
+            elif track.track_type == "Video":
+                if track.width:
+                    metadata.width = int(track.width)
+                if track.height:
+                    metadata.height = int(track.height)
+                if track.codec_id or track.format:
+                    metadata.codec = track.codec_id or track.format or ""
+                if track.frame_rate:
+                    try:
+                        metadata.frame_rate = float(track.frame_rate)
+                    except (ValueError, TypeError):
+                        pass
+            elif track.track_type == "Audio":
+                if track.codec_id or track.format:
+                    metadata.audio_codec = track.codec_id or track.format or ""
+                if track.sampling_rate:
+                    metadata.audio_sample_rate = int(track.sampling_rate)
+
+    @staticmethod
+    def _get_mediainfo_lib_paths() -> list[str]:
         """
         按操作系统返回 MediaInfo 动态库的常见安装路径。
 
@@ -202,7 +204,7 @@ class MetadataService:
         Windows: MediaInfo 官方安装包的 MediaInfo.dll（含 32/64 位 Program Files）
         Linux:   包管理器安装的 libmediainfo.so
         """
-        paths: List[str] = []
+        paths: list[str] = []
         bundle_dir = getattr(sys, "_MEIPASS", None)
         if bundle_dir:
             bundle = Path(bundle_dir)

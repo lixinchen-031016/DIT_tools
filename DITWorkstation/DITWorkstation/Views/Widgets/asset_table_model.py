@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Optional
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QColor
 
-
-CellFactory = Callable[[object, int], tuple[str, Optional[QColor]]]
+CellFactory = Callable[[object, int], tuple[str, QColor | None]]
 
 
 class AssetTableModel(QAbstractTableModel):
@@ -23,20 +21,20 @@ class AssetTableModel(QAbstractTableModel):
         self._headers = headers
         self._cell_factory = cell_factory
         self._assets: list[object] = []
-        self._status: dict[str, tuple[str, Optional[QColor]]] = {}
+        self._status: dict[str, tuple[str, QColor | None]] = {}
 
-    def rowCount(self, parent=QModelIndex()):  # noqa: N802 - Qt API
+    def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self._assets)
 
-    def columnCount(self, parent=QModelIndex()):  # noqa: N802 - Qt API
+    def columnCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self._headers)
 
-    def headerData(self, section, orientation, role=Qt.DisplayRole):  # noqa: N802 - Qt API
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
         if orientation == Qt.Horizontal and role == Qt.DisplayRole and 0 <= section < len(self._headers):
             return self._headers[section]
         return None
 
-    def data(self, index, role=Qt.DisplayRole):  # noqa: N802 - Qt API
+    def data(self, index, role=Qt.DisplayRole):
         if not index.isValid() or not 0 <= index.row() < len(self._assets):
             return None
         asset = self._assets[index.row()]
@@ -58,7 +56,7 @@ class AssetTableModel(QAbstractTableModel):
     def asset_at(self, row: int):
         return self._assets[row] if 0 <= row < len(self._assets) else None
 
-    def set_status(self, asset_id: str, text: str, color: Optional[QColor] = None) -> None:
+    def set_status(self, asset_id: str, text: str, color: QColor | None = None) -> None:
         self._status[asset_id] = (text, color)
         for row, asset in enumerate(self._assets):
             if getattr(asset, "asset_id", None) == asset_id:
@@ -66,7 +64,7 @@ class AssetTableModel(QAbstractTableModel):
                 self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.ForegroundRole])
                 return
 
-    def status_for(self, asset_id: str, default: tuple[str, Optional[QColor]]):
+    def status_for(self, asset_id: str, default: tuple[str, QColor | None]):
         return self._status.get(asset_id, default)
 
     def sort(self, column: int, order=Qt.AscendingOrder) -> None:

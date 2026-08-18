@@ -8,9 +8,8 @@
 - raw_extraction / rename：仅进度条 + 状态标签（show_log=False）
 - report：仅日志框（show_progress=False, show_status=False）
 """
-from typing import Optional
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QProgressBar, QTextEdit
+from PySide6.QtWidgets import QLabel, QProgressBar, QTextEdit, QVBoxLayout, QWidget
 
 from DITWorkstation.Utils import generate_log_message
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, MONO_FONT_QSS
@@ -28,7 +27,7 @@ class StatusPanel(QWidget):
         show_log: bool = True,
         progress_range=(0, 100),
         status_text: str = "就绪",
-        log_min_height: Optional[int] = 40,
+        log_min_height: int | None = 40,
     ):
         super().__init__(parent)
         layout = QVBoxLayout(self)
@@ -36,9 +35,9 @@ class StatusPanel(QWidget):
         layout.setSpacing(8)
 
         # 三个控件均可能为 None（按需创建），调用方通过别名引用时需注意。
-        self.progress_bar: Optional[QProgressBar] = None
-        self.status_label: Optional[QLabel] = None
-        self.log_text: Optional[QTextEdit] = None
+        self.progress_bar: QProgressBar | None = None
+        self.status_label: QLabel | None = None
+        self.log_text: QTextEdit | None = None
 
         if show_progress:
             self.progress_bar = QProgressBar()

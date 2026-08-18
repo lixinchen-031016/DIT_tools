@@ -2,7 +2,9 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional, List
+from typing import Any
+
+from DITWorkstation.Utils.common import now_local
 
 
 class ChecksumAlgorithm(Enum):
@@ -56,7 +58,7 @@ class OperationResult:
     message: str = ""
     value: Any = None
     affected_count: int = 0
-    recovery_id: Optional[str] = None
+    recovery_id: str | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -95,7 +97,7 @@ class FileChecksum:
     hash_value: str
     file_size: int
     mtime_ns: int = 0  # 缓存有效性依据：文件修改时间（纳秒）
-    computed_at: datetime = field(default_factory=datetime.now)
+    computed_at: datetime = field(default_factory=now_local)
 
 
 @dataclass
@@ -106,8 +108,8 @@ class CopyTask:
     file_size: int = 0
     status: CopyStatus = CopyStatus.PENDING
     progress: float = 0.0
-    source_checksum: Optional[str] = None
-    dest_checksum: Optional[str] = None
+    source_checksum: str | None = None
+    dest_checksum: str | None = None
     error_message: str = ""
     speed_mbps: float = 0.0
 
@@ -124,8 +126,8 @@ class BackupTarget:
     copied_bytes: int = 0
     verified: bool = False
     error_message: str = ""
-    failed_files: List[str] = field(default_factory=list)  # 失败文件相对路径列表（供断点续传/重试）
-    pending_files: List[str] = field(default_factory=list)  # 尚未处理文件（异常恢复用）
+    failed_files: list[str] = field(default_factory=list)  # 失败文件相对路径列表（供断点续传/重试）
+    pending_files: list[str] = field(default_factory=list)  # 尚未处理文件（异常恢复用）
 
 
 @dataclass
@@ -133,13 +135,13 @@ class BackupJob:
     """备份作业（包含多个目标）"""
     job_id: str
     source_path: str
-    targets: List[BackupTarget] = field(default_factory=list)
+    targets: list[BackupTarget] = field(default_factory=list)
     status: BackupStatus = BackupStatus.IDLE
     algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64
     total_files: int = 0
     total_bytes: int = 0
-    created_at: datetime = field(default_factory=datetime.now)
-    completed_at: Optional[datetime] = None
+    created_at: datetime = field(default_factory=now_local)
+    completed_at: datetime | None = None
 
 
 @dataclass
@@ -169,7 +171,7 @@ class MediaMetadata:
     aperture: str = ""
     shutter_speed: str = ""
     focal_length: str = ""
-    date_taken: Optional[datetime] = None
+    date_taken: datetime | None = None
     width: int = 0
     height: int = 0
     scene: str = ""
@@ -201,8 +203,8 @@ class Workspace:
     name: str
     path: str = ""  # 物理目录路径
     description: str = ""
-    created_at: datetime = field(default_factory=datetime.now)
-    updated_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=now_local)
+    updated_at: datetime = field(default_factory=now_local)
 
 
 @dataclass
@@ -211,10 +213,10 @@ class Project:
     project_id: str
     name: str
     description: str = ""
-    created_at: datetime = field(default_factory=datetime.now)
-    updated_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=now_local)
+    updated_at: datetime = field(default_factory=now_local)
     base_path: str = ""
-    workspace_id: Optional[str] = None  # 所属工作区 ID（1:N，可空以兼容旧数据）
+    workspace_id: str | None = None  # 所属工作区 ID（1:N，可空以兼容旧数据）
 
 
 @dataclass
@@ -225,8 +227,8 @@ class ProjectTemplate:
     description: str = ""
     base_path: str = ""  # 应用模板时作为新项目的默认工作目录
     notes: str = ""  # 使用说明/备注
-    created_at: datetime = field(default_factory=datetime.now)
-    updated_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=now_local)
+    updated_at: datetime = field(default_factory=now_local)
 
 
 @dataclass
@@ -234,12 +236,12 @@ class BackupTemplate:
     """备份方案模板：复用备份目标、校验算法和完整性验证选项。"""
     template_id: str
     name: str
-    target_paths: List[str] = field(default_factory=list)
+    target_paths: list[str] = field(default_factory=list)
     algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64
     verify_after_copy: bool = True
     description: str = ""
-    created_at: datetime = field(default_factory=datetime.now)
-    updated_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=now_local)
+    updated_at: datetime = field(default_factory=now_local)
 
 
 @dataclass
@@ -257,8 +259,8 @@ class ShootingLog:
     aperture: str = ""
     shutter_speed: str = ""
     notes: str = ""
-    file_paths: List[str] = field(default_factory=list)
-    created_at: datetime = field(default_factory=datetime.now)
+    file_paths: list[str] = field(default_factory=list)
+    created_at: datetime = field(default_factory=now_local)
 
 
 @dataclass
@@ -276,12 +278,12 @@ class MediaAsset:
     scene: str = ""
     shot: str = ""
     take: str = ""
-    date_imported: datetime = field(default_factory=datetime.now)
-    date_taken: Optional[datetime] = None
+    date_imported: datetime = field(default_factory=now_local)
+    date_taken: datetime | None = None
     camera_make: str = ""
     camera_model: str = ""
-    backup_locations: List[str] = field(default_factory=list)
-    log_id: Optional[str] = None
+    backup_locations: list[str] = field(default_factory=list)
+    log_id: str | None = None
     is_working_copy: bool = False
     original_path: str = ""
     width: int = 0

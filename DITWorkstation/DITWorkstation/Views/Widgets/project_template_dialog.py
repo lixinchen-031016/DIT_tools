@@ -1,13 +1,18 @@
 """项目模板对话框：从模板新建项目 / 把当前项目保存为模板"""
-from typing import Optional
 
 from PySide6.QtWidgets import (
-    QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox,
-    QDialogButtonBox, QMessageBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QLineEdit,
+    QMessageBox,
 )
 
 from DITWorkstation.App.session_context import (
-    get_data_bus, set_current_project, get_current_workspace_id,
+    get_current_workspace_id,
+    get_data_bus,
+    set_current_project,
 )
 from DITWorkstation.Models import Project, ProjectTemplate
 
@@ -23,7 +28,7 @@ class ProjectFromTemplateDialog(QDialog):
         super().__init__(parent)
         self._db_service = db_service
         self._templates = list(templates or (db_service.get_project_templates() if db_service else []))
-        self._created_project: Optional[Project] = None
+        self._created_project: Project | None = None
         self.setWindowTitle("从模板新建项目")
         self.setMinimumWidth(440)
         self._setup_ui()
@@ -85,7 +90,7 @@ class ProjectFromTemplateDialog(QDialog):
         if not self.name_edit.text().strip():
             self.name_edit.setText(template.name)
 
-    def _current_template(self) -> Optional[ProjectTemplate]:
+    def _current_template(self) -> ProjectTemplate | None:
         template_id = self.template_combo.currentData()
         for t in self._templates:
             if t.template_id == template_id:
@@ -115,18 +120,18 @@ class ProjectFromTemplateDialog(QDialog):
         get_data_bus().emit_data_changed("projects_changed")
         self.accept()
 
-    def get_created_project(self) -> Optional[Project]:
+    def get_created_project(self) -> Project | None:
         return self._created_project
 
 
 class SaveProjectAsTemplateDialog(QDialog):
     """把当前项目保存为项目模板，供后续快速建项复用。"""
 
-    def __init__(self, parent=None, db_service=None, project: Optional[Project] = None):
+    def __init__(self, parent=None, db_service=None, project: Project | None = None):
         super().__init__(parent)
         self._db_service = db_service
         self._project = project
-        self._saved_template: Optional[ProjectTemplate] = None
+        self._saved_template: ProjectTemplate | None = None
         self.setWindowTitle("保存为项目模板")
         self.setMinimumWidth(440)
         self._setup_ui()
@@ -181,11 +186,11 @@ class SaveProjectAsTemplateDialog(QDialog):
         get_data_bus().emit_data_changed("templates_changed")
         self.accept()
 
-    def get_saved_template(self) -> Optional[ProjectTemplate]:
+    def get_saved_template(self) -> ProjectTemplate | None:
         return self._saved_template
 
 
-def create_project_from_template(parent=None, db_service=None) -> Optional[Project]:
+def create_project_from_template(parent=None, db_service=None) -> Project | None:
     """便捷方法：弹出「从模板新建项目」对话框，返回新项目（取消返回 None）。"""
     dlg = ProjectFromTemplateDialog(parent=parent, db_service=db_service)
     if dlg.exec() == QDialog.Accepted:
@@ -193,7 +198,7 @@ def create_project_from_template(parent=None, db_service=None) -> Optional[Proje
     return None
 
 
-def save_project_as_template(parent=None, db_service=None, project: Optional[Project] = None) -> Optional[ProjectTemplate]:
+def save_project_as_template(parent=None, db_service=None, project: Project | None = None) -> ProjectTemplate | None:
     """便捷方法：弹出「保存为模板」对话框，返回新模板（取消返回 None）。"""
     dlg = SaveProjectAsTemplateDialog(parent=parent, db_service=db_service, project=project)
     if dlg.exec() == QDialog.Accepted:

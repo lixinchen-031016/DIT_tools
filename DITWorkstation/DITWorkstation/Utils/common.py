@@ -1,19 +1,29 @@
 """通用工具模块"""
-import re
+import functools
 import json
 import logging
 import os
-import functools
+import re
+import tempfile
 import threading
 import traceback
-import tempfile
 import unicodedata
+from collections.abc import Callable
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Callable
 
 from DITWorkstation.App import config
+
+
+def now_local() -> datetime:
+    """Return the current local time with an explicit UTC offset."""
+    return datetime.now().astimezone()
+
+
+def now_local_iso() -> str:
+    """Return an ISO-8601 local timestamp with an explicit UTC offset."""
+    return now_local().isoformat()
 
 
 def format_size(size_bytes: int) -> str:
@@ -30,12 +40,12 @@ def format_size(size_bytes: int) -> str:
 
 def generate_timestamp() -> str:
     """生成时间戳字符串"""
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
+    return now_local().strftime("%Y%m%d_%H%M%S")
 
 
 def generate_log_message(message: str) -> str:
     """生成带时间戳的日志消息"""
-    timestamp = datetime.now().strftime("%H:%M:%S")
+    timestamp = now_local().strftime("%H:%M:%S")
     return f"[{timestamp}] {message}"
 
 
@@ -83,7 +93,7 @@ def ensure_directory(path: str) -> bool:
     try:
         Path(path).mkdir(parents=True, exist_ok=True)
         return True
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return False
 
 
@@ -187,7 +197,7 @@ _settings_load_issue: str | None = None
 
 def _corrupt_settings_path(path: Path) -> Path:
     """Return an unused evidence-preserving filename for a bad settings file."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = now_local().strftime("%Y%m%d_%H%M%S")
     candidate = path.with_name(f"{path.name}.corrupt.{timestamp}")
     suffix = 1
     while candidate.exists():
@@ -283,7 +293,7 @@ def _load_settings() -> dict:
     if not path.exists():
         return {}
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return _validate_settings(json.load(f))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         _quarantine_corrupt_settings(path, str(exc))
@@ -357,7 +367,7 @@ def import_settings(source_path: str | Path, *, merge: bool = True) -> bool:
     """
     try:
         source = Path(source_path)
-        with open(source, "r", encoding="utf-8") as file:
+        with open(source, encoding="utf-8") as file:
             imported = _validate_settings(json.load(file))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
         logger.warning(f"导入设置失败 {source_path}: {exc}")
@@ -479,8 +489,13 @@ def _show_recent_paths_dialog(parent, title: str, recent_paths: list) -> str:
         选中的路径、'__browse__'（浏览新目录）或空字符串（取消）。
     """
     from PySide6.QtWidgets import (
-        QDialog, QVBoxLayout, QListWidget, QListWidgetItem,
-        QPushButton, QHBoxLayout, QLabel,
+        QDialog,
+        QHBoxLayout,
+        QLabel,
+        QListWidget,
+        QListWidgetItem,
+        QPushButton,
+        QVBoxLayout,
     )
 
     dialog = QDialog(parent)
@@ -564,6 +579,7 @@ def pick_directory(
             return choice
 
     import sys
+
     from PySide6.QtWidgets import QFileDialog
     if getattr(sys, 'frozen', False):
         path = QFileDialog.getExistingDirectory(
@@ -596,6 +612,7 @@ def pick_save_file(
     Returns: 选中的文件完整路径，未选择或取消返回空字符串。
     """
     import sys
+
     from PySide6.QtWidgets import QFileDialog
     options = QFileDialog.Option.DontUseNativeDialog if getattr(sys, 'frozen', False) else QFileDialog.Option(0)
     path, _ = QFileDialog.getSaveFileName(
@@ -622,6 +639,7 @@ def pick_open_file(
     Returns: 选中的文件完整路径，未选择或取消返回空字符串。
     """
     import sys
+
     from PySide6.QtWidgets import QFileDialog
     options = QFileDialog.Option.DontUseNativeDialog if getattr(sys, 'frozen', False) else QFileDialog.Option(0)
     path, _ = QFileDialog.getOpenFileName(
@@ -637,8 +655,8 @@ def open_in_file_manager(path: str) -> bool:
     - 文件：打开所在目录（Windows 上额外选中该文件）
     - 失败返回 False，调用方自行弹错
     """
-    import sys
     import subprocess
+    import sys
     from pathlib import Path as _Path
     try:
         target = _Path(path)
@@ -659,7 +677,7 @@ def open_in_file_manager(path: str) -> bool:
         else:
             subprocess.Popen(["xdg-open", dir_path])
         return True
-    except Exception as e:
+    except (OSError, ValueError) as e:
         logger.error(f"打开文件管理器失败: {e}", exc_info=True)
         return False
 
@@ -927,7 +945,9 @@ def get_asset_relink_service(db_service=None, checksum_service=None):
     if _shared_asset_relink_service is None:
         with _singleton_lock:
             if _shared_asset_relink_service is None:
-                from DITWorkstation.Services.asset_relink_service import AssetRelinkService
+                from DITWorkstation.Services.asset_relink_service import (
+                    AssetRelinkService,
+                )
                 _shared_asset_relink_service = AssetRelinkService(
                     get_db_service(), get_checksum_service()
                 )
@@ -1010,7 +1030,7 @@ def safe_slot(error_title: str = "操作失败"):
             except Exception as e:
                 logger.error(f"{error_title}: {e}", exc_info=True)
                 try:
-                    from PySide6.QtWidgets import QMessageBox, QApplication
+                    from PySide6.QtWidgets import QApplication, QMessageBox
                     msg = _friendly_message(e, error_title)
                     box = QMessageBox(self)
                     box.setIcon(QMessageBox.Critical)

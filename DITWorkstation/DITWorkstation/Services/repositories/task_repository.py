@@ -1,11 +1,9 @@
 """Background task history and storage-health snapshot persistence."""
-from datetime import datetime
 import json
 import sqlite3
 import uuid
-from typing import Optional
 
-from DITWorkstation.Utils import logger
+from DITWorkstation.Utils import logger, now_local
 
 from .base_repository import BaseRepository
 
@@ -14,11 +12,11 @@ class TaskRepository(BaseRepository):
     """Owns operational records consumed by task and project-health views."""
 
     def create(
-        self, task_name: str, project_id: Optional[str] = None, *, state: str = "queued",
-        parameters: Optional[dict] = None, recovery_info: Optional[dict] = None,
+        self, task_name: str, project_id: str | None = None, *, state: str = "queued",
+        parameters: dict | None = None, recovery_info: dict | None = None,
     ) -> str:
         task_id = str(uuid.uuid4())
-        now = datetime.now().isoformat()
+        now = now_local().isoformat()
         with self._transaction() as conn:
             conn.execute(
                 "INSERT INTO task_history "
@@ -31,8 +29,8 @@ class TaskRepository(BaseRepository):
         return task_id
 
     def update(
-        self, task_id: str, state: str, *, output: Optional[dict] = None,
-        error_summary: str = "", recovery_info: Optional[dict] = None,
+        self, task_id: str, state: str, *, output: dict | None = None,
+        error_summary: str = "", recovery_info: dict | None = None,
     ) -> bool:
         terminal = {"completed", "failed", "cancelled", "recoverable"}
         try:
@@ -50,15 +48,15 @@ class TaskRepository(BaseRepository):
                     "recovery_json = ?, started_at = COALESCE(started_at, ?), "
                     "completed_at = CASE WHEN ? THEN ? ELSE completed_at END WHERE task_id = ?",
                     (state, json.dumps(output or {}, ensure_ascii=False, default=str), error_summary,
-                     json.dumps(merged_recovery, ensure_ascii=False, default=str), datetime.now().isoformat(),
-                     int(state in terminal), datetime.now().isoformat(), task_id),
+                     json.dumps(merged_recovery, ensure_ascii=False, default=str), now_local().isoformat(),
+                     int(state in terminal), now_local().isoformat(), task_id),
                 )
             return True
         except (sqlite3.Error, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.warning(f"更新任务历史失败 {task_id}: {exc}")
             return False
 
-    def list_all(self, project_id: Optional[str] = None, limit: int = 100) -> list[dict]:
+    def list_all(self, project_id: str | None = None, limit: int = 100) -> list[dict]:
         with self._connection() as conn:
             if project_id:
                 rows = conn.execute(
@@ -97,7 +95,7 @@ class TaskRepository(BaseRepository):
             return cursor.rowcount
 
     def record_storage_health(
-        self, project_id: Optional[str], target_path: str, total_bytes: int, free_bytes: int,
+        self, project_id: str | None, target_path: str, total_bytes: int, free_bytes: int,
     ) -> bool:
         try:
             with self._transaction() as conn:
@@ -106,14 +104,14 @@ class TaskRepository(BaseRepository):
                     "(snapshot_id, project_id, target_path, total_bytes, free_bytes, captured_at) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (str(uuid.uuid4()), project_id, target_path, int(total_bytes), int(free_bytes),
-                     datetime.now().isoformat()),
+                     now_local().isoformat()),
                 )
             return True
         except sqlite3.Error as exc:
             logger.warning(f"记录存储健康快照失败: {exc}")
             return False
 
-    def list_storage_health(self, project_id: Optional[str], limit: int = 60) -> list[dict]:
+    def list_storage_health(self, project_id: str | None, limit: int = 60) -> list[dict]:
         limit = max(1, min(int(limit), 5000))
         with self._connection() as conn:
             if project_id:

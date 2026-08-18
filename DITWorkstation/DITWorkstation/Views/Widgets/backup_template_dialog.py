@@ -1,9 +1,14 @@
 """备份方案模板对话框。"""
-from typing import Optional
 
 from PySide6.QtWidgets import (
-    QDialog, QFormLayout, QLineEdit, QPlainTextEdit, QComboBox,
-    QCheckBox, QDialogButtonBox, QMessageBox,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QLineEdit,
+    QMessageBox,
+    QPlainTextEdit,
 )
 
 from DITWorkstation.Models import BackupTemplate, ChecksumAlgorithm
@@ -12,7 +17,7 @@ from DITWorkstation.Models import BackupTemplate, ChecksumAlgorithm
 class BackupTemplateDialog(QDialog):
     """创建备份方案模板；每行一个目标目录，可使用 {source_name}。"""
 
-    def __init__(self, parent=None, template: Optional[BackupTemplate] = None):
+    def __init__(self, parent=None, template: BackupTemplate | None = None):
         super().__init__(parent)
         self.template = template
         self.saved_values = None
@@ -82,6 +87,6 @@ class BackupTemplateDialog(QDialog):
         self.accept()
 
 
-def edit_backup_template(parent=None, template: Optional[BackupTemplate] = None):
+def edit_backup_template(parent=None, template: BackupTemplate | None = None):
     dialog = BackupTemplateDialog(parent=parent, template=template)
     return dialog.saved_values if dialog.exec() == QDialog.Accepted else None

@@ -1,26 +1,53 @@
 """素材检索页面"""
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QGroupBox, QFormLayout, QTableWidget,
-    QTableWidgetItem, QHeaderView, QComboBox, QDateEdit,
-    QCheckBox, QDialog, QMessageBox, QProgressDialog
-)
 from PySide6.QtCore import QDate, Qt
-from PySide6.QtWidgets import QCompleter
-
-from DITWorkstation.Utils import (
-    format_size, get_db_service, safe_slot, logger,
-    get_report_service, open_in_file_manager, pick_save_file,
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QCompleter,
+    QDateEdit,
+    QDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QProgressDialog,
+    QPushButton,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
+
 from DITWorkstation.App import config
 from DITWorkstation.App.feature_flags import is_enabled
+from DITWorkstation.App.session_context import get_current_workspace_id, get_data_bus
 from DITWorkstation.Models import RATING_LABELS, AssetRating
-from DITWorkstation.App.session_context import get_data_bus, get_current_workspace_id
+from DITWorkstation.Utils import (
+    format_size,
+    get_db_service,
+    get_report_service,
+    logger,
+    now_local,
+    open_in_file_manager,
+    pick_save_file,
+    safe_slot,
+)
 from DITWorkstation.ViewModels import TaskViewModel
-from DITWorkstation.Views.Widgets import RefreshOnShowView
-from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Styles.theme import (
+    COLOR,
+    FONT_SIZE,
+    PRIMARY_BUTTON_QSS,
+    RADIUS,
+    SUBTITLE_QSS,
+    TITLE_QSS,
+)
+from DITWorkstation.Views.Widgets import CaptureTimelineWidget, RefreshOnShowView
+from DITWorkstation.Views.Widgets.empty_state import (
+    attach_empty_state,
+    sync_empty_state,
+)
 from DITWorkstation.Views.Widgets.table_factory import make_table
-from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS
 
 
 class DuplicateResultsDialog(QDialog):
@@ -125,6 +152,7 @@ class SearchView(RefreshOnShowView):
         self._search_generation = 0
         self._requested_page = 0
         self._pending_search = None
+        self._timeline_period = (None, None)
         self._page_vm = TaskViewModel(self, task_store=self.db_service)
         self._page_vm.finished.connect(self._on_page_loaded)
         self._page_vm.error.connect(self._on_page_load_error)
@@ -270,10 +298,16 @@ class SearchView(RefreshOnShowView):
         dup_btn = QPushButton("🔁 跨项目查重")
         dup_btn.setToolTip("按校验和聚合跨项目重复入库的素材")
         dup_btn.clicked.connect(self._find_duplicates)
+        btn_layout.addWidget(QLabel("视图:"))
+        self.view_mode_combo = QComboBox()
+        self.view_mode_combo.addItems(["列表", "拍摄时间线"])
+        self.view_mode_combo.setToolTip("按导入记录列表或拍摄日期聚合浏览")
+        self.view_mode_combo.currentIndexChanged.connect(self._on_view_mode_changed)
         btn_layout.addWidget(self.search_btn)
         btn_layout.addWidget(reset_btn)
         btn_layout.addWidget(export_btn)
         btn_layout.addWidget(dup_btn)
+        btn_layout.addWidget(self.view_mode_combo)
         btn_layout.addStretch()
         self.result_label = QLabel("")
         self.result_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY};")
@@ -304,6 +338,11 @@ class SearchView(RefreshOnShowView):
         self.result_table.customContextMenuRequested.connect(self._on_result_context_menu)
         result_layout.addWidget(self.result_table)
         attach_empty_state(self.result_table, "🔍", "暂无搜索结果", "设置搜索条件后点击「搜索」按钮")
+
+        self.timeline = CaptureTimelineWidget()
+        self.timeline.setVisible(False)
+        self.timeline.period_selected.connect(self._on_timeline_period_selected)
+        result_layout.addWidget(self.timeline)
 
         # 分页控制条：大结果集分页展示，避免一次性渲染过多行导致卡顿
         page_layout = QHBoxLayout()
@@ -350,6 +389,28 @@ class SearchView(RefreshOnShowView):
                 )
                 self.stale_banner.setVisible(True)
 
+    def _on_view_mode_changed(self, index: int):
+        timeline_mode = index == 1
+        self.result_table.setVisible(not timeline_mode)
+        self.timeline.setVisible(timeline_mode)
+        self.page_bar.setVisible(False if timeline_mode else self._total and self._total > 0)
+        if timeline_mode:
+            self._timeline_period = (None, None)
+        if self._current_filters or self._results:
+            self._search()
+
+    def _on_timeline_period_selected(self, start: str, end: str):
+        self._timeline_period = (start, end)
+        self.view_mode_combo.setCurrentIndex(0)
+
+    def _display_timeline(self, entries):
+        self._results = []
+        self._total = sum(int(item.get("asset_count") or 0) for item in entries)
+        self.timeline.set_entries(entries)
+        self.result_label.setText(f"时间线共 {self._total} 条素材")
+        self.page_bar.setVisible(False)
+        self.stale_banner.setVisible(False)
+
     def _load_projects(self):
         # 保留当前选中的项目
         prev_id = self.project_combo.currentData()
@@ -388,6 +449,7 @@ class SearchView(RefreshOnShowView):
         self._current_filters = {}
         self._total = 0
         self._page = 0
+        self._timeline_period = (None, None)
 
     def _on_global_project_changed(self, project_id):
         """全局项目切换 -> 同步下拉选中项，保持检索上下文与其他视图一致。
@@ -495,18 +557,20 @@ class SearchView(RefreshOnShowView):
             date_from = self.date_from.date().toString("yyyy-MM-dd")
             date_to = self.date_to.date().toString("yyyy-MM-dd") + " 23:59:59"
 
-        return dict(
-            project_id=project_id,
-            scene=scene,
-            shot=shot,
-            file_type=file_type,
-            date_from=date_from,
-            date_to=date_to,
-            keyword=keyword,
-            log_id=log_id,
-            rating=rating,
-            tag=tag,
-        )
+        return {
+            "project_id": project_id,
+            "scene": scene,
+            "shot": shot,
+            "file_type": file_type,
+            "date_from": date_from,
+            "date_to": date_to,
+            "keyword": keyword,
+            "log_id": log_id,
+            "rating": rating,
+            "tag": tag,
+            "taken_from": self._timeline_period[0],
+            "taken_to": (self._timeline_period[1] + " 23:59:59") if self._timeline_period[1] else None,
+        }
 
     def _load_page(self):
         """在后台按当前游标读取一页，避免 SQLite/FTS 查询阻塞主线程。"""
@@ -519,6 +583,21 @@ class SearchView(RefreshOnShowView):
         page = self._page
         filters = dict(self._current_filters)
         total = self._total
+
+        if self.view_mode_combo.currentIndex() == 1:
+            def load_timeline(cancel_check):
+                if cancel_check():
+                    raise InterruptedError("时间线查询已取消")
+                entries = self.db_service.get_capture_timeline(filters.get("project_id"))
+                if cancel_check():
+                    raise InterruptedError("时间线查询已取消")
+                return {"generation": generation, "timeline": entries}
+
+            self._page_vm.start(
+                load_timeline, inject_cancel_check=True, task_name="capture_timeline",
+                project_id=filters.get("project_id"),
+            )
+            return
 
         def load_page(cancel_check):
             if cancel_check():
@@ -543,6 +622,10 @@ class SearchView(RefreshOnShowView):
 
     def _on_page_loaded(self, result):
         if result.get("generation") != self._search_generation:
+            self._start_pending_search()
+            return
+        if "timeline" in result:
+            self._display_timeline(result["timeline"])
             self._start_pending_search()
             return
         self._total = result["total"]
@@ -650,8 +733,7 @@ class SearchView(RefreshOnShowView):
         if not self._results:
             QMessageBox.information(self, "提示", "请先搜索，再将结果导出为 CSV")
             return
-        from datetime import datetime
-        default_name = f"素材清单_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        default_name = f"素材清单_{now_local().strftime('%Y%m%d_%H%M%S')}.csv"
         path = pick_save_file(
             self, "导出素材清单 CSV", default_name, "CSV 文件 (*.csv);;所有文件 (*)"
         )
@@ -776,6 +858,7 @@ class SearchView(RefreshOnShowView):
     def _open_result_directory(self, asset):
         """在文件管理器中打开素材所在目录"""
         import os
+
         from PySide6.QtWidgets import QMessageBox
         path = asset.file_path
         if not path or not os.path.exists(path):

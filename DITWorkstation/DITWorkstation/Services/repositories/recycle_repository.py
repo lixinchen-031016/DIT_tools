@@ -1,12 +1,11 @@
 """Recycle-bin snapshot persistence and restoration."""
-from datetime import datetime, timedelta
 import json
 import sqlite3
 import uuid
-from typing import Optional
+from datetime import datetime, timedelta
 
 from DITWorkstation.Models import OperationResult, OperationStatus
-from DITWorkstation.Utils import logger
+from DITWorkstation.Utils import logger, now_local
 
 from .base_repository import BaseRepository
 
@@ -15,11 +14,11 @@ class RecycleRepository(BaseRepository):
     """Owns recycle-bin rows while reusing facade audit and FTS helpers."""
 
     def store_snapshot(
-        self, conn, entity_type: str, entity_id: str, project_id: Optional[str], snapshot: dict,
+        self, conn, entity_type: str, entity_id: str, project_id: str | None, snapshot: dict,
         retention_days: int = 30,
     ) -> str:
         recycle_id = str(uuid.uuid4())
-        now = datetime.now()
+        now = now_local()
         conn.execute(
             "INSERT INTO recycle_bin "
             "(recycle_id, entity_type, entity_id, project_id, snapshot_json, deleted_at, expires_at) "
@@ -30,7 +29,7 @@ class RecycleRepository(BaseRepository):
         )
         return recycle_id
 
-    def list_items(self, project_id: Optional[str] = None) -> list[dict]:
+    def list_items(self, project_id: str | None = None) -> list[dict]:
         with self._connection() as conn:
             query = "SELECT recycle_id, entity_type, entity_id, project_id, deleted_at, expires_at FROM recycle_bin"
             params = []
@@ -100,7 +99,7 @@ class RecycleRepository(BaseRepository):
                         "SELECT 1 FROM workspaces WHERE workspace_id = ?", (workspace_id,)
                     ).fetchone() is None:
                         project["workspace_id"] = "default"
-                        now = datetime.now().isoformat()
+                        now = now_local().isoformat()
                         conn.execute(
                             "INSERT OR IGNORE INTO workspaces "
                             "(workspace_id, name, path, description, created_at, updated_at) "
@@ -159,8 +158,8 @@ class RecycleRepository(BaseRepository):
             logger.error(f"清空回收站失败: {exc}")
             return OperationResult(OperationStatus.ERROR, str(exc))
 
-    def cleanup_expired(self, now: Optional[datetime] = None) -> OperationResult:
-        now = now or datetime.now()
+    def cleanup_expired(self, now: datetime | None = None) -> OperationResult:
+        now = now or now_local()
         try:
             with self._transaction() as conn:
                 cursor = conn.execute("DELETE FROM recycle_bin WHERE expires_at <= ?", (now.isoformat(),))

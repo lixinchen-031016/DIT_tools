@@ -1,35 +1,57 @@
 """数据备份页面 - 安全拷贝与多重备份"""
 import shutil
-
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QProgressBar, QComboBox,
-    QGroupBox, QTextEdit,
-    QMessageBox, QCheckBox, QScrollArea, QFrame,
-    QTableWidget, QTableWidgetItem, QHeaderView,
-)
-from PySide6.QtCore import Signal, Slot, Qt
-
 from pathlib import Path
-from typing import Optional
 
-from DITWorkstation.Models import ChecksumAlgorithm, BackupJob, BackupTemplate
+from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFrame,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from DITWorkstation.App.feature_flags import is_enabled
+from DITWorkstation.App.navigation import get_nav_index
+from DITWorkstation.App.session_context import get_data_bus
+from DITWorkstation.Models import BackupJob, BackupTemplate, ChecksumAlgorithm
 from DITWorkstation.Services.backup_service import BackupService
 from DITWorkstation.Services.media_import_service import MediaImportService
 from DITWorkstation.Utils import (
-    format_size, safe_slot, get_db_service,
-    pick_directory, pick_save_file, find_overwrite_conflicts, logger,
+    find_overwrite_conflicts,
+    format_size,
+    get_db_service,
+    logger,
+    pick_directory,
+    pick_save_file,
+    safe_slot,
 )
-from DITWorkstation.App.session_context import get_data_bus
-from DITWorkstation.App.navigation import get_nav_index
-from DITWorkstation.App.feature_flags import is_enabled
-from DITWorkstation.Views.Widgets import (
-    RefreshOnShowView, WorkspaceProjectSelector, edit_backup_template,
-)
-from DITWorkstation.Views.Widgets.status_panel import StatusPanel
-from DITWorkstation.Views.Widgets.error_dialog import show_error
-from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS, MONO_FONT_QSS
 from DITWorkstation.ViewModels import TaskViewModel
+from DITWorkstation.Views.Styles.theme import (
+    COLOR,
+    FONT_SIZE,
+    PRIMARY_BUTTON_QSS,
+    RADIUS,
+    SUBTITLE_QSS,
+    TITLE_QSS,
+)
+from DITWorkstation.Views.Widgets import (
+    RefreshOnShowView,
+    WorkspaceProjectSelector,
+    edit_backup_template,
+)
+from DITWorkstation.Views.Widgets.error_dialog import show_error
+from DITWorkstation.Views.Widgets.status_panel import StatusPanel
 
 
 class BackupView(RefreshOnShowView):
@@ -53,7 +75,7 @@ class BackupView(RefreshOnShowView):
         self.task_vm.error.connect(self._on_task_error)
         self._task_kind = None
         # 本次备份关联的项目（在 _start_backup 时锁定，_on_finished 时用于自动导入）
-        self._backup_project_id: Optional[str] = None
+        self._backup_project_id: str | None = None
         # 备份目标路径列表（内联删除按钮式，替代 QListWidget）
         self._target_paths: list[str] = []
         self._backup_templates = []
@@ -62,11 +84,17 @@ class BackupView(RefreshOnShowView):
         # 项目切换由共享控件处理（broadcast_none=False 保留"不关联"语义）
 
     def _setup_ui(self):
+        """组装备份配置区和执行结果区。"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
-        # 标题
+        self._build_header(layout)
+        layout.addWidget(self._build_configuration())
+        layout.addWidget(self._build_result_panel(), 1)
+
+    def _build_header(self, layout):
+        """创建页面标题。"""
         title = QLabel("数据备份")
         title.setStyleSheet(TITLE_QSS)
         layout.addWidget(title)
@@ -75,8 +103,8 @@ class BackupView(RefreshOnShowView):
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
-        # 上下两段：上段配置区，下段执行状态区（不使用可拖动分割条，
-        # 空间不足时由整个视图的外层滚动条滚动）
+    def _build_configuration(self):
+        """创建项目、路径、模板和备份执行配置区。"""
         config_widget = QWidget()
         config_layout = QVBoxLayout(config_widget)
         config_layout.setContentsMargins(0, 0, 0, 0)
@@ -174,9 +202,11 @@ class BackupView(RefreshOnShowView):
         # 个人模式：隐藏备份方案模板控件（模板可能包含多目标配置，
         # 与个人模式单目标语义冲突）。对象仍创建，仅不可见。
         if not is_enabled("backup_templates"):
-            for w in (self.template_label, self.template_combo,
-                      self.save_template_btn, self.delete_template_btn):
-                w.setVisible(False)
+            for widget in (
+                self.template_label, self.template_combo,
+                self.save_template_btn, self.delete_template_btn,
+            ):
+                widget.setVisible(False)
 
         # 配置选项（内联，不再单独 GroupBox）
         config_row = QHBoxLayout()
@@ -241,9 +271,10 @@ class BackupView(RefreshOnShowView):
             self.mhl_btn.setVisible(False)
 
         config_layout.addStretch()
-        layout.addWidget(config_widget)
+        return config_widget
 
-        # 下段容器：执行状态区
+    def _build_result_panel(self):
+        """创建执行状态、日志和备份历史面板。"""
         result_widget = QWidget()
         result_layout = QVBoxLayout(result_widget)
         result_layout.setContentsMargins(0, 0, 0, 0)
@@ -281,9 +312,7 @@ class BackupView(RefreshOnShowView):
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.history_table.setMaximumHeight(150)
-        self.history_table.itemSelectionChanged.connect(
-            self._on_history_selection_changed
-        )
+        self.history_table.itemSelectionChanged.connect(self._on_history_selection_changed)
         history_layout.addWidget(self.history_table)
 
         history_detail = QHBoxLayout()
@@ -307,7 +336,8 @@ class BackupView(RefreshOnShowView):
         result_layout.addWidget(history_group)
 
         result_widget.setMinimumHeight(300)
-        layout.addWidget(result_widget, 1)
+        return result_widget
+
 
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
@@ -874,7 +904,7 @@ class BackupView(RefreshOnShowView):
             self._log(f"备份完成! 状态: {job.status.value}")
         elif job.status.value == "partial":
             self.status_label.setText("⚠️ 部分备份完成")
-            self._log(f"部分完成，请检查失败目标")
+            self._log("部分完成，请检查失败目标")
         else:
             self.status_label.setText("❌ 备份失败")
             self._log(f"备份失败: {job.status.value}")

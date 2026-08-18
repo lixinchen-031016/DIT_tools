@@ -9,9 +9,9 @@
 - 标签缩放：字号（px）
 - 缩放后 QLabel/QGroupBox 的 sizeHint 自动增大，触发外层 QScrollArea 滚动条
 """
-from PySide6.QtWidgets import QTableWidget, QLabel
-from PySide6.QtCore import Qt, QEvent, QObject
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QFont
+from PySide6.QtWidgets import QLabel, QTableWidget
 
 # 缩放参数
 ZOOM_DEFAULT = 1.0

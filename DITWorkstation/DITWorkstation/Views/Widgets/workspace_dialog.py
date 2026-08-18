@@ -2,11 +2,16 @@
 
 消除 media_import_view / shooting_log_view / project_dashboard_view 三处重复的对话框代码。
 """
-from typing import Optional
 
 from PySide6.QtWidgets import (
-    QDialog, QFormLayout, QLineEdit, QPushButton,
-    QDialogButtonBox, QMessageBox, QHBoxLayout, QWidget
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QWidget,
 )
 
 from DITWorkstation.Models import Workspace
@@ -20,7 +25,7 @@ class WorkspaceDialog(QDialog):
     编辑模式下预填现有值；保存后通过 `get_workspace()` 返回最新对象。
     """
 
-    def __init__(self, parent=None, workspace: Optional[Workspace] = None,
+    def __init__(self, parent=None, workspace: Workspace | None = None,
                  db_service=None):
         """
         Args:
@@ -30,7 +35,7 @@ class WorkspaceDialog(QDialog):
         super().__init__(parent)
         self._workspace = workspace
         self._db_service = db_service
-        self._saved_workspace: Optional[Workspace] = None
+        self._saved_workspace: Workspace | None = None
 
         is_edit = workspace is not None
         self.setWindowTitle("编辑工作区" if is_edit else "新建工作区")
@@ -123,12 +128,12 @@ class WorkspaceDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"保存失败：{e}")
 
-    def get_saved_workspace(self) -> Optional[Workspace]:
+    def get_saved_workspace(self) -> Workspace | None:
         """返回保存后的 Workspace 对象（未保存返回 None）"""
         return self._saved_workspace
 
     @staticmethod
-    def create(parent=None, db_service=None) -> Optional[Workspace]:
+    def create(parent=None, db_service=None) -> Workspace | None:
         """便捷方法：弹出新建对话框，返回新建的 Workspace（取消返回 None）"""
         dlg = WorkspaceDialog(parent=parent, db_service=db_service)
         if dlg.exec() == QDialog.Accepted:
@@ -136,7 +141,7 @@ class WorkspaceDialog(QDialog):
         return None
 
     @staticmethod
-    def edit(workspace: Workspace, parent=None, db_service=None) -> Optional[Workspace]:
+    def edit(workspace: Workspace, parent=None, db_service=None) -> Workspace | None:
         """便捷方法：弹出编辑对话框，返回更新后的 Workspace（取消返回 None）"""
         dlg = WorkspaceDialog(parent=parent, workspace=workspace, db_service=db_service)
         if dlg.exec() == QDialog.Accepted:

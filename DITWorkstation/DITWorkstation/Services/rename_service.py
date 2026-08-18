@@ -4,17 +4,17 @@ MetadataService 已拆离到 metadata_service.py（两者零耦合）。
 向后兼容：`from rename_service import MetadataService` 仍可用（re-export）。
 """
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
-from datetime import datetime
 
 from DITWorkstation.Models import OperationResult, OperationStatus, RenameRule
+from DITWorkstation.Utils import now_local
 
 
 class RenameService:
     """文件重命名服务"""
 
-    def preview_rename(self, files: List[str], rule: RenameRule) -> List[Tuple[str, str]]:
+    def preview_rename(self, files: list[str], rule: RenameRule) -> list[tuple[str, str]]:
         """
         预览重命名结果
 
@@ -35,10 +35,10 @@ class RenameService:
 
     def execute_rename(
         self,
-        files: List[str],
+        files: list[str],
         rule: RenameRule,
-        progress_callback: Optional[Callable[[int, int, str], None]] = None,
-    ) -> List[Tuple[str, str]]:
+        progress_callback: Callable[[int, int, str], None] | None = None,
+    ) -> list[tuple[str, str]]:
         """
         执行重命名
 
@@ -98,7 +98,7 @@ class RenameService:
         name = name.replace("{number}", padded_number)
         name = name.replace("{prefix}", rule.prefix)
         name = name.replace("{suffix}", rule.suffix)
-        name = name.replace("{date}", datetime.now().strftime("%Y%m%d"))
+        name = name.replace("{date}", now_local().strftime("%Y%m%d"))
 
         # 清理多余分隔符
         name = re.sub(r'[_\-\s]+', '_', name).strip('_')
@@ -107,9 +107,9 @@ class RenameService:
 
     def batch_rename_with_association(
         self,
-        file_groups: List[List[str]],
+        file_groups: list[list[str]],
         rule: RenameRule
-    ) -> List[Tuple[str, str]]:
+    ) -> list[tuple[str, str]]:
         """
         批量重命名并保持文件关联（如JPG+RAW对）
 
@@ -140,7 +140,7 @@ class RenameService:
         self,
         db_service,
         rename_id: str,
-        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> OperationResult:
         """回退一次已记录的重命名。
 
@@ -184,4 +184,4 @@ class RenameService:
 
 # 向后兼容：MetadataService 已拆离到 metadata_service.py
 # 现有代码 `from rename_service import MetadataService` 仍可用
-from DITWorkstation.Services.metadata_service import MetadataService  # noqa: E402,F401
+from DITWorkstation.Services.metadata_service import MetadataService  # noqa: F401

@@ -1,10 +1,9 @@
 """应用配置管理"""
 import os
-import sys
 import platform
-from pathlib import Path
+import sys
 from dataclasses import dataclass, field
-from typing import List, Optional
+from pathlib import Path
 
 
 def _resolve_data_dir() -> Path:
@@ -124,6 +123,11 @@ class AppConfig:
     auto_card_automation_enabled: bool = False  # 检测到存储卡时按规则自动导入/备份
     auto_card_import: bool = True
     auto_card_backup: bool = False
+    # 非空时按此顺序执行 SOP；为空时由兼容的导入/备份开关推导步骤。
+    auto_card_steps: list[str] = field(default_factory=list)
+    auto_card_raw_output_dir: str = ""
+    auto_card_rename_pattern: str = ""
+    auto_card_report_path: str = ""
     auto_card_template_id: str = ""
     auto_card_project_id: str = ""
 
@@ -141,22 +145,22 @@ class AppConfig:
     search_page_size: int = 500  # 素材检索每页显示的条数
 
     # 支持的RAW格式
-    raw_extensions: List[str] = field(default_factory=lambda: [
+    raw_extensions: list[str] = field(default_factory=lambda: [
         ".cr2", ".cr3", ".nef", ".arw", ".dng", ".orf", ".rw2", ".raf", ".pef", ".srw"
     ])
 
     # 支持的图片格式
-    image_extensions: List[str] = field(default_factory=lambda: [
+    image_extensions: list[str] = field(default_factory=lambda: [
         ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".gif", ".webp"
     ])
 
     # 支持的视频格式
-    video_extensions: List[str] = field(default_factory=lambda: [
+    video_extensions: list[str] = field(default_factory=lambda: [
         ".mp4", ".mov", ".mkv", ".avi", ".mxf", ".m4v", ".wmv", ".flv", ".webm"
     ])
 
     # 支持的音频格式
-    audio_extensions: List[str] = field(default_factory=lambda: [
+    audio_extensions: list[str] = field(default_factory=lambda: [
         ".mp3", ".wav", ".aac", ".flac", ".m4a", ".wma"
     ])
 
@@ -167,7 +171,7 @@ class AppConfig:
     log_dir: Path = field(default_factory=_resolve_log_dir)
 
     # 缩略图缓存目录；None 时使用 effective_db_dir / "thumbnails"
-    thumbnail_cache_dir: Optional[Path] = None
+    thumbnail_cache_dir: Path | None = None
 
     # 导入配置
     project_work_dir_name: str = "DIT_Workspace"
@@ -188,7 +192,7 @@ class AppConfig:
         return self.effective_db_dir / "thumbnails"
 
     @property
-    def all_media_extensions(self) -> List[str]:
+    def all_media_extensions(self) -> list[str]:
         """所有支持的媒体格式（图片+视频+RAW+音频）"""
         return self.image_extensions + self.video_extensions + self.raw_extensions + self.audio_extensions
 

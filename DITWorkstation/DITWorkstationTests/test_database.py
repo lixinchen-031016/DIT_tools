@@ -46,6 +46,39 @@ class TestDatabaseService(unittest.TestCase):
         projects = self.db.get_projects()
         self.assertEqual(len(projects), 2)
 
+    def test_capture_timeline_groups_by_taken_date(self):
+        """时间线按拍摄日期聚合，不混用导入日期。"""
+        project = self.db.create_project(name="时间线项目")
+        self.db.add_media_asset(MediaAsset(
+            asset_id="timeline-1", project_id=project.project_id,
+            file_path="/media/a.jpg", file_name="a.jpg", file_size=10,
+            file_type=".jpg", date_taken=datetime(2026, 8, 1, 10, 0),
+        ))
+        self.db.add_media_asset(MediaAsset(
+            asset_id="timeline-2", project_id=project.project_id,
+            file_path="/media/b.jpg", file_name="b.jpg", file_size=20,
+            file_type=".jpg", date_taken=datetime(2026, 8, 1, 12, 0),
+        ))
+        self.db.add_media_asset(MediaAsset(
+            asset_id="timeline-3", project_id=project.project_id,
+            file_path="/media/c.jpg", file_name="c.jpg", file_size=30,
+            file_type=".jpg", date_taken=datetime(2026, 8, 2, 9, 0),
+        ))
+
+        timeline = self.db.get_capture_timeline(project.project_id)
+
+        self.assertEqual([row["period"] for row in timeline], ["2026-08-01", "2026-08-02"])
+        self.assertEqual(timeline[0]["asset_count"], 2)
+        self.assertEqual(timeline[0]["total_size"], 30)
+        self.assertEqual(
+            self.db.count_assets(
+                project_id=project.project_id,
+                taken_from="2026-08-01",
+                taken_to="2026-08-01 23:59:59",
+            ),
+            2,
+        )
+
     def test_get_project_by_id(self):
         """按ID获取项目"""
         project = self.db.create_project(name="查找测试")

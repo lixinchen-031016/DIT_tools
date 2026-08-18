@@ -1,11 +1,11 @@
 """Declarative allowlists for database update operations."""
-from dataclasses import dataclass
-from datetime import datetime
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
-from DITWorkstation.Utils import logger
 from DITWorkstation.Models import ChecksumAlgorithm
+from DITWorkstation.Utils import logger, now_local
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,15 @@ def build_update_clause(
     **kwargs: Any,
 ) -> tuple[str, list[Any]]:
     """Build a parameterised UPDATE statement from registered fields only."""
+    allowed_columns = TABLE_FIELD_WHITELIST.get(table)
+    if allowed_columns is None:
+        raise ValueError(f"不允许更新的表名: {table}")
+    expected_id_column = TABLE_ID_WHITELIST[table]
+    if id_column != expected_id_column:
+        raise ValueError(
+            f"表 {table} 的主键列必须是 {expected_id_column}，收到 {id_column}"
+        )
+
     set_parts: list[str] = []
     params: list[Any] = []
     for key, value in kwargs.items():
@@ -42,16 +51,19 @@ def build_update_clause(
         if spec is None:
             logger.warning(f"update {table}: 未注册字段 '{key}' 已忽略")
             continue
+        column = spec.column or spec.name
+        if column not in allowed_columns:
+            raise ValueError(f"表 {table} 不允许更新列: {column}")
         if spec.serializer is not None:
             value = spec.serializer(value)
-        set_parts.append(f"{spec.column or spec.name} = ?")
+        set_parts.append(f"{column} = ?")
         params.append(value)
     if not set_parts:
         return "", []
 
     if touch_updated_at:
         set_parts.append("updated_at = ?")
-        params.append(datetime.now().isoformat())
+        params.append(now_local().isoformat())
     params.append(id_value)
     return f"UPDATE {table} SET {', '.join(set_parts)} WHERE {id_column} = ?", params
 
@@ -100,3 +112,19 @@ MEDIA_ASSET_FIELDS = field_registry(
     "original_path", "width", "height", "duration_seconds", "lens_model",
     "focal_length", "video_metadata", "rating", "tags", "notes",
 )
+
+# Dynamic identifiers must come from these allowlists. Values remain SQL parameters.
+TABLE_ID_WHITELIST = {
+    "workspaces": "workspace_id",
+    "projects": "project_id",
+    "project_templates": "template_id",
+    "backup_templates": "template_id",
+    "media_assets": "asset_id",
+}
+TABLE_FIELD_WHITELIST = {
+    "workspaces": set(WORKSPACE_FIELDS) | {"updated_at"},
+    "projects": set(PROJECT_FIELDS) | {"updated_at"},
+    "project_templates": set(PROJECT_TEMPLATE_FIELDS) | {"updated_at"},
+    "backup_templates": set(BACKUP_TEMPLATE_FIELDS) | {"updated_at"},
+    "media_assets": set(MEDIA_ASSET_FIELDS),
+}

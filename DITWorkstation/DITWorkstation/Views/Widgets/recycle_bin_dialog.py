@@ -1,13 +1,18 @@
 """回收站对话框：查看并恢复软删除的项目和素材记录。"""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton,
-    QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
 )
 
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Utils import get_db_service, logger
-
 
 _ENTITY_LABELS = {"asset": "素材", "project": "项目"}
 

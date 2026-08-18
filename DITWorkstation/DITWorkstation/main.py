@@ -2,26 +2,28 @@
 DIT工作站 - 应用入口
 专业摄影数据管理应用，支持安全备份、校验和验证、JPG筛选RAW提取等功能
 """
-import sys
 import os
 import platform
+import sys
 
 # 确保项目根目录在路径中
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox
-from PySide6.QtCore import Qt, QRect
-from PySide6.QtGui import QFont, QFontDatabase, QIcon, QPainter, QPixmap, QColor
 
 from DITWorkstation.App import config
-from DITWorkstation.App.version import APP_VERSION
-from DITWorkstation.App.navigation import get_nav_index
-from DITWorkstation.Utils import apply_saved_config, logger, get_db_service
 from DITWorkstation.App.feature_flags import ensure_personal_default_workspace_path
-from DITWorkstation.Views.main_window import (
-    MainWindow, set_current_project, set_current_workspace
-)
+from DITWorkstation.App.navigation import get_nav_index
+from DITWorkstation.App.version import APP_VERSION
+from DITWorkstation.Utils import apply_saved_config, get_db_service, logger
 from DITWorkstation.Views.first_run_wizard import maybe_show_wizard
+from DITWorkstation.Views.main_window import (
+    MainWindow,
+    set_current_project,
+    set_current_workspace,
+)
 from DITWorkstation.Views.Styles.theme import apply_global_style
 
 

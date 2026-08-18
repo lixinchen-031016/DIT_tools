@@ -10,6 +10,7 @@
 main_window.py 仍 re-export 这些符号，现有视图无需改动。
 """
 import threading
+
 from PySide6.QtCore import QObject, Signal
 
 from DITWorkstation.Utils import get_db_service

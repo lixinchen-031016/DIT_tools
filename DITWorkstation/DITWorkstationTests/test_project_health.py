@@ -1,6 +1,9 @@
 """阶段 4 项目健康汇总测试。"""
+from datetime import timedelta
+
 from DITWorkstation.Models import MediaAsset
 from DITWorkstation.Services.project_health_service import ProjectHealthService
+from DITWorkstation.Utils import now_local
 
 
 def test_health_report_aggregates_missing_tasks_and_capacity(db_service, tmp_dir):
@@ -33,3 +36,23 @@ def test_health_report_records_target_capacity(db_service, tmp_dir):
     report = ProjectHealthService(db_service).get_health_report(project.project_id)
     assert report["capacities"][0]["available"] is True
     assert report["capacity_history"]
+
+
+def test_capacity_forecast_detects_low_space_and_depletion():
+    start = now_local() - timedelta(days=2)
+    snapshots = [
+        {
+            "target_path": "/backup-a", "total_bytes": 1000, "free_bytes": 500,
+            "captured_at": start,
+        },
+        {
+            "target_path": "/backup-a", "total_bytes": 1000, "free_bytes": 100,
+            "captured_at": start + timedelta(days=2),
+        },
+    ]
+
+    forecast = ProjectHealthService.estimate_capacity_forecast(snapshots)
+
+    assert forecast["warning"] is True
+    assert forecast["days_remaining"] == 1
+    assert forecast["targets"][0]["free_ratio"] == 0.1

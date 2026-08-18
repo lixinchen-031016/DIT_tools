@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import unicodedata
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -14,7 +15,7 @@ from DITWorkstation.Utils.common import (
     get_file_stem, calculate_speed, generate_timestamp, generate_log_message,
     normalize_path, normalize_name_key, find_overwrite_conflicts,
     add_recent_path, clear_recent_paths, count_recent_paths,
-    get_metadata_service, get_report_service,
+    get_metadata_service, get_report_service, now_local, now_local_iso,
 )
 from DITWorkstation.App import config
 
@@ -154,6 +155,14 @@ class TestTimestampHelpers(unittest.TestCase):
         self.assertIn("] hello", msg)
         # 时间戳部分 [HH:MM:SS] 共 10 字符
         self.assertEqual(len(msg.split("] ")[0] + "]"), 10)
+
+    def test_local_timestamps_include_offset(self):
+        """新生成的持久化时间戳带时区，旧无时区字符串仍可读取。"""
+        current = now_local()
+        serialized = now_local_iso()
+        self.assertIsNotNone(current.utcoffset())
+        self.assertIsNotNone(datetime.fromisoformat(serialized).utcoffset())
+        self.assertIsNone(datetime.fromisoformat("2026-01-01T00:00:00").utcoffset())
 
 
 class TestNormalizePath(unittest.TestCase):

@@ -5,17 +5,23 @@ import shutil
 import stat
 import threading
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-from typing import List, Optional, Callable, Dict
 from datetime import datetime
+from pathlib import Path
 
 from DITWorkstation.App import config
-from DITWorkstation.Models import MediaAsset, AssetType, ChecksumAlgorithm
+from DITWorkstation.Models import AssetType, ChecksumAlgorithm, MediaAsset
 from DITWorkstation.Services.checksum_service import ChecksumService
 from DITWorkstation.Services.database_service import DatabaseService
-from DITWorkstation.Utils import logger, get_checksum_service, normalize_path, scan_files
-from DITWorkstation.Utils import get_metadata_service
+from DITWorkstation.Utils import (
+    get_checksum_service,
+    get_metadata_service,
+    logger,
+    normalize_path,
+    now_local,
+    scan_files,
+)
 
 
 class MediaImportService:
@@ -23,8 +29,8 @@ class MediaImportService:
 
     def __init__(
         self,
-        db_service: Optional[DatabaseService] = None,
-        checksum_service: Optional[ChecksumService] = None
+        db_service: DatabaseService | None = None,
+        checksum_service: ChecksumService | None = None
     ):
         # 优先使用注入的 checksum_service，否则取全局单例（避免重复计算缓存）
         self.checksum_service = checksum_service or get_checksum_service()
@@ -63,7 +69,7 @@ class MediaImportService:
         include_videos: bool = True,
         include_raw: bool = True,
         include_audio: bool = False
-    ) -> List[Path]:
+    ) -> list[Path]:
         """
         扫描文件夹中的媒体文件
 
@@ -102,10 +108,10 @@ class MediaImportService:
 
     def scan_multiple_folders(
         self,
-        folders: List[str],
+        folders: list[str],
         recursive: bool = True,
         **kwargs
-    ) -> List[Path]:
+    ) -> list[Path]:
         """
         扫描多个文件夹
 
@@ -126,7 +132,7 @@ class MediaImportService:
                 logger.warning(f"扫描文件夹失败 {folder}: {e}")
         return sorted(all_files)
 
-    def get_file_info(self, file_path: str) -> Dict:
+    def get_file_info(self, file_path: str) -> dict:
         """
         获取文件基本信息
 
@@ -153,17 +159,17 @@ class MediaImportService:
     def import_assets(
         self,
         project_id: str,
-        file_paths: List[str],
+        file_paths: list[str],
         compute_checksum: bool = True,
         read_metadata: bool = True,
         copy_to_workspace: bool = False,
-        workspace_dir: Optional[str] = None,
-        log_id: Optional[str] = None,
+        workspace_dir: str | None = None,
+        log_id: str | None = None,
         scene: str = "",
         shot: str = "",
-        progress_callback: Optional[Callable[[str, float, str], None]] = None,
-        cancel_check: Optional[Callable[[], bool]] = None
-    ) -> Dict:
+        progress_callback: Callable[[str, float, str], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None
+    ) -> dict:
         """
         导入素材到项目
 
@@ -197,8 +203,8 @@ class MediaImportService:
         existing_paths = self.db_service.existing_asset_paths(project_id, file_paths)
 
         dedup_lock = threading.Lock()
-        assets: List[MediaAsset] = []
-        details: List[Dict] = []
+        assets: list[MediaAsset] = []
+        details: list[dict] = []
         order = {fp: i for i, fp in enumerate(file_paths)}
         imported = skipped = failed = 0
         cancelled = False
@@ -325,10 +331,10 @@ class MediaImportService:
         is_working_copy: bool = False,
         original_path: str = "",
         read_metadata: bool = True,
-        log_id: Optional[str] = None,
+        log_id: str | None = None,
         scene: str = "",
         shot: str = "",
-        cancel_check: Optional[Callable[[], bool]] = None
+        cancel_check: Callable[[], bool] | None = None
     ) -> MediaAsset:
         """
         创建素材资产对象
@@ -416,7 +422,7 @@ class MediaImportService:
             log_id=log_id,
             is_working_copy=is_working_copy,
             original_path=original_path,
-            date_imported=datetime.now(),
+            date_imported=now_local(),
             date_taken=date_taken,
             camera_make=camera_make,
             camera_model=camera_model,
@@ -479,7 +485,7 @@ class MediaImportService:
         self,
         asset_id: str,
         workspace_dir: str
-    ) -> Optional[MediaAsset]:
+    ) -> MediaAsset | None:
         """
         将现有素材复制为工作副本
 
@@ -517,7 +523,7 @@ class MediaImportService:
             logger.error(f"复制到工作区失败 {asset_id}: {e}")
             return None
 
-    def get_supported_extensions(self) -> Dict[str, List[str]]:
+    def get_supported_extensions(self) -> dict[str, list[str]]:
         """
         获取支持的文件扩展名
 

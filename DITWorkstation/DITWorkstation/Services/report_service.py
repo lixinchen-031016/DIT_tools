@@ -1,25 +1,34 @@
 """报告生成服务"""
 import os
 import platform
+from collections import Counter
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Optional, Dict
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from DITWorkstation.App import config
 from DITWorkstation.Models import (
-    Project, BackupJob, BackupTarget, BackupStatus, CopyStatus, ChecksumAlgorithm,
-    MediaAsset, ShootingLog, RATING_LABELS, AssetRating,
+    RATING_LABELS,
+    AssetRating,
+    BackupJob,
+    BackupStatus,
+    BackupTarget,
+    ChecksumAlgorithm,
+    CopyStatus,
+    MediaAsset,
+    Project,
+    ShootingLog,
 )
-from DITWorkstation.Utils import format_size, logger
+from DITWorkstation.Utils import format_size, logger, now_local
 
 
 class ReportService:
@@ -54,7 +63,7 @@ class ReportService:
         self._font_registered = True
         logger.warning("未找到系统中文字体，使用 ReportLab CID 字体 STSong-Light")
 
-    def _get_system_font_paths(self) -> List[str]:
+    def _get_system_font_paths(self) -> list[str]:
         """获取系统字体路径（跨平台）"""
         system = platform.system()
         font_paths = []
@@ -111,7 +120,7 @@ class ReportService:
             algorithm = ChecksumAlgorithm(record.get("algorithm", ChecksumAlgorithm.XXHASH64.value))
         except ValueError:
             algorithm = ChecksumAlgorithm.XXHASH64
-        created_at = ReportService._safe_datetime(record.get("created_at")) or datetime.now()
+        created_at = ReportService._safe_datetime(record.get("created_at")) or now_local()
         completed_at = ReportService._safe_datetime(record.get("completed_at"))
         return BackupJob(
             job_id=record.get("job_id", "unknown"), source_path=record.get("source_path", ""),
@@ -122,7 +131,7 @@ class ReportService:
         )
 
     @staticmethod
-    def _safe_datetime(value) -> Optional[datetime]:
+    def _safe_datetime(value) -> datetime | None:
         if isinstance(value, datetime):
             return value
         if not value:
@@ -134,9 +143,9 @@ class ReportService:
 
     def generate_backup_report(
         self,
-        project: Optional[Project],
-        jobs: List[BackupJob | dict],
-        output_path: Optional[str] = None
+        project: Project | None,
+        jobs: list[BackupJob | dict],
+        output_path: str | None = None
     ) -> str:
         """
         生成数据备份报告
@@ -153,7 +162,7 @@ class ReportService:
         jobs = [self._coerce_backup_job(job) for job in jobs]
 
         if not output_path:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = now_local().strftime("%Y%m%d_%H%M%S")
             output_path = str(config.report_dir / f"备份报告_{timestamp}.pdf")
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -169,11 +178,6 @@ class ReportService:
             'ChineseHeading', parent=styles['Heading2'],
             fontName=self._chinese_font_name, fontSize=14
         )
-        normal_style = ParagraphStyle(
-            'ChineseNormal', parent=styles['Normal'],
-            fontName=self._chinese_font_name, fontSize=10
-        )
-
         elements = []
 
         elements.append(Paragraph("DIT数据管理报告", title_style))
@@ -182,7 +186,7 @@ class ReportService:
         elements.append(Paragraph("项目信息", heading_style))
         project_info = [
             ["项目名称", project.name if project else "未指定"],
-            ["报告时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+            ["报告时间", now_local().strftime("%Y-%m-%d %H:%M:%S")],
             ["备份任务数", str(len(jobs))],
         ]
         t = Table(project_info, colWidths=[40*mm, 120*mm])
@@ -242,12 +246,99 @@ class ReportService:
         logger.info(f"备份报告生成成功: {output_path}")
         return output_path
 
+    def generate_audit_report(
+        self, operations: Iterable[dict], output_path: str | None = None,
+        *, title: str = "操作审计报表",
+    ) -> str:
+        """将筛选后的操作日志生成带汇总的 PDF 交付报表。"""
+        self._register_fonts()
+        records = list(operations or [])
+        if not output_path:
+            timestamp = now_local().strftime("%Y%m%d_%H%M%S")
+            output_path = str(config.report_dir / f"审计报表_{timestamp}.pdf")
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+        doc = SimpleDocTemplate(output_path, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm)
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            "AuditTitle", parent=styles["Title"], fontName=self._chinese_font_name, fontSize=18,
+        )
+        heading_style = ParagraphStyle(
+            "AuditHeading", parent=styles["Heading2"], fontName=self._chinese_font_name, fontSize=13,
+        )
+        body_style = ParagraphStyle(
+            "AuditBody", parent=styles["BodyText"], fontName=self._chinese_font_name, fontSize=8,
+        )
+
+        status_counts = Counter(str(item.get("status") or "success") for item in records)
+        event_counts = Counter(str(item.get("event") or "未命名") for item in records)
+        day_counts = Counter(
+            self._safe_datetime(item.get("created_at")).strftime("%Y-%m-%d")
+            for item in records if self._safe_datetime(item.get("created_at"))
+        )
+        status_labels = {
+            "success": "成功", "not_found": "未找到", "conflict": "冲突",
+            "invalid": "无效", "error": "失败", "cancelled": "已取消",
+        }
+        elements = [Paragraph(title, title_style), Spacer(1, 6 * mm)]
+        summary = [
+            ["记录总数", str(len(records))],
+            ["成功", str(status_counts.get("success", 0))],
+            ["异常/失败", str(sum(count for key, count in status_counts.items() if key != "success"))],
+            ["报表时间", now_local().strftime("%Y-%m-%d %H:%M:%S")],
+        ]
+        table = Table(summary, colWidths=[42 * mm, 118 * mm])
+        table.setStyle(self._report_table_style())
+        elements.extend([Paragraph("汇总", heading_style), table, Spacer(1, 5 * mm)])
+
+        daily_rows = [["日期", "操作次数"]]
+        daily_rows.extend([list(row) for row in sorted(day_counts.items())])
+        event_rows = [["事件", "次数"]]
+        event_rows.extend([list(row) for row in event_counts.most_common()])
+        for heading, rows in (("按日统计", daily_rows), ("按事件统计", event_rows)):
+            table = Table(rows or [["无", "0"]], colWidths=[90 * mm, 35 * mm])
+            table.setStyle(self._report_table_style(header=True))
+            elements.extend([Paragraph(heading, heading_style), table, Spacer(1, 5 * mm)])
+
+        detail_rows = [["时间", "事件", "状态", "对象", "详情"]]
+        for item in records:
+            created = self._safe_datetime(item.get("created_at"))
+            detail_rows.append([
+                created.strftime("%Y-%m-%d %H:%M:%S") if created else "",
+                Paragraph(str(item.get("event") or ""), body_style),
+                status_labels.get(str(item.get("status") or "success"), str(item.get("status") or "")),
+                f"{item.get('object_type') or ''}/{item.get('object_id') or ''}".strip("/"),
+                Paragraph(str(item.get("detail") or ""), body_style),
+            ])
+        detail = Table(detail_rows or [["", "", "", "", ""]], colWidths=[29 * mm, 31 * mm, 20 * mm, 37 * mm, 43 * mm], repeatRows=1)
+        detail.setStyle(self._report_table_style(header=True))
+        elements.extend([Paragraph("明细", heading_style), detail])
+        doc.build(elements)
+        logger.info(f"审计报表生成成功: {output_path}")
+        return output_path
+
+    def _report_table_style(self, header: bool = False) -> TableStyle:
+        commands = [
+            ("FONTNAME", (0, 0), (-1, -1), self._chinese_font_name),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]
+        if header:
+            commands.extend([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4472C4")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ])
+        else:
+            commands.append(("BACKGROUND", (0, 0), (0, -1), colors.lightgrey))
+        return TableStyle(commands)
+
     def generate_asset_report(
         self,
         project: Project,
         assets: Iterable[MediaAsset],
-        logs: List[ShootingLog],
-        output_path: Optional[str] = None,
+        logs: list[ShootingLog],
+        output_path: str | None = None,
         *,
         total: int = 0,
         progress_callback=None,
@@ -268,7 +359,7 @@ class ReportService:
         self._register_fonts()
 
         if not output_path:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = now_local().strftime("%Y%m%d_%H%M%S")
             output_path = str(config.report_dir / f"素材报告_{timestamp}.pdf")
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -296,7 +387,7 @@ class ReportService:
         rated_count = 0
         asset_count = 0
         rating_dist = {r: 0 for r in RATING_LABELS}
-        scene_stats: Dict[str, int] = {}
+        scene_stats: dict[str, int] = {}
         for a in assets:
             if cancel_check and cancel_check():
                 raise InterruptedError("报告生成已取消")
@@ -320,7 +411,7 @@ class ReportService:
             ["总数据量", self._format_size(total_size)],
             ["拍摄日志数", str(len(logs))],
             ["已评级素材", f"{rated_count} / {asset_count}"],
-            ["报告时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+            ["报告时间", now_local().strftime("%Y-%m-%d %H:%M:%S")],
         ]
         t = Table(stats, colWidths=[40*mm, 120*mm])
         t.setStyle(TableStyle([
@@ -376,7 +467,7 @@ class ReportService:
         """格式化文件大小"""
         return format_size(size_bytes)
 
-    def export_assets_csv(self, assets: List[MediaAsset], output_path: str) -> str:
+    def export_assets_csv(self, assets: list[MediaAsset], output_path: str) -> str:
         """导出素材 CSV；兼容旧接口，内部统一使用可迭代数据源。"""
         return self.export_assets_csv_iter(assets, output_path)
 

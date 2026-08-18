@@ -1,11 +1,10 @@
 """Shooting-log and audit-log persistence operations."""
-from datetime import datetime
 import sqlite3
 import uuid
-from typing import Optional
+from datetime import datetime
 
 from DITWorkstation.Models import OperationStatus, ShootingLog
-from DITWorkstation.Utils import logger
+from DITWorkstation.Utils import logger, now_local
 
 from .base_repository import BaseRepository
 
@@ -38,7 +37,7 @@ class LogRepository(BaseRepository):
             ).fetchall()
         return [self._row_to_shooting(row) for row in rows]
 
-    def get_shooting(self, log_id: str) -> Optional[ShootingLog]:
+    def get_shooting(self, log_id: str) -> ShootingLog | None:
         with self._connection() as conn:
             row = conn.execute("SELECT * FROM shooting_logs WHERE log_id = ?", (log_id,)).fetchone()
         return self._row_to_shooting(row) if row else None
@@ -65,7 +64,7 @@ class LogRepository(BaseRepository):
                 )
                 conn.execute("DELETE FROM shooting_logs WHERE log_id = ?", (log_id,))
                 logger.info(f"删除拍摄日志: {log_id}（已级联清空关联素材的 scene/shot）")
-        except Exception as exc:
+        except sqlite3.Error as exc:
             logger.error(f"删除拍摄日志失败 {log_id}: {exc}")
             raise
 
@@ -98,14 +97,14 @@ class LogRepository(BaseRepository):
                             (log.log_id, asset_id),
                         )
                 logger.info(f"创建日志并关联素材: {log.log_id} - {len(asset_ids)} 个素材")
-        except Exception as exc:
+        except sqlite3.Error as exc:
             logger.error(f"create_log_with_assets 失败: {exc}")
             raise
         return log
 
     @staticmethod
     def record_in_transaction(
-        conn, event: str, detail: str = "", project_id: Optional[str] = None,
+        conn, event: str, detail: str = "", project_id: str | None = None,
         status: str = OperationStatus.SUCCESS.value, object_type: str = "",
         object_id: str = "", recovery_id: str = "",
     ) -> str:
@@ -116,13 +115,13 @@ class LogRepository(BaseRepository):
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 log_id, project_id, event, detail, status, object_type, object_id,
-                recovery_id, datetime.now().isoformat(),
+                recovery_id, now_local().isoformat(),
             ),
         )
         return log_id
 
     def record(
-        self, event: str, detail: str = "", project_id: Optional[str] = None,
+        self, event: str, detail: str = "", project_id: str | None = None,
         status: str = OperationStatus.SUCCESS.value, object_type: str = "",
         object_id: str = "", recovery_id: str = "",
     ) -> bool:
@@ -137,9 +136,9 @@ class LogRepository(BaseRepository):
             return False
 
     def list_recent(
-        self, limit: int = 10, project_id: Optional[str] = None, event: str = "",
-        status: str = "", object_type: str = "", date_from: Optional[datetime] = None,
-        date_to: Optional[datetime] = None,
+        self, limit: int = 10, project_id: str | None = None, event: str = "",
+        status: str = "", object_type: str = "", date_from: datetime | None = None,
+        date_to: datetime | None = None,
     ) -> list[dict]:
         limit = max(1, min(int(limit), 5000))
         clauses, values = [], []

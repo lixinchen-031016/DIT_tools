@@ -1,27 +1,37 @@
 """拍摄日志与项目管理服务 - SQLite持久化"""
+import re
 import sqlite3
 import threading
-import re
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from DITWorkstation.App import config
 from DITWorkstation.Models import (
-    Project, ProjectTemplate, BackupTemplate, ShootingLog, MediaAsset, Workspace,
-    ChecksumAlgorithm, OperationResult, OperationStatus,
+    BackupTemplate,
+    ChecksumAlgorithm,
+    MediaAsset,
+    OperationResult,
+    OperationStatus,
+    Project,
+    ProjectTemplate,
+    ShootingLog,
+    Workspace,
 )
-from DITWorkstation.Utils import logger, normalize_path
-from DITWorkstation.Services.repositories.workspace_repository import WorkspaceRepository
-from DITWorkstation.Services.repositories.template_repository import TemplateRepository
-from DITWorkstation.Services.repositories.project_repository import ProjectRepository
-from DITWorkstation.Services.repositories.log_repository import LogRepository
 from DITWorkstation.Services.repositories.asset_repository import AssetRepository
+from DITWorkstation.Services.repositories.backup_job_repository import (
+    BackupJobRepository,
+)
+from DITWorkstation.Services.repositories.log_repository import LogRepository
+from DITWorkstation.Services.repositories.project_repository import ProjectRepository
 from DITWorkstation.Services.repositories.recycle_repository import RecycleRepository
 from DITWorkstation.Services.repositories.rename_repository import RenameRepository
-from DITWorkstation.Services.repositories.backup_job_repository import BackupJobRepository
 from DITWorkstation.Services.repositories.task_repository import TaskRepository
+from DITWorkstation.Services.repositories.template_repository import TemplateRepository
+from DITWorkstation.Services.repositories.workspace_repository import (
+    WorkspaceRepository,
+)
+from DITWorkstation.Utils import logger, now_local
 
 
 def _chunked(seq, size):
@@ -34,7 +44,7 @@ class DatabaseService:
     """数据库服务 - SQLite持久化"""
 
     @staticmethod
-    def _parse_datetime(value) -> Optional[datetime]:
+    def _parse_datetime(value) -> datetime | None:
         """解析历史时间字段；损坏的旧值不应阻断列表或报告读取。"""
         if isinstance(value, datetime):
             return value
@@ -45,7 +55,7 @@ class DatabaseService:
         except (TypeError, ValueError):
             return None
 
-    def __init__(self, db_path: Optional[Path] = None):
+    def __init__(self, db_path: Path | None = None):
         self.db_path = db_path or config.db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         # 线程级连接池：每个线程复用同一连接，避免高频操作反复建连 + 重复设置 PRAGMA
@@ -352,7 +362,7 @@ class DatabaseService:
                 pass
 
     # 当前数据库 schema 版本：每次结构变更 +1，并在 _migrate_db 中补充对应迁移
-    _DB_VERSION = 7
+    _DB_VERSION = 8
 
     def _migrate_db(self):
         """按 PRAGMA user_version 分版本迁移数据库。
@@ -395,6 +405,10 @@ class DatabaseService:
                 self._migrate_v7(conn)
                 self._set_user_version(conn, 7)
                 logger.info("数据库迁移完成: v7")
+            if version < 8:
+                self._migrate_v8(conn)
+                self._set_user_version(conn, 8)
+                logger.info("数据库迁移完成: v8")
 
             # FTS 创建必须晚于迁移前备份，否则备份会混入新建索引表。
             # v3 数据库若因中断或旧版本缺失索引，也在这里补建并重建一次。
@@ -407,7 +421,7 @@ class DatabaseService:
             self._recover_interrupted_backup_jobs(conn)
             # 回收站不依赖用户主动打开窗口才清理，避免长期运行时过期快照积累。
             expired = conn.execute(
-                "DELETE FROM recycle_bin WHERE expires_at <= ?", (datetime.now().isoformat(),)
+                "DELETE FROM recycle_bin WHERE expires_at <= ?", (now_local().isoformat(),)
             ).rowcount
             if expired:
                 logger.info(f"启动时清理过期回收站快照: {expired} 项")
@@ -471,7 +485,7 @@ class DatabaseService:
                         {"path": t.get("path", ""), "files": t.get("failed_files", [])}
                         for t in targets if t.get("failed_files")
                     ], ensure_ascii=False),
-                    datetime.now().isoformat(),
+                    now_local().isoformat(),
                     row["job_id"],
                 ),
             )
@@ -537,7 +551,7 @@ class DatabaseService:
         # 预置默认项目模板（仅当模板表为空时）
         count = conn.execute("SELECT COUNT(*) FROM project_templates").fetchone()[0]
         if count == 0:
-            now = datetime.now().isoformat()
+            now = now_local().isoformat()
             conn.execute(
                 "INSERT INTO project_templates "
                 "(template_id, name, description, base_path, notes, created_at, updated_at) "
@@ -556,7 +570,7 @@ class DatabaseService:
 
     def _migrate_v3(self, conn):
         """v3：预留素材全文索引版本号。索引在迁移备份后统一创建。"""
-        return None
+        return
 
     def _migrate_v4(self, conn):
         """v4：增加可复用的备份方案模板表。"""
@@ -651,6 +665,14 @@ class DatabaseService:
         )
 
     @staticmethod
+    def _migrate_v8(conn):
+        """v8：按拍摄日期聚合时间线的查询索引。"""
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_assets_taken "
+            "ON media_assets(date_taken, project_id)"
+        )
+
+    @staticmethod
     def _fts_table_exists(conn) -> bool:
         return conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -672,7 +694,7 @@ class DatabaseService:
             return False
 
     @staticmethod
-    def _fts_query(keyword: str) -> Optional[str]:
+    def _fts_query(keyword: str) -> str | None:
         """将简单关键词转换为 FTS5 前缀查询；复杂/非 ASCII 输入走 LIKE。"""
         if not keyword or not re.fullmatch(r"[A-Za-z0-9_ .-]+", keyword):
             return None
@@ -727,7 +749,7 @@ class DatabaseService:
             "SELECT workspace_id FROM workspaces WHERE workspace_id = 'default'"
         ).fetchone()
         if not existing_default:
-            now = datetime.now().isoformat()
+            now = now_local().isoformat()
             conn.execute(
                 "INSERT INTO workspaces (workspace_id, name, path, description, created_at, updated_at) "
                 "VALUES ('default', '默认工作区', '', '由旧项目自动归集生成', ?, ?)",
@@ -764,11 +786,11 @@ class DatabaseService:
         """创建工作区。"""
         return self.workspaces.create(name, path, description)
 
-    def get_workspaces(self) -> List[Workspace]:
+    def get_workspaces(self) -> list[Workspace]:
         """获取所有工作区，按创建时间倒序"""
         return self.workspaces.list_all()
 
-    def get_workspace(self, workspace_id: str) -> Optional[Workspace]:
+    def get_workspace(self, workspace_id: str) -> Workspace | None:
         """获取单个工作区"""
         return self.workspaces.get(workspace_id)
 
@@ -784,7 +806,7 @@ class DatabaseService:
         """更新工作区（支持 name / path / description）"""
         return self.workspaces.update(workspace_id, **kwargs)
 
-    def delete_workspace(self, workspace_id: str, reassign_to: Optional[str] = None) -> bool:
+    def delete_workspace(self, workspace_id: str, reassign_to: str | None = None) -> bool:
         """删除工作区。
 
         Args:
@@ -804,7 +826,7 @@ class DatabaseService:
         name: str,
         description: str = "",
         base_path: str = "",
-        workspace_id: Optional[str] = None
+        workspace_id: str | None = None
     ) -> Project:
         """创建项目。
 
@@ -813,7 +835,7 @@ class DatabaseService:
         """
         return self.projects.create(name, description, base_path, workspace_id)
 
-    def get_projects(self, workspace_id: Optional[str] = None) -> List[Project]:
+    def get_projects(self, workspace_id: str | None = None) -> list[Project]:
         """获取项目列表。
 
         Args:
@@ -821,7 +843,7 @@ class DatabaseService:
         """
         return self.projects.list_all(workspace_id)
 
-    def get_project(self, project_id: str) -> Optional[Project]:
+    def get_project(self, project_id: str) -> Project | None:
         """获取单个项目"""
         return self.projects.get(project_id)
 
@@ -850,11 +872,11 @@ class DatabaseService:
         """创建项目模板。"""
         return self.templates.create_project(name, description, base_path, notes)
 
-    def get_project_templates(self) -> List[ProjectTemplate]:
+    def get_project_templates(self) -> list[ProjectTemplate]:
         """获取所有项目模板，按创建时间倒序。"""
         return self.templates.list_projects()
 
-    def get_project_template(self, template_id: str) -> Optional[ProjectTemplate]:
+    def get_project_template(self, template_id: str) -> ProjectTemplate | None:
         """获取单个项目模板。"""
         return self.templates.get_project(template_id)
 
@@ -871,7 +893,7 @@ class DatabaseService:
     def create_backup_template(
         self,
         name: str,
-        target_paths: List[str],
+        target_paths: list[str],
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
         verify_after_copy: bool = True,
         description: str = "",
@@ -881,11 +903,11 @@ class DatabaseService:
             name, target_paths, algorithm, verify_after_copy, description
         )
 
-    def get_backup_templates(self) -> List[BackupTemplate]:
+    def get_backup_templates(self) -> list[BackupTemplate]:
         """获取备份方案模板，按创建时间倒序。"""
         return self.templates.list_backups()
 
-    def get_backup_template(self, template_id: str) -> Optional[BackupTemplate]:
+    def get_backup_template(self, template_id: str) -> BackupTemplate | None:
         return self.templates.get_backup(template_id)
 
     def update_backup_template(self, template_id: str, **kwargs) -> bool:
@@ -901,11 +923,11 @@ class DatabaseService:
         """创建拍摄日志"""
         return self.logs.create_shooting(log)
 
-    def get_shooting_logs(self, project_id: str) -> List[ShootingLog]:
+    def get_shooting_logs(self, project_id: str) -> list[ShootingLog]:
         """获取项目的拍摄日志"""
         return self.logs.list_shooting(project_id)
 
-    def get_shooting_log(self, log_id: str) -> Optional[ShootingLog]:
+    def get_shooting_log(self, log_id: str) -> ShootingLog | None:
         """获取单个拍摄日志"""
         return self.logs.get_shooting(log_id)
 
@@ -926,7 +948,7 @@ class DatabaseService:
     def create_log_with_assets(
         self,
         log: ShootingLog,
-        asset_ids: List[str],
+        asset_ids: list[str],
         sync_scene_shot: bool = False
     ) -> ShootingLog:
         """创建拍摄日志并原子地关联多个素材。
@@ -950,13 +972,13 @@ class DatabaseService:
         """添加素材资产"""
         return self.assets.create(asset)
 
-    def add_media_assets_batch(self, assets: List[MediaAsset]) -> int:
+    def add_media_assets_batch(self, assets: list[MediaAsset]) -> int:
         """批量添加素材资产"""
         return self.assets.create_batch(assets)
 
     def get_media_assets(
-        self, project_id: str, limit: Optional[int] = None, offset: Optional[int] = None,
-    ) -> List[MediaAsset]:
+        self, project_id: str, limit: int | None = None, offset: int | None = None,
+    ) -> list[MediaAsset]:
         """兼容旧调用方的素材读取接口。
 
         新代码必须使用 ``iter_project_assets``、``get_project_asset_page`` 或
@@ -973,17 +995,17 @@ class DatabaseService:
 
     def get_project_asset_page(
         self, project_id: str, page_size: int = 500,
-        cursor: Optional[tuple[str, str]] = None,
-    ) -> tuple[List[MediaAsset], Optional[tuple[str, str]]]:
+        cursor: tuple[str, str] | None = None,
+    ) -> tuple[list[MediaAsset], tuple[str, str] | None]:
         """基于 ``date_imported, asset_id`` 的 keyset 分页读取项目素材。"""
         return self.assets.get_page(project_id, page_size, cursor)
 
-    def get_media_asset(self, asset_id: str) -> Optional[MediaAsset]:
+    def get_media_asset(self, asset_id: str) -> MediaAsset | None:
         """获取单个素材资产"""
         return self.assets.get(asset_id)
 
     def _record_operation_in_transaction(
-        self, conn, event: str, detail: str = "", project_id: Optional[str] = None,
+        self, conn, event: str, detail: str = "", project_id: str | None = None,
         status: str = OperationStatus.SUCCESS.value, object_type: str = "",
         object_id: str = "", recovery_id: str = "",
     ) -> str:
@@ -992,7 +1014,7 @@ class DatabaseService:
         )
 
     def _store_recycle_snapshot(
-        self, conn, entity_type: str, entity_id: str, project_id: Optional[str], snapshot: dict,
+        self, conn, entity_type: str, entity_id: str, project_id: str | None, snapshot: dict,
         retention_days: int = 30,
     ) -> str:
         return self.recycle.store_snapshot(conn, entity_type, entity_id, project_id, snapshot, retention_days)
@@ -1000,7 +1022,7 @@ class DatabaseService:
     def _asset_snapshot(self, conn, row: sqlite3.Row) -> dict:
         return self.assets.snapshot(conn, row)
 
-    def _delete_asset_rows(self, conn, asset_ids: List[str]) -> None:
+    def _delete_asset_rows(self, conn, asset_ids: list[str]) -> None:
         self.assets.delete_rows(conn, asset_ids)
 
     def update_media_asset_result(self, asset_id: str, **kwargs) -> OperationResult:
@@ -1014,17 +1036,17 @@ class DatabaseService:
     def delete_media_asset_result(self, asset_id: str, retention_days: int = 30) -> OperationResult:
         return self.delete_media_assets_result([asset_id], retention_days=retention_days)
 
-    def delete_media_assets_result(self, asset_ids: List[str], retention_days: int = 30) -> OperationResult:
+    def delete_media_assets_result(self, asset_ids: list[str], retention_days: int = 30) -> OperationResult:
         """软删除素材记录，保留标签和完整元数据快照。"""
         return self.assets.delete_result(asset_ids, retention_days)
 
     def delete_media_asset(self, asset_id: str) -> bool:
         return bool(self.delete_media_asset_result(asset_id))
 
-    def delete_media_assets(self, asset_ids: List[str]) -> int:
+    def delete_media_assets(self, asset_ids: list[str]) -> int:
         return self.delete_media_assets_result(asset_ids).affected_count
 
-    def relink_media_assets(self, project_id: str, updates: List[tuple[str, str, str, int]]) -> OperationResult:
+    def relink_media_assets(self, project_id: str, updates: list[tuple[str, str, str, int]]) -> OperationResult:
         """原子回写预览中确认的素材路径，并记录重定位审计。"""
         return self.assets.relink_result(project_id, updates)
 
@@ -1036,7 +1058,7 @@ class DatabaseService:
     def _restore_asset_snapshot(self, conn, snapshot: dict) -> None:
         self.recycle.restore_asset_snapshot(conn, snapshot)
 
-    def get_recycle_bin_items(self, project_id: Optional[str] = None) -> List[dict]:
+    def get_recycle_bin_items(self, project_id: str | None = None) -> list[dict]:
         """返回未过期回收站项，供恢复入口和健康检查使用。"""
         return self.recycle.list_items(project_id)
 
@@ -1052,12 +1074,12 @@ class DatabaseService:
         """永久清空回收站快照；不会触碰任何源媒体文件。"""
         return self.recycle.empty()
 
-    def cleanup_expired_recycle_bin(self, now: Optional[datetime] = None) -> OperationResult:
+    def cleanup_expired_recycle_bin(self, now: datetime | None = None) -> OperationResult:
         """永久清理超过保留期的快照；不会触碰任何源媒体文件。"""
         return self.recycle.cleanup_expired(now)
 
     def create_rename_history(
-        self, mappings: List[tuple[str, str]], project_id: Optional[str] = None,
+        self, mappings: list[tuple[str, str]], project_id: str | None = None,
     ) -> OperationResult:
         """持久化一次成功的文件重命名映射，供安全回退。"""
         return self.renames.create(mappings, project_id)
@@ -1068,7 +1090,7 @@ class DatabaseService:
     def mark_rename_history_reverted(self, rename_id: str) -> OperationResult:
         return self.renames.mark_reverted(rename_id)
 
-    def get_missing_file_asset_ids(self, project_id: str) -> List[str]:
+    def get_missing_file_asset_ids(self, project_id: str) -> list[str]:
         """返回当前项目中文件已丢失（路径为空或磁盘上不存在）的素材 asset_id 列表。
 
         实时扫描磁盘，是「文件存在性验证」的事实来源，供素材信息列表的
@@ -1086,7 +1108,7 @@ class DatabaseService:
         """按文件路径查重"""
         return self.assets.exists_by_path(project_id, file_path)
 
-    def existing_asset_paths(self, project_id: str, file_paths: List[str]) -> set:
+    def existing_asset_paths(self, project_id: str, file_paths: list[str]) -> set:
         """批量查重：返回 file_paths 中已存在于该项目的规范化路径集合。
 
         一次 IN 查询取回全部已存在路径，替代逐文件 SELECT 的 N+1 查询，
@@ -1101,7 +1123,7 @@ class DatabaseService:
         """
         return self.assets.existing_paths(project_id, file_paths)
 
-    def get_asset_log_id_by_path(self, file_path: str) -> Optional[str]:
+    def get_asset_log_id_by_path(self, file_path: str) -> str | None:
         """按文件路径全局查询素材关联的 log_id（不限 project_id）。
 
         供 RAW 提取等场景使用：JPG 可能在任意项目，按路径反查其 log_id
@@ -1116,7 +1138,7 @@ class DatabaseService:
         """按校验和查重"""
         return self.assets.exists_by_checksum(project_id, checksum_value)
 
-    def find_duplicate_assets(self) -> List[Dict]:
+    def find_duplicate_assets(self) -> list[dict]:
         """跨项目按校验和聚合，找出重复入库的素材。
 
         同一文件被导入多个项目、或同卡多次导入时会留下相同 checksum_value
@@ -1129,12 +1151,12 @@ class DatabaseService:
         """
         return self.assets.find_duplicates()
 
-    def update_asset_path(self, asset_id: str, new_path: str, new_name: str = None) -> bool:
+    def update_asset_path(self, asset_id: str, new_path: str, new_name: str | None = None) -> bool:
         """更新素材路径"""
         return self.assets.update_path(asset_id, new_path, new_name)
 
     def update_asset_path_by_old_path(
-        self, old_path: str, new_path: str, new_name: Optional[str] = None
+        self, old_path: str, new_path: str, new_name: str | None = None
     ) -> bool:
         """按旧文件路径查找 asset 并更新为新路径/文件名（用于重命名后同步 DB）。
 
@@ -1148,22 +1170,30 @@ class DatabaseService:
 
     def _asset_filter_clause(
         self,
-        project_id: Optional[str] = None,
-        scene: Optional[str] = None,
-        shot: Optional[str] = None,
-        file_type: Optional[str] = None,
-        date_from: Optional[str] = None,
-        date_to: Optional[str] = None,
-        keyword: Optional[str] = None,
-        log_id: Optional[str] = None,
-        rating: Optional[int] = None,
-        tag: Optional[str] = None,
+        project_id: str | None = None,
+        scene: str | None = None,
+        shot: str | None = None,
+        file_type: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        keyword: str | None = None,
+        log_id: str | None = None,
+        rating: int | None = None,
+        tag: str | None = None,
+        taken_from: str | None = None,
+        taken_to: str | None = None,
     ) -> tuple:
         """构造素材筛选子句 (WHERE_SQL, params)，供 search_assets / count_assets 复用。"""
         return self.assets._filter_clause(
             project_id, scene, shot, file_type, date_from, date_to, keyword,
-            log_id, rating, tag,
+            log_id, rating, tag, taken_from, taken_to,
         )
+
+    def get_capture_timeline(
+        self, project_id: str | None = None, *, granularity: str = "day", limit: int = 366,
+    ) -> list[dict]:
+        """返回按拍摄日期聚合的素材时间线。"""
+        return self.assets.capture_timeline(project_id, granularity=granularity, limit=limit)
 
     def _search_sql(self, **filters):
         """构造带 FTS 条件的素材查询 SQL 与参数。"""
@@ -1171,50 +1201,55 @@ class DatabaseService:
 
     def iter_search_assets(
         self,
-        project_id: Optional[str] = None,
-        scene: Optional[str] = None,
-        shot: Optional[str] = None,
-        file_type: Optional[str] = None,
-        date_from: Optional[str] = None,
-        date_to: Optional[str] = None,
-        keyword: Optional[str] = None,
-        log_id: Optional[str] = None,
-        rating: Optional[int] = None,
-        tag: Optional[str] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
+        project_id: str | None = None,
+        scene: str | None = None,
+        shot: str | None = None,
+        file_type: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        keyword: str | None = None,
+        log_id: str | None = None,
+        rating: int | None = None,
+        tag: str | None = None,
+        taken_from: str | None = None,
+        taken_to: str | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
         batch_size: int = 500,
-        cursor: Optional[tuple[str, str]] = None,
+        cursor: tuple[str, str] | None = None,
     ):
         """按游标批量读取素材，避免导出/批处理一次性加载全部记录。"""
         yield from self.assets.iter_search(
             project_id=project_id, scene=scene, shot=shot, file_type=file_type,
             date_from=date_from, date_to=date_to, keyword=keyword, log_id=log_id,
-            rating=rating, tag=tag, limit=limit, offset=offset,
+            rating=rating, tag=tag, taken_from=taken_from, taken_to=taken_to,
+            limit=limit, offset=offset,
             batch_size=batch_size, cursor=cursor,
         )
 
     def get_search_asset_page(
-        self, *, page_size: int = 500, cursor: Optional[tuple[str, str]] = None, **filters,
-    ) -> tuple[List[MediaAsset], Optional[tuple[str, str]]]:
+        self, *, page_size: int = 500, cursor: tuple[str, str] | None = None, **filters,
+    ) -> tuple[list[MediaAsset], tuple[str, str] | None]:
         """返回一个 keyset 页面和下一页游标，避免深页 OFFSET 扫描。"""
         return self.assets.get_search_page(page_size=page_size, cursor=cursor, **filters)
 
     def search_assets(
         self,
-        project_id: Optional[str] = None,
-        scene: Optional[str] = None,
-        shot: Optional[str] = None,
-        file_type: Optional[str] = None,
-        date_from: Optional[str] = None,
-        date_to: Optional[str] = None,
-        keyword: Optional[str] = None,
-        log_id: Optional[str] = None,
-        rating: Optional[int] = None,
-        tag: Optional[str] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None
-    ) -> List[MediaAsset]:
+        project_id: str | None = None,
+        scene: str | None = None,
+        shot: str | None = None,
+        file_type: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        keyword: str | None = None,
+        log_id: str | None = None,
+        rating: int | None = None,
+        tag: str | None = None,
+        taken_from: str | None = None,
+        taken_to: str | None = None,
+        limit: int | None = None,
+        offset: int | None = None
+    ) -> list[MediaAsset]:
         """搜索素材（支持分页）。
 
         Args:
@@ -1226,38 +1261,41 @@ class DatabaseService:
         return self.assets.search(
             project_id=project_id, scene=scene, shot=shot, file_type=file_type,
             date_from=date_from, date_to=date_to, keyword=keyword,
-            log_id=log_id, rating=rating, tag=tag, limit=limit, offset=offset,
+            log_id=log_id, rating=rating, tag=tag, taken_from=taken_from, taken_to=taken_to,
+            limit=limit, offset=offset,
         )
 
     def count_assets(
         self,
-        project_id: Optional[str] = None,
-        scene: Optional[str] = None,
-        shot: Optional[str] = None,
-        file_type: Optional[str] = None,
-        date_from: Optional[str] = None,
-        date_to: Optional[str] = None,
-        keyword: Optional[str] = None,
-        log_id: Optional[str] = None,
-        rating: Optional[int] = None,
-        tag: Optional[str] = None,
+        project_id: str | None = None,
+        scene: str | None = None,
+        shot: str | None = None,
+        file_type: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        keyword: str | None = None,
+        log_id: str | None = None,
+        rating: int | None = None,
+        tag: str | None = None,
+        taken_from: str | None = None,
+        taken_to: str | None = None,
     ) -> int:
         """统计符合条件的素材总数（与 search_assets 同条件）。"""
         return self.assets.count(
             project_id=project_id, scene=scene, shot=shot, file_type=file_type,
             date_from=date_from, date_to=date_to, keyword=keyword,
-            log_id=log_id, rating=rating, tag=tag,
+            log_id=log_id, rating=rating, tag=tag, taken_from=taken_from, taken_to=taken_to,
         )
 
-    def get_all_tags(self) -> List[str]:
+    def get_all_tags(self) -> list[str]:
         """返回全部素材标签（去重、按使用次数降序），供检索自动补全。"""
         return self.assets.all_tags()
 
-    def get_assets_by_log_id(self, log_id: str) -> List[MediaAsset]:
+    def get_assets_by_log_id(self, log_id: str) -> list[MediaAsset]:
         """按拍摄日志ID获取关联的素材"""
         return self.assets.by_log_id(log_id)
 
-    def update_media_asset_log_id(self, asset_id: str, log_id: Optional[str]) -> bool:
+    def update_media_asset_log_id(self, asset_id: str, log_id: str | None) -> bool:
         """更新素材关联的拍摄日志。
 
         - log_id=None 表示解除关联，同时清空 scene/shot，避免遗留"无主"字段
@@ -1317,7 +1355,7 @@ class DatabaseService:
         self,
         event: str,
         detail: str = "",
-        project_id: Optional[str] = None,
+        project_id: str | None = None,
         status: str = OperationStatus.SUCCESS.value,
         object_type: str = "",
         object_id: str = "",
@@ -1340,13 +1378,13 @@ class DatabaseService:
     def get_recent_operations(
         self,
         limit: int = 10,
-        project_id: Optional[str] = None,
+        project_id: str | None = None,
         event: str = "",
         status: str = "",
         object_type: str = "",
-        date_from: Optional[datetime] = None,
-        date_to: Optional[datetime] = None,
-    ) -> List[dict]:
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ) -> list[dict]:
         """按项目、事件、结果、对象与时间筛选审计日志（按时间倒序）。"""
         return self.logs.list_recent(
             limit, project_id, event, status, object_type, date_from, date_to,
@@ -1354,10 +1392,10 @@ class DatabaseService:
 
     def cleanup_history(
         self,
-        now: Optional[datetime] = None,
+        now: datetime | None = None,
         *,
-        operation_log_retention_days: Optional[int] = None,
-        task_history_limit_per_project: Optional[int] = None,
+        operation_log_retention_days: int | None = None,
+        task_history_limit_per_project: int | None = None,
     ) -> dict[str, int]:
         """按保留策略清理审计日志和任务历史。
 
@@ -1377,7 +1415,7 @@ class DatabaseService:
         if not isinstance(task_limit, int) or isinstance(task_limit, bool) or task_limit <= 0:
             raise ValueError("task_history_limit_per_project 必须是正整数")
 
-        current_time = now or datetime.now()
+        current_time = now or now_local()
         deleted_logs = self.logs.delete_older_than(
             current_time - timedelta(days=retention_days)
         )
@@ -1391,9 +1429,9 @@ class DatabaseService:
     # ===== 统一任务历史 =====
 
     def create_task_history(
-        self, task_name: str, project_id: Optional[str] = None, *,
-        state: str = "queued", parameters: Optional[dict] = None,
-        recovery_info: Optional[dict] = None,
+        self, task_name: str, project_id: str | None = None, *,
+        state: str = "queued", parameters: dict | None = None,
+        recovery_info: dict | None = None,
     ) -> str:
         """创建可审计的后台任务记录，返回稳定任务 ID。"""
         return self.tasks.create(
@@ -1401,33 +1439,33 @@ class DatabaseService:
         )
 
     def update_task_history(
-        self, task_id: str, state: str, *, output: Optional[dict] = None,
-        error_summary: str = "", recovery_info: Optional[dict] = None,
+        self, task_id: str, state: str, *, output: dict | None = None,
+        error_summary: str = "", recovery_info: dict | None = None,
     ) -> bool:
         """更新任务状态与可恢复上下文；终态自动写入结束时间。"""
         return self.tasks.update(
             task_id, state, output=output, error_summary=error_summary, recovery_info=recovery_info,
         )
 
-    def get_task_history(self, project_id: Optional[str] = None, limit: int = 100) -> List[dict]:
+    def get_task_history(self, project_id: str | None = None, limit: int = 100) -> list[dict]:
         """读取最近任务，供健康页、审计与恢复入口使用。"""
         return self.tasks.list_all(project_id, limit)
 
     # ===== 项目健康容量快照 =====
 
     def record_storage_health_snapshot(
-        self, project_id: Optional[str], target_path: str, total_bytes: int, free_bytes: int,
+        self, project_id: str | None, target_path: str, total_bytes: int, free_bytes: int,
     ) -> bool:
         """记录可达备份目标的容量，用于健康页展示近期趋势。"""
         return self.tasks.record_storage_health(project_id, target_path, total_bytes, free_bytes)
 
-    def get_storage_health_snapshots(self, project_id: Optional[str], limit: int = 60) -> List[dict]:
+    def get_storage_health_snapshots(self, project_id: str | None, limit: int = 60) -> list[dict]:
         """读取项目近期的目标容量快照，按采集时间正序返回。"""
         return self.tasks.list_storage_health(project_id, limit)
 
     # ===== 备份作业持久化 =====
 
-    def save_backup_job(self, job, project_id: Optional[str] = None) -> bool:
+    def save_backup_job(self, job, project_id: str | None = None) -> bool:
         """持久化备份作业（含 targets 列表的 JSON 序列化）。
 
         Args:
@@ -1438,11 +1476,11 @@ class DatabaseService:
         """
         return self.backup_jobs.save(job, project_id)
 
-    def get_backup_job(self, job_id: str) -> Optional[dict]:
+    def get_backup_job(self, job_id: str) -> dict | None:
         """获取单个备份作业的原始 dict；不存在返回 None。"""
         return self.backup_jobs.get(job_id)
 
-    def get_backup_jobs(self, project_id: Optional[str] = None) -> List[dict]:
+    def get_backup_jobs(self, project_id: str | None = None) -> list[dict]:
         """获取备份作业列表（原始 dict 形式，由调用方解析）。
 
         Args:
@@ -1452,9 +1490,9 @@ class DatabaseService:
 
     def add_backup_location_to_assets(
         self,
-        file_paths: List[str],
+        file_paths: list[str],
         target_path: str,
-        project_id: Optional[str] = None
+        project_id: str | None = None
     ) -> int:
         """批量把 target_path 追加到匹配 file_path 的 asset 的 backup_locations。
 

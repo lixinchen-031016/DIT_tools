@@ -16,7 +16,6 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
 from PySide6.QtGui import QPixmap
@@ -50,7 +49,7 @@ class ThumbnailService(QObject):
             )
 
     def get_thumbnail(self, cache_key: str, file_path: str,
-                      asset_type: str, size: int = SIZE_SMALL) -> Optional[QPixmap]:
+                      asset_type: str, size: int = SIZE_SMALL) -> QPixmap | None:
         """同步取缓存；未命中返回 None 并异步生成。
 
         Args:
@@ -107,7 +106,7 @@ class ThumbnailService(QObject):
             logger.info(f"缩略图缓存已清理: {removed} 个文件")
         return removed
 
-    def _generate(self, file_path: str, asset_type: str, size: int) -> Optional[bytes]:
+    def _generate(self, file_path: str, asset_type: str, size: int) -> bytes | None:
         """实际生成 PNG bytes。失败返回 None（调用方显示占位图）。"""
         p = Path(file_path)
         if not p.exists():
@@ -122,7 +121,7 @@ class ThumbnailService(QObject):
             logger.debug(f"缩略图生成失败 {file_path}: {e}")
         return None
 
-    def _gen_image(self, file_path: str, size: int) -> Optional[bytes]:
+    def _gen_image(self, file_path: str, size: int) -> bytes | None:
         """生成图片/RAW 缩略图（PNG bytes）。
 
         回退链：
@@ -162,7 +161,7 @@ class ThumbnailService(QObject):
         return buf.getvalue()
 
     @staticmethod
-    def _extract_embedded_preview(file_path: str) -> Optional[bytes]:
+    def _extract_embedded_preview(file_path: str) -> bytes | None:
         """从 EXIF 提取相机内嵌的 JPEG/TIFF 预览字节（无额外依赖）。
 
         exifread.process_file 在 extract_thumbnail 开启（默认）时会解析
@@ -187,7 +186,7 @@ class ThumbnailService(QObject):
         return None
 
     @staticmethod
-    def _decode_rawpy(file_path: str, size: int) -> Optional[bytes]:
+    def _decode_rawpy(file_path: str, size: int) -> bytes | None:
         """用 rawpy（libraw）全量解码 RAW 为缩略图。
 
         rawpy 是正式发布依赖；ImportError 防御仅用于开发环境或损坏安装。
@@ -205,7 +204,7 @@ class ThumbnailService(QObject):
             logger.debug(f"rawpy 解码失败 {file_path}: {e}")
             return None
 
-    def _gen_video(self, file_path: str, size: int) -> Optional[bytes]:
+    def _gen_video(self, file_path: str, size: int) -> bytes | None:
         """生成视频缩略图（PNG bytes）。
 
         回退链（全部失败返回 None，UI 显示占位图）：
@@ -224,7 +223,7 @@ class ThumbnailService(QObject):
             return frame
         return None
 
-    def _ffmpeg_frame(self, file_path: str, size: int) -> Optional[bytes]:
+    def _ffmpeg_frame(self, file_path: str, size: int) -> bytes | None:
         """用 ffmpeg 抽视频第 1 秒帧并缩放（PNG bytes）。"""
         if not self._ffmpeg_available:
             return None
@@ -242,7 +241,7 @@ class ThumbnailService(QObject):
         return None
 
     @staticmethod
-    def _qlmanage_frame(file_path: str, size: int) -> Optional[bytes]:
+    def _qlmanage_frame(file_path: str, size: int) -> bytes | None:
         """用 macOS 系统 QuickLook 生成视频缩略图（qlmanage，无需安装 ffmpeg）。
 
         qlmanage 输出与源文件同名（<basename>.png）到指定目录，
@@ -271,7 +270,7 @@ class ThumbnailService(QObject):
             shutil.rmtree(out_dir, ignore_errors=True)
 
     @staticmethod
-    def _av_frame(file_path: str, size: int) -> Optional[bytes]:
+    def _av_frame(file_path: str, size: int) -> bytes | None:
         """用 PyAV（正式依赖 av）解码视频首帧为缩略图。"""
         try:
             import av

@@ -1,17 +1,35 @@
 """报告生成页面"""
+from PySide6.QtCore import Slot
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QGroupBox, QComboBox, QMessageBox,
-    QTextEdit, QLineEdit, QFormLayout
+    QComboBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
-from PySide6.QtCore import Slot, Qt
 
-from DITWorkstation.Utils import get_db_service, get_report_service, safe_slot, pick_save_file
+from DITWorkstation.Utils import (
+    get_db_service,
+    get_report_service,
+    pick_save_file,
+    safe_slot,
+)
 from DITWorkstation.ViewModels import TaskViewModel
+from DITWorkstation.Views.Styles.theme import (
+    COLOR,
+    FONT_SIZE,
+    RADIUS,
+    SUBTITLE_QSS,
+    TITLE_QSS,
+)
 from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
 from DITWorkstation.Views.Widgets.error_dialog import show_error
 from DITWorkstation.Views.Widgets.status_panel import StatusPanel
-from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, MONO_FONT_QSS
 
 
 class ReportView(RefreshOnShowView):

@@ -3,6 +3,7 @@ import csv
 import os
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -154,4 +155,25 @@ def test_generate_report_falls_back_to_builtin_cjk_font(tmp_dir, monkeypatch):
     output = tmp_dir / "fallback-font.pdf"
     service.generate_asset_report(Project(project_id="p1", name="中文项目"), [], [], str(output))
     assert service._chinese_font_name == "STSong-Light"
+    assert output.exists() and output.stat().st_size > 0
+
+
+def test_generate_audit_report_contains_summary_and_details(tmp_dir):
+    output = tmp_dir / "audit.pdf"
+    operations = [
+        {
+            "created_at": datetime(2026, 8, 18, 10, 0), "event": "导入素材",
+            "status": "success", "object_type": "asset", "object_id": "a1",
+            "detail": "导入 1 个",
+        },
+        {
+            "created_at": datetime(2026, 8, 18, 11, 0), "event": "数据备份",
+            "status": "error", "object_type": "backup", "object_id": "b1",
+            "detail": "目标不可用",
+        },
+    ]
+
+    result = ReportService().generate_audit_report(operations, str(output))
+
+    assert result == str(output)
     assert output.exists() and output.stat().st_size > 0

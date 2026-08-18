@@ -6,21 +6,30 @@
 项目选择统一使用 QComboBox（下拉框），替代旧版 QListWidget（黑底大框），
 在 macOS/Windows 上均更紧凑易用。
 """
-from typing import Optional
 
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QComboBox, QInputDialog, QMessageBox
-)
 from PySide6.QtCore import Signal, Slot
-
-from DITWorkstation.App.session_context import (
-    get_data_bus, get_current_workspace_id, get_current_project_id,
-    set_current_workspace, set_current_project
+from PySide6.QtWidgets import (
+    QComboBox,
+    QGridLayout,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
+
 from DITWorkstation.App.feature_flags import is_enabled
-from DITWorkstation.Models import Workspace, Project
-from DITWorkstation.Utils import get_db_service, safe_slot, logger
+from DITWorkstation.App.session_context import (
+    get_current_project_id,
+    get_current_workspace_id,
+    get_data_bus,
+    set_current_project,
+    set_current_workspace,
+)
+from DITWorkstation.Models import Project, Workspace
+from DITWorkstation.Utils import get_db_service, logger, safe_slot
 from DITWorkstation.Views.Widgets.workspace_dialog import WorkspaceDialog
 
 
@@ -54,7 +63,7 @@ class WorkspaceProjectSelector(QWidget):
                  show_edit_workspace: bool = False,
                  show_new_project: bool = True,
                  show_delete_project: bool = False,
-                 show_workspace: Optional[bool] = None,
+                 show_workspace: bool | None = None,
                  none_label: str = "（未选择项目）",
                  broadcast_none: bool = True,
                  buttons_below: bool = False,
@@ -532,7 +541,7 @@ class WorkspaceProjectSelector(QWidget):
         set_current_project(project.project_id)
         get_data_bus().emit_data_changed("projects_changed")
 
-    def _resolve_project_workspace(self) -> Optional[str]:
+    def _resolve_project_workspace(self) -> str | None:
         """确定新建项目应归属的工作区 ID；无法确定时返回 None。
 
         优先当前下拉选中项；停在「全部工作区」时：
@@ -589,11 +598,11 @@ class WorkspaceProjectSelector(QWidget):
         get_data_bus().emit_data_changed("projects_changed")
 
     # ===== 公开查询方法 =====
-    def get_current_workspace_id(self) -> Optional[str]:
+    def get_current_workspace_id(self) -> str | None:
         """返回当前选中工作区 ID（无选中返回 None）"""
         return self.workspace_combo.currentData()
 
-    def get_current_workspace(self) -> Optional[Workspace]:
+    def get_current_workspace(self) -> Workspace | None:
         """返回当前选中工作区对象（无选中返回 None）"""
         ws_id = self.workspace_combo.currentData()
         if not ws_id:
@@ -603,11 +612,11 @@ class WorkspaceProjectSelector(QWidget):
         except Exception:
             return None
 
-    def get_current_project_id(self) -> Optional[str]:
+    def get_current_project_id(self) -> str | None:
         """返回当前选中项目 ID（无选中返回 None）"""
         return self.project_combo.currentData()
 
-    def get_current_project(self) -> Optional[Project]:
+    def get_current_project(self) -> Project | None:
         """返回当前选中项目对象（无选中返回 None）"""
         pid = self.get_current_project_id()
         if not pid:

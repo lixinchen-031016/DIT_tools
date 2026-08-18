@@ -1,37 +1,60 @@
 """媒体导入页面"""
 import hashlib
-from pathlib import Path
-from typing import Optional
 from datetime import datetime
+from pathlib import Path
 
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QProgressBar, QGroupBox,
-    QTextEdit, QCheckBox, QTableWidget,
-    QTableWidgetItem, QHeaderView, QMessageBox,
-    QComboBox, QDateTimeEdit, QMenu, QApplication, QFileDialog
-)
-from PySide6.QtCore import Qt, Slot, QDateTime, Signal
+from PySide6.QtCore import QDateTime, Qt, Signal, Slot
 from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDateTimeEdit,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
-from DITWorkstation.App.navigation import get_nav_index
 from DITWorkstation.App.feature_flags import is_enabled
+from DITWorkstation.App.navigation import get_nav_index
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import Project
 from DITWorkstation.Services.media_import_service import MediaImportService
 from DITWorkstation.Services.thumbnail_service import SIZE_LARGE
 from DITWorkstation.Utils import (
-    format_size, get_db_service, pick_directory,
-    find_overwrite_conflicts, open_in_file_manager, is_writable_directory,
-    get_thumbnail_service, logger,
+    find_overwrite_conflicts,
+    format_size,
+    get_db_service,
+    get_thumbnail_service,
+    is_writable_directory,
+    logger,
+    open_in_file_manager,
+    pick_directory,
 )
 from DITWorkstation.ViewModels import TaskViewModel
-from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
-from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Styles.theme import (
+    COLOR,
+    FONT_SIZE,
+    RADIUS,
+    SUBTITLE_QSS,
+    TITLE_QSS,
+)
+from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
+from DITWorkstation.Views.Widgets.empty_state import (
+    attach_empty_state,
+    sync_empty_state,
+)
 from DITWorkstation.Views.Widgets.error_dialog import show_error
 from DITWorkstation.Views.Widgets.status_panel import StatusPanel
 from DITWorkstation.Views.Widgets.table_factory import make_table
-from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS, MONO_FONT_QSS
 
 
 class MediaImportView(RefreshOnShowView):
@@ -45,7 +68,7 @@ class MediaImportView(RefreshOnShowView):
         # 注入共享 db_service 单例，避免与其它视图各自新建 DatabaseService
         self.db_service = get_db_service()
         self.import_service = MediaImportService(db_service=self.db_service)
-        self.current_project: Optional[Project] = None
+        self.current_project: Project | None = None
         self.task_vm = TaskViewModel(self, task_store=self.db_service)
         self.task_vm.finished.connect(self._on_import_finished)
         self.task_vm.error.connect(self._on_import_error)
@@ -566,7 +589,7 @@ class MediaImportView(RefreshOnShowView):
 
     def _set_time_range_today(self):
         """快捷设置时间范围为今天 00:00 ~ 23:59"""
-        from PySide6.QtCore import QDate, QTime
+        from PySide6.QtCore import QTime
         d = QDateTime.currentDateTime().date()
         self.start_time_edit.setDateTime(QDateTime(d, QTime(0, 0)))
         self.end_time_edit.setDateTime(QDateTime(d, QTime(23, 59)))

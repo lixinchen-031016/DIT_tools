@@ -7,15 +7,19 @@
 """
 from __future__ import annotations
 
-import traceback
-from typing import Optional, Callable
+from collections.abc import Callable
 
-from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTextEdit, QFrame
-)
-from PySide6.QtCore import Qt, QMimeData
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import (
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+)
 
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS
 
@@ -36,7 +40,7 @@ class ErrorDialog(QDialog):
         title: str,
         description: str,
         details: str = "",
-        retry_callback: Optional[Callable] = None,
+        retry_callback: Callable | None = None,
         parent=None
     ):
         super().__init__(parent)
@@ -178,7 +182,7 @@ def show_error(
     title: str,
     description: str,
     details: str = "",
-    retry_callback: Optional[Callable] = None,
+    retry_callback: Callable | None = None,
     parent=None
 ):
     """便捷函数：弹出错误对话框。

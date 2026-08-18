@@ -11,8 +11,8 @@
 - 不可见时跳过：视图被隐藏时 showEvent 不会触发，无需额外判断
 - 子类只需实现 _on_show_refresh，无需关心 timer 创建与 showEvent 样板
 """
-from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QWidget
 
 # 节流间隔（毫秒）：200ms 内多次 showEvent 只触发一次刷新
 _SHOW_REFRESH_INTERVAL_MS = 200
@@ -45,7 +45,6 @@ class RefreshOnShowView(QWidget):
 
         子类应重写此方法。默认实现为空操作，确保未重写时也不会报错。
         """
-        pass
 
     def _trigger_refresh_now(self):
         """立即触发一次刷新（绕过节流），用于需要立刻刷新的场景。"""

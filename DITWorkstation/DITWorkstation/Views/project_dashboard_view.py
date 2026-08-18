@@ -2,30 +2,56 @@
 import zipfile
 from pathlib import Path
 
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QGridLayout, QFrame, QGraphicsDropShadowEffect, QMessageBox, QProgressBar
-)
 from PySide6.QtCore import Signal, Slot
 from PySide6.QtGui import QColor
-
-from DITWorkstation.Utils import (
-    get_db_service, format_size, logger, safe_slot,
-    pick_save_file, pick_open_file, pick_directory,
+from PySide6.QtWidgets import (
+    QFrame,
+    QGraphicsDropShadowEffect,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QVBoxLayout,
 )
-from DITWorkstation.App.navigation import get_nav_index
+
 from DITWorkstation.App.feature_flags import is_enabled
+from DITWorkstation.App.navigation import get_nav_index
 from DITWorkstation.App.session_context import (
-    get_data_bus, get_current_workspace_id, set_current_project,
+    get_current_workspace_id,
+    get_data_bus,
+    set_current_project,
 )
 from DITWorkstation.Services.archive_service import ArchiveService
 from DITWorkstation.Services.project_health_service import ProjectHealthService
-from DITWorkstation.ViewModels import TaskViewModel
-from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
-from DITWorkstation.Views.Widgets.project_template_dialog import (
-    create_project_from_template, save_project_as_template,
+from DITWorkstation.Utils import (
+    format_size,
+    get_db_service,
+    logger,
+    now_local,
+    pick_directory,
+    pick_open_file,
+    pick_save_file,
+    safe_slot,
 )
-from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS
+from DITWorkstation.ViewModels import TaskViewModel
+from DITWorkstation.Views.Styles.theme import (
+    COLOR,
+    FONT_SIZE,
+    RADIUS,
+    SUBTITLE_QSS,
+    TITLE_QSS,
+)
+from DITWorkstation.Views.Widgets import (
+    CapacityTrendWidget,
+    RefreshOnShowView,
+    WorkspaceProjectSelector,
+)
+from DITWorkstation.Views.Widgets.project_template_dialog import (
+    create_project_from_template,
+    save_project_as_template,
+)
 
 
 def _nav_index(key: str) -> int:
@@ -295,6 +321,14 @@ class ProjectDashboardView(RefreshOnShowView):
         health_row.addWidget(self.refresh_health_btn)
         layout.addLayout(health_row)
 
+        self.capacity_label = QLabel("备份盘容量趋势")
+        self.capacity_label.setStyleSheet(
+            f"font-size: {FONT_SIZE.LG}px; font-weight: 600; color: {COLOR.TEXT_PRIMARY}; margin-top: 8px;"
+        )
+        layout.addWidget(self.capacity_label)
+        self.capacity_trend = CapacityTrendWidget()
+        layout.addWidget(self.capacity_trend)
+
         layout.addStretch()
 
         self._apply_usage_mode_visibility()
@@ -327,6 +361,8 @@ class ProjectDashboardView(RefreshOnShowView):
             self.health_label.setVisible(False)
             self.health_summary_label.setVisible(False)
             self.refresh_health_btn.setVisible(False)
+            self.capacity_label.setVisible(False)
+            self.capacity_trend.setVisible(False)
 
     @safe_slot("从模板新建项目失败")
     def _create_from_template(self):
@@ -389,6 +425,7 @@ class ProjectDashboardView(RefreshOnShowView):
             self.card_logs.set_value("—", "")
             self.card_size.set_value("—", "")
             self.health_summary_label.setText("请选择项目以查看健康状态")
+            self.capacity_trend.set_snapshots([])
             self.refresh_health_btn.setEnabled(False)
             if is_enabled("shooting_log"):
                 self.sop_hint.setText(
@@ -470,12 +507,20 @@ class ProjectDashboardView(RefreshOnShowView):
                 )
             else:
                 capacity_lines.append(f"{Path(item['path']).name or item['path']}：不可达")
+        forecast = report.get("capacity_forecast", {})
+        if forecast.get("warning"):
+            days = forecast.get("days_remaining")
+            warning_text = "容量不足"
+            if days is not None:
+                warning_text += f"，预计 {days} 天内耗尽"
+            capacity_lines.append(f"⚠ {warning_text}")
         state = "正常" if report["severity"] == "healthy" else "需要关注"
         self.health_summary_label.setText(
             f"状态：{state}  |  未备份 {issues['unbacked_assets']}  |  失联路径 {issues['missing_assets']}  | "
             f"失败任务 {issues['failed_tasks']}  |  待重试 {issues['retry_files']}\n"
             f"最后校验：{check_text}" + ("  |  " + "；".join(capacity_lines) if capacity_lines else "")
         )
+        self.capacity_trend.set_snapshots(report.get("capacity_history", []))
 
     def _refresh_recent_operations(self):
         """刷新「最近操作」审计日志摘要（最近 5 条）。"""
@@ -585,8 +630,7 @@ class ProjectDashboardView(RefreshOnShowView):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
         ) == QMessageBox.Yes
 
-        from datetime import datetime
-        default_name = f"项目归档_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        default_name = f"项目归档_{now_local().strftime('%Y%m%d_%H%M%S')}.zip"
         path = pick_save_file(
             self, "保存项目归档", default_name, "ZIP 归档 (*.zip);;所有文件 (*)"
         )

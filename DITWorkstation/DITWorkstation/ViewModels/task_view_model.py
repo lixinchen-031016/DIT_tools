@@ -2,25 +2,27 @@
 
 把 QThread 的创建、状态、错误、取消和清理集中起来，视图只处理展示与用户操作。
 """
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Optional
+from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
-from DITWorkstation.Utils.workers import WorkerThread, TaskState
+from DITWorkstation.Utils import now_local
+from DITWorkstation.Utils.workers import TaskState, WorkerThread
 
 
 @dataclass
 class TaskRecord:
     """任务观测基线；后续可直接映射至持久化任务历史。"""
     task_name: str
-    task_id: Optional[str] = None
-    project_id: Optional[str] = None
+    task_id: str | None = None
+    project_id: str | None = None
     recovery_info: dict[str, Any] = field(default_factory=dict)
     state: TaskState = TaskState.IDLE
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
     error_summary: str = ""
 
 
@@ -36,9 +38,9 @@ class TaskViewModel(QObject):
     def __init__(self, parent=None, task_store=None):
         super().__init__(parent)
         self.task_store = task_store
-        self.worker: Optional[WorkerThread] = None
+        self.worker: WorkerThread | None = None
         self._last_state = TaskState.IDLE
-        self.current_record: Optional[TaskRecord] = None
+        self.current_record: TaskRecord | None = None
         self.history: list[TaskRecord] = []
 
     @property
@@ -53,8 +55,8 @@ class TaskViewModel(QObject):
         inject_file_completed: bool = False,
         inject_cancel_check: bool = False,
         task_name: str = "",
-        project_id: Optional[str] = None,
-        recovery_info: Optional[dict[str, Any]] = None,
+        project_id: str | None = None,
+        recovery_info: dict[str, Any] | None = None,
         **kwargs,
     ) -> bool:
         """启动任务；已有任务运行时返回 False。"""
@@ -119,25 +121,25 @@ class TaskViewModel(QObject):
         if self.current_record is not None:
             self.current_record.state = state
             if state == TaskState.RUNNING and self.current_record.started_at is None:
-                self.current_record.started_at = datetime.now()
+                self.current_record.started_at = now_local()
             if state in (TaskState.COMPLETED, TaskState.CANCELLED, TaskState.FAILED):
-                self.current_record.completed_at = datetime.now()
+                self.current_record.completed_at = now_local()
             self._persist_current()
         self.state_changed.emit(value)
 
-    def mark_recoverable(self, recovery_info: Optional[dict[str, Any]] = None):
+    def mark_recoverable(self, recovery_info: dict[str, Any] | None = None):
         """把失败/取消任务标为可恢复，并保存恢复所需的最小上下文。"""
         if self.current_record is not None:
             self.current_record.state = TaskState.RECOVERABLE
             self.current_record.recovery_info.update(recovery_info or {})
-            self.current_record.completed_at = datetime.now()
+            self.current_record.completed_at = now_local()
             self._persist_current()
         self._last_state = TaskState.RECOVERABLE
         self.state_changed.emit(TaskState.RECOVERABLE.value)
 
     def _on_finished(self, value):
         if self.current_record is not None:
-            self.current_record.completed_at = datetime.now()
+            self.current_record.completed_at = now_local()
             self._persist_current(output={"result": value})
             self.history.append(self.current_record)
             self.current_record = None
@@ -147,14 +149,14 @@ class TaskViewModel(QObject):
     def _on_error(self, message):
         if self.current_record is not None:
             self.current_record.error_summary = message
-            self.current_record.completed_at = datetime.now()
+            self.current_record.completed_at = now_local()
             self._persist_current(error_summary=message)
             self.history.append(self.current_record)
             self.current_record = None
         self._clear_worker()
         self.error.emit(message)
 
-    def _persist_current(self, *, output: Optional[dict] = None, error_summary: str = ""):
+    def _persist_current(self, *, output: dict | None = None, error_summary: str = ""):
         """尽力写入任务历史，不影响前台任务的执行结果。"""
         record = self.current_record
         if self.task_store is None or record is None or not record.task_id:

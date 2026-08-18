@@ -1,11 +1,10 @@
 """Workspace persistence operations."""
-from datetime import datetime
 import sqlite3
 import uuid
-from typing import Optional
+from datetime import datetime
 
 from DITWorkstation.Models import Workspace
-from DITWorkstation.Utils import logger
+from DITWorkstation.Utils import logger, now_local
 
 from .base_repository import BaseRepository
 from .field_registry import WORKSPACE_FIELDS, build_update_clause
@@ -42,7 +41,7 @@ class WorkspaceRepository(BaseRepository):
             rows = conn.execute("SELECT * FROM workspaces ORDER BY created_at DESC").fetchall()
         return [self._row_to_workspace(row) for row in rows]
 
-    def get(self, workspace_id: str) -> Optional[Workspace]:
+    def get(self, workspace_id: str) -> Workspace | None:
         with self._connection() as conn:
             row = conn.execute(
                 "SELECT * FROM workspaces WHERE workspace_id = ?", (workspace_id,)
@@ -50,7 +49,7 @@ class WorkspaceRepository(BaseRepository):
         return self._row_to_workspace(row) if row else None
 
     def get_or_create_default(self) -> Workspace:
-        now = datetime.now().isoformat()
+        now = now_local().isoformat()
         with self._transaction() as conn:
             conn.execute(
                 "INSERT INTO workspaces "
@@ -82,7 +81,7 @@ class WorkspaceRepository(BaseRepository):
             logger.error(f"更新工作区失败 {workspace_id}: {exc}")
             return False
 
-    def delete(self, workspace_id: str, reassign_to: Optional[str] = None) -> bool:
+    def delete(self, workspace_id: str, reassign_to: str | None = None) -> bool:
         if workspace_id == "default":
             logger.warning("拒绝删除默认工作区")
             return False
@@ -92,7 +91,7 @@ class WorkspaceRepository(BaseRepository):
                     "SELECT 1 FROM workspaces WHERE workspace_id = 'default'"
                 ).fetchone()
                 if default_exists is None:
-                    now = datetime.now().isoformat()
+                    now = now_local().isoformat()
                     conn.execute(
                         "INSERT INTO workspaces "
                         "(workspace_id, name, path, description, created_at, updated_at) "

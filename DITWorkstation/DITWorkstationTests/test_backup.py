@@ -345,5 +345,27 @@ def test_verify_backup_requires_db():
         service.verify_backup("p1")
 
 
+def test_backup_destination_uses_persisted_snapshot_when_source_root_unavailable(tmp_dir):
+    """源根不可用时优先使用快照 relative，避免递归扫描备份盘。"""
+    from DITWorkstation.Services.backup_service import BackupService
+
+    source_file = tmp_dir / "removed-source" / "reel" / "clip.mov"
+    target = tmp_dir / "backup"
+    asset = MediaAsset(
+        asset_id="snapshot-asset", project_id="p1", file_path=str(source_file),
+        file_name="clip.mov", file_size=10, file_type=".mov",
+    )
+    service = BackupService()
+
+    result = service._backup_dest_for_asset(
+        asset,
+        str(target),
+        {},
+        {str(target): {str(source_file): "reel/clip.mov"}},
+    )
+
+    assert result == str(target / "reel" / "clip.mov")
+
+
 if __name__ == "__main__":
     unittest.main()

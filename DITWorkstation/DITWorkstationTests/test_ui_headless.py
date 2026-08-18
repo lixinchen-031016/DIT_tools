@@ -103,6 +103,53 @@ def test_search_view_pagination(tmp_dir, monkeypatch):
         reset_singletons(); reset_session_state()
 
 
+def test_search_view_capture_timeline_drills_into_taken_date(tmp_dir, monkeypatch):
+    from datetime import datetime
+    from PySide6.QtCore import QEventLoop, QTimer
+    from DITWorkstation.Utils import common, reset_singletons
+    from DITWorkstation.App.session_context import reset_session_state
+    from DITWorkstation.Models import MediaAsset
+    reset_singletons(); reset_session_state()
+    db = DatabaseService(db_path=tmp_dir / "timeline.db")
+    common._shared_db_service = db
+    try:
+        project = db.create_project(name="时间线项目")
+        for index, taken in enumerate((datetime(2026, 8, 1, 10), datetime(2026, 8, 1, 11), datetime(2026, 8, 2, 10))):
+            db.add_media_asset(MediaAsset(
+                asset_id=f"timeline-{index}", project_id=project.project_id,
+                file_path=f"/media/{index}.jpg", file_name=f"{index}.jpg",
+                file_type=".jpg", date_taken=taken,
+            ))
+        from DITWorkstation.Views.search_view import SearchView
+        view = SearchView()
+        view.project_combo.clear()
+        view.project_combo.addItem("时间线项目", project.project_id)
+
+        def wait_until(predicate, timeout_ms=3000):
+            loop = QEventLoop()
+            timer = QTimer()
+            timer.setInterval(10)
+            timer.timeout.connect(lambda: loop.quit() if predicate() else None)
+            timer.start()
+            QTimer.singleShot(timeout_ms, loop.quit)
+            loop.exec()
+            timer.stop()
+            assert predicate()
+
+        view.view_mode_combo.setCurrentIndex(1)
+        view._search()
+        wait_until(lambda: view._total == 3 and view.timeline.cards_layout.count() == 3)
+        assert view.timeline.summary_label.text() == "按拍摄日期聚合：2 天"
+
+        first_card = view.timeline.cards_layout.itemAt(0).widget()
+        first_card.click()
+        wait_until(lambda: view._total == 2 and view.result_table.rowCount() == 2)
+        assert view._current_filters["taken_from"] == "2026-08-01"
+        assert view.view_mode_combo.currentIndex() == 0
+    finally:
+        reset_singletons(); reset_session_state()
+
+
 # ===== 设置对话框：开关写入 settings.json =====
 
 def test_settings_dialog_persists_toggles(tmp_dir, monkeypatch):

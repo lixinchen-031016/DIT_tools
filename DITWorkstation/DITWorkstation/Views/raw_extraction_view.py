@@ -1,25 +1,45 @@
 """JPG筛选后RAW提取页面"""
+from PySide6.QtCore import Signal, Slot
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QProgressBar, QGroupBox,
-    QFormLayout, QCheckBox, QTableWidget,
-    QTableWidgetItem, QHeaderView, QMessageBox
+    QCheckBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
-from PySide6.QtCore import Qt, Slot, Signal
 
-from DITWorkstation.Services.raw_extraction_service import RawExtractionService
+from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Services.media_import_service import MediaImportService
+from DITWorkstation.Services.raw_extraction_service import RawExtractionService
 from DITWorkstation.Utils import (
-    get_db_service, logger, pick_directory, find_overwrite_conflicts, normalize_name_key,
+    find_overwrite_conflicts,
+    get_db_service,
+    logger,
+    normalize_name_key,
+    pick_directory,
 )
 from DITWorkstation.ViewModels import TaskViewModel
-from DITWorkstation.App.session_context import get_data_bus
+from DITWorkstation.Views.Styles.theme import (
+    COLOR,
+    FONT_SIZE,
+    PRIMARY_BUTTON_QSS,
+    SUBTITLE_QSS,
+    TITLE_QSS,
+)
 from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
-from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Widgets.empty_state import (
+    attach_empty_state,
+    sync_empty_state,
+)
+from DITWorkstation.Views.Widgets.error_dialog import show_error
 from DITWorkstation.Views.Widgets.status_panel import StatusPanel
 from DITWorkstation.Views.Widgets.table_factory import make_table
-from DITWorkstation.Views.Widgets.error_dialog import show_error
-from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS
 
 
 class RawExtractionView(RefreshOnShowView):

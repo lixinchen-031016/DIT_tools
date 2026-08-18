@@ -10,16 +10,22 @@
 from __future__ import annotations
 
 import sys
-from typing import Optional
 
 from PySide6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QWizard, QWizardPage,
-    QPushButton
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QVBoxLayout,
+    QWizard,
+    QWizardPage,
 )
 
+from DITWorkstation.App.feature_flags import (
+    ensure_personal_default_workspace_path,
+    is_team_mode,
+)
 from DITWorkstation.Utils import get_db_service, logger, pick_directory
-from DITWorkstation.App.feature_flags import is_team_mode, ensure_personal_default_workspace_path
-
 
 # ===== 常量 =====
 _STATUS_SUCCESS_COLOR = "#34c759"
@@ -167,7 +173,7 @@ class _WelcomePage(QWizardPage):
 class _CreateWorkspacePage(QWizardPage):
     """第 0 步：创建第一个工作区（对应物理目录）"""
 
-    def __init__(self, wizard: "FirstRunWizard"):
+    def __init__(self, wizard: FirstRunWizard):
         super().__init__()
         self._wizard = wizard
         self.setTitle("创建第一个工作区")
@@ -234,7 +240,7 @@ class _CreateWorkspacePage(QWizardPage):
 class _CreateProjectPage(QWizardPage):
     """第 1 步：在刚创建的工作区内创建第一个项目"""
 
-    def __init__(self, wizard: "FirstRunWizard"):
+    def __init__(self, wizard: FirstRunWizard):
         super().__init__()
         self._wizard = wizard
         if is_team_mode():
@@ -324,7 +330,7 @@ def should_show_wizard() -> bool:
         return False
 
 
-def maybe_show_wizard(parent=None) -> Optional[FirstRunWizard]:
+def maybe_show_wizard(parent=None) -> FirstRunWizard | None:
     """如果满足首启条件，弹出向导并返回向导对象；否则返回 None。
 
     返回的向导对象已通过 exec() 阻塞执行完毕，调用方可读取

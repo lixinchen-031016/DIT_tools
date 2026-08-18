@@ -37,9 +37,9 @@ DIT 工作站围绕 9 大功能模块构建完整的数据管理闭环：
 | 4 | RAW 提取 | 🎞 | 根据筛选后的 JPG 文件，从 RAW 源文件夹自动匹配并提取对应 RAW，提取后可自动入库 |
 | 5 | 文件重命名 | ✏️ | 按场景/镜头/镜次规则批量重命名，支持模板变量，预览确认后执行，自动防覆盖 |
 | 6 | 拍摄日志 | 📋 | 管理场景/镜头/镜次拍摄记录，支持「从代表素材填充 EXIF」，双向关联素材与日志 |
-| 7 | 素材检索 | 🔍 | 按项目/场景/镜头/类型/关键词/日志/评级/日期/标签多维度组合检索（分页展示，每页 500 条），结果可导出 CSV；支持按校验和跨项目查重 |
+| 7 | 素材检索 | 🔍 | 按项目/场景/镜头/类型/关键词/日志/评级/日期/标签多维度组合检索（分页展示，每页 500 条），支持按拍摄日期时间线聚合并下钻到当天列表，结果可导出 CSV；支持按校验和跨项目查重 |
 | 8 | 素材信息 | ℹ️ | 查看素材 EXIF 与元数据详情，支持缩略图预览、单个/批量重新读取 EXIF，可设置镜次评级，可一键导出项目素材清单 CSV；支持标签/备注编辑、批量评级、软删除、丢失文件检测与重新链接 |
-| 9 | 报告生成 | 📊 | 生成 PDF 数据备份报告与素材统计报告，含镜次评级分布统计；按平台查找预装中文字体 |
+| 9 | 报告生成 | 📊 | 生成 PDF 数据备份报告、素材统计报告和操作审计报表，含镜次评级分布统计及审计汇总；按平台查找预装中文字体 |
 
 ---
 
@@ -78,6 +78,10 @@ DIT 工作站围绕 9 大功能模块构建完整的数据管理闭环：
 - 「校验已有备份」：按素材的 backup_locations 对备份盘做独立完整性校验（存在性 + 校验和比对），检测位错误/文件丢失
 - 「断点续传 / 失败重试」：重新备份时目标已存在且校验一致的文件自动跳过；拷贝失败的文件按目标记入备份历史，选中后「重试失败文件」只补拷失败项，中途拔卡/断电后可快速续备
 - 「任务快照持久化」：备份任务运行中实时保存快照（含未处理文件列表），应用异常退出后重启可恢复到上次进度
+- 「项目健康容量趋势」：项目概览记录备份目标容量历史，绘制最近趋势并在低于 15% 或预计 7 天内耗尽时预警
+- 「相机卡 SOP 链」：自动化可按配置顺序执行导入、备份、RAW 提取、重命名和备份报告；任一步失败会停止后续步骤并保留任务状态
+- 「素材拍摄时间线」：素材检索可按拍摄日期聚合浏览，点击日期卡片下钻到当天素材列表
+- 「操作审计报表」：日志查看器支持将当前筛选结果及按日/事件汇总导出为 PDF，同时保留 CSV 导出
 - 「素材检索」结果可导出 CSV 素材清单（utf-8-sig，Excel 直接打开）
 - 「跨项目查重」：按校验和聚合重复入库素材，双击定位文件所在目录
 
@@ -218,7 +222,7 @@ DIT_tools/
     │   ├── Models/
     │   │   └── __init__.py         # 数据模型（dataclass + Enum + RATING_LABELS）
     │   ├── Services/               # 业务逻辑层
-    │   │   ├── database_service.py     # 数据库服务（SQLite，11 张表 + 连接池 + FTS5）
+    │   │   ├── database_service.py     # 数据库服务（SQLite，13 张业务表 + 连接池 + FTS5）
     │   │   ├── checksum_service.py     # 校验和服务（带缓存）
     │   │   ├── media_import_service.py # 媒体导入服务
     │   │   ├── metadata_service.py     # 元数据读取服务（EXIF/视频）
@@ -260,7 +264,7 @@ DIT_tools/
     │           ├── status_panel.py               # 进度/状态/日志面板
     │           ├── table_factory.py              # 表格工厂
     │           └── empty_state.py                # 空状态占位
-    ├── DITWorkstationTests/           # 测试套件（当前 351 个测试）
+    ├── DITWorkstationTests/           # 测试套件（当前 392 个测试）
     │   ├── conftest.py                 # 共享 fixture
     │   ├── test_database.py            # 数据库服务测试（65）
     │   ├── test_media_import.py        # 媒体导入测试（28）
@@ -322,7 +326,7 @@ python DITWorkstation/main.py
 
 ## 🧪 测试
 
-测试覆盖核心服务业务逻辑、回收站恢复、跨平台路径重新链接、分页、后台任务、归档取消、工具函数、会话上下文、数据模型、缩略图、功能模式、文件状态扫描和无头 UI 交互。
+测试覆盖核心服务业务逻辑、回收站恢复、跨平台路径重新链接、分页、后台任务、归档取消、工具函数、会话上下文、数据模型、缩略图、功能模式、项目健康、文件状态扫描和无头 UI 交互。
 
 ```bash
 # 激活虚拟环境后
@@ -346,38 +350,41 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 
 | 测试文件 | 覆盖范围 | 测试数量 |
 |----------|----------|----------|
-| `test_database.py` | 数据库服务（11 张表 CRUD + 版本化迁移 + FTS5 + 连接池） | 69 |
-| `test_utils.py` | 工具函数（format_size / sanitize_filename 等） | 36 |
+| `test_database.py` | 数据库服务（13 张业务表 CRUD + 版本化迁移 + FTS5 + 连接池 + 拍摄日期时间线） | 73 |
+| `test_utils.py` | 工具函数（format_size / sanitize_filename 等） | 38 |
 | `test_media_import.py` | 媒体导入服务 | 30 |
-| `test_backup.py` | 备份服务 | 15 |
-| `test_thumbnail.py` | 缩略图服务 | 12 |
-| `test_checksum.py` | 校验和服务 | 11 |
-| `test_backup_resume.py` | 备份断点续传 / 失败重试 | 10 |
+| `test_backup.py` | 备份服务 | 16 |
+| `test_thumbnail.py` | 缩略图服务 | 11 |
+| `test_checksum.py` | 校验和服务 | 14 |
+| `test_backup_resume.py` | 备份断点续传 / 失败重试 | 12 |
 | `test_session_context.py` | EventBus + 全局项目/工作区状态联动 | 10 |
-| `test_settings.py` | 应用设置持久化 | 12 |
-| `test_archive.py` | 项目归档 / 恢复（含安全防护） | 11 |
+| `test_settings.py` | 应用设置持久化 | 19 |
+| `test_archive.py` | 项目归档 / 恢复（含安全防护） | 12 |
 | `test_raw_extraction.py` | RAW 提取服务 | 9 |
 | `test_tags.py` | 素材标签关联表与检索 | 9 |
 | `test_models.py` | 数据模型（AssetRating / RATING_LABELS） | 8 |
 | `test_rename.py` | 重命名服务 | 7 |
-| `test_ui_headless.py` | 无头 UI：布局/分页/设置/模板入口/模式切换/文件状态扫描 | 26 |
+| `test_ui_headless.py` | 无头 UI：布局/分页/设置/模板入口/模式切换/文件状态扫描/拍摄时间线下钻 | 27 |
 | `test_volume_monitor.py` | 存储卡识别 | 7 |
 | `test_workers.py` | 后台线程 WorkerThread | 7 |
 | `test_templates.py` | 项目模板 CRUD 与默认模板 | 6 |
 | `test_workspace_selector.py` | 工作区-项目选择控件 | 6 |
-| `test_report.py` | 报告生成服务 | 5 |
-| `test_task_view_model.py` | TaskViewModel 状态机与线程生命周期 | 7 |
+| `test_report.py` | 报告生成服务（素材/备份/审计 PDF 与 CSV） | 9 |
+| `test_task_view_model.py` | TaskViewModel 状态机与线程生命周期 | 9 |
 | `test_backup_import_closure.py` | 备份回写导入联动 | 4 |
 | `test_backup_templates.py` | 备份方案模板 | 2 |
-| `test_card_automation.py` | 相机卡自动化 | 1 |
+| `test_card_automation.py` | 相机卡自动化与可配置 SOP 链 | 3 |
 | `test_feature_flags.py` | 团队/个人模式功能开关 | 15 |
-| `test_recovery.py` | 回收站恢复、重新链接与重命名回退 | 5 |
-| `test_version_and_recycle_bin.py` | alpha 版本格式与回收站 UI 恢复入口 | 2 |
-| **合计** | | **351** |
+| `test_field_registry.py` | 数据库字段注册表与标识符白名单 | 7 |
+| `test_project_health.py` | 项目健康汇总、容量快照与趋势预测 | 3 |
+| `test_workspace_repository.py` | 工作区及仓储门面一致性 | 7 |
+| `test_recovery.py` | 回收站恢复、重新链接与重命名回退 | 9 |
+| `test_version_and_recycle_bin.py` | alpha 版本格式与回收站 UI 恢复入口 | 3 |
+| **合计** | | **392** |
 
 测试共享 fixture（`conftest.py`）提供隔离的数据库实例、临时目录与工厂函数，保证测试间互不干扰。
 
-当前本地验证环境为 macOS arm64、Python 3.13、PySide6 6.11.1，执行结果为 `351 passed`。测试使用 Qt `offscreen` 平台，不能替代 Windows/Linux 原生 GUI、文件系统和打包产物验证。
+当前本地验证环境为 macOS arm64、Python 3.13、PySide6 6.11.1，执行结果为 `392 passed`。测试使用 Qt `offscreen` 平台，不能替代 Windows/Linux 原生 GUI、文件系统和打包产物验证。
 
 ---
 
@@ -488,7 +495,7 @@ App（配置/会话）→ Models（数据模型）→ Services（业务逻辑）
 ### 数据库结构
 
 - **模式**：SQLite，启用 WAL（Write-Ahead Logging）模式
-- **表**：11 张
+- **表**：13 张业务表（另有 1 张可选的 FTS5 虚拟表）
   - `workspaces` — 工作区（工作区-项目两级结构的父级）
   - `projects` — 项目（归属于工作区）
   - `shooting_logs` — 拍摄日志
@@ -500,8 +507,10 @@ App（配置/会话）→ Models（数据模型）→ Services（业务逻辑）
   - `rename_history` — 批量重命名映射及回退状态
   - `project_templates` — 项目模板
   - `backup_templates` — 备份方案模板
-- **索引**：18 个，覆盖常用查询字段以保证检索性能
-- **迁移**：`PRAGMA user_version` 版本化迁移（v1–v5），幂等可重复执行；升级前自动生成 `*.pre-migration.bak` 备份，失败可回滚
+  - `task_history` — 后台任务历史与恢复上下文
+  - `storage_health_snapshots` — 备份目标容量历史
+- **索引**：20 个显式索引，覆盖常用查询字段及拍摄日期时间线聚合以保证检索性能
+- **迁移**：`PRAGMA user_version` 版本化迁移（v1–v8），幂等可重复执行；升级前自动生成 `*.pre-migration.bak` 备份，失败可回滚
 
 ---
 

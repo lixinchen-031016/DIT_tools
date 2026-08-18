@@ -2,8 +2,8 @@
 import hashlib
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
 from pathlib import Path
-from typing import Optional, Callable
 
 import xxhash
 
@@ -15,7 +15,7 @@ from DITWorkstation.Utils import logger
 class ChecksumService:
     """校验和计算服务"""
 
-    def __init__(self, buffer_size: int = None, cache_size: int = None):
+    def __init__(self, buffer_size: int | None = None, cache_size: int | None = None):
         self.buffer_size = buffer_size or config.checksum_buffer_size
         self._max_cache_size = (
             config.checksum_cache_size if cache_size is None else cache_size
@@ -31,8 +31,8 @@ class ChecksumService:
         self,
         file_path: str,
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
-        progress_callback: Optional[Callable[[float], None]] = None,
-        cancel_check: Optional[Callable[[], bool]] = None
+        progress_callback: Callable[[float], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None
     ) -> FileChecksum:
         """
         计算文件校验和
@@ -97,7 +97,7 @@ class ChecksumService:
                 cached.file_size == stat.st_size
                 and cached.mtime_ns == stat.st_mtime_ns
             )
-        except Exception:
+        except (OSError, ValueError):
             return False
 
     def _compute_hash(
@@ -105,8 +105,8 @@ class ChecksumService:
         path: Path,
         algorithm: ChecksumAlgorithm,
         file_size: int,
-        progress_callback: Optional[Callable[[float], None]],
-        cancel_check: Optional[Callable[[], bool]] = None
+        progress_callback: Callable[[float], None] | None,
+        cancel_check: Callable[[], bool] | None = None
     ) -> str:
         """内部哈希计算"""
         if algorithm == ChecksumAlgorithm.XXHASH64:
@@ -134,8 +134,8 @@ class ChecksumService:
         src_path: str,
         dest_path: str,
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
-        progress_callback: Optional[Callable[[float], None]] = None,
-        cancel_check: Optional[Callable[[], bool]] = None
+        progress_callback: Callable[[float], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None
     ) -> FileChecksum:
         """边拷贝边计算源文件校验和（单次读盘）。
 
@@ -191,8 +191,8 @@ class ChecksumService:
         file_path: str,
         expected_hash: str,
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
-        progress_callback: Optional[Callable[[float], None]] = None,
-        cancel_check: Optional[Callable[[], bool]] = None
+        progress_callback: Callable[[float], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None
     ) -> bool:
         """
         验证文件完整性
@@ -220,7 +220,7 @@ class ChecksumService:
         self,
         file_pairs: list[tuple[str, str]],
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
-        progress_callback: Optional[Callable[[int, int, str], None]] = None
+        progress_callback: Callable[[int, int, str], None] | None = None
     ) -> list[dict]:
         """
         批量验证文件完整性
@@ -276,8 +276,8 @@ class ChecksumService:
         stream,
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
         total_size: int = 0,
-        progress_callback: Optional[Callable[[float], None]] = None,
-        cancel_check: Optional[Callable[[], bool]] = None
+        progress_callback: Callable[[float], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None
     ) -> str:
         """
         从流中计算校验和

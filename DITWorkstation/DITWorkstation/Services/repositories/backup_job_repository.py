@@ -1,8 +1,6 @@
 """Backup-job persistence and legacy row deserialization."""
-from datetime import datetime
 import json
-import sqlite3
-from typing import Optional
+from datetime import datetime
 
 from DITWorkstation.Utils import logger
 
@@ -12,7 +10,7 @@ from .base_repository import BaseRepository
 class BackupJobRepository(BaseRepository):
     """Owns backup job rows; file-to-asset association remains in AssetRepository."""
 
-    def save(self, job, project_id: Optional[str] = None) -> bool:
+    def save(self, job, project_id: str | None = None) -> bool:
         if project_id:
             with self._connection() as conn:
                 exists = conn.execute(
@@ -62,13 +60,13 @@ class BackupJobRepository(BaseRepository):
             logger.error(f"持久化备份作业失败 {job.job_id}: {exc}")
             return False
 
-    def get(self, job_id: str) -> Optional[dict]:
+    def get(self, job_id: str) -> dict | None:
         for raw in self.list_all():
             if raw["job_id"] == job_id:
                 return raw
         return None
 
-    def list_all(self, project_id: Optional[str] = None) -> list[dict]:
+    def list_all(self, project_id: str | None = None) -> list[dict]:
         with self._connection() as conn:
             if project_id:
                 rows = conn.execute(

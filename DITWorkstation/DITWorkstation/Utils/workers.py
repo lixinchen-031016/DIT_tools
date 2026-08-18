@@ -1,9 +1,9 @@
 """后台工作线程工具"""
-from PySide6.QtCore import QThread, Signal, QObject, QTimer
-from typing import Callable
-from enum import Enum
 import threading
+from collections.abc import Callable
+from enum import Enum
 
+from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
 # 已 start() 的线程注册表（强引用）。PySide6 会在 Python 包装对象的最后一个
 # 强引用被释放时立即析构底层 C++ QThread 对象；而 finished/error 结果信号是

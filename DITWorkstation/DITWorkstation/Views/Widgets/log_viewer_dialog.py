@@ -5,15 +5,28 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QTabWidget,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QHeaderView, QComboBox,
-    QLineEdit, QFileDialog,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QPlainTextEdit,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QVBoxLayout,
 )
 
 from DITWorkstation.App import config
-from DITWorkstation.Utils import logger, format_size, get_db_service
+from DITWorkstation.Utils import format_size, get_db_service, get_report_service, logger
 from DITWorkstation.Views.Styles.theme import (
-    COLOR, FONT_SIZE, MONO_FONT_QSS, SECONDARY_BUTTON_QSS,
+    COLOR,
+    FONT_SIZE,
+    MONO_FONT_QSS,
+    SECONDARY_BUTTON_QSS,
 )
 
 # 操作结果状态 → 友好文案
@@ -66,7 +79,7 @@ def _read_log_files(log_dir: Path, max_chars: int = 3 * 1024 * 1024) -> str:
     total = 0
     for path in files:
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
+            with open(path, encoding="utf-8", errors="replace") as f:
                 content = f.read()
         except OSError as e:
             logger.warning(f"读取日志文件失败 {path}: {e}")
@@ -159,6 +172,10 @@ class LogViewerDialog(QDialog):
         self.export_operations_btn = QPushButton("导出 CSV")
         self.export_operations_btn.clicked.connect(self._export_operations)
         operation_actions.addWidget(self.export_operations_btn)
+        self.export_operations_pdf_btn = QPushButton("导出 PDF")
+        self.export_operations_pdf_btn.setToolTip("将筛选结果及按日/事件/结果汇总导出为审计报表")
+        self.export_operations_pdf_btn.clicked.connect(self._export_operations_pdf)
+        operation_actions.addWidget(self.export_operations_pdf_btn)
         operation_layout.addLayout(operation_actions)
         self.tabs.addTab(operation_page, "操作日志")
 
@@ -224,6 +241,7 @@ class LogViewerDialog(QDialog):
                 date_from=date_from,
                 date_to=date_to,
             )
+            self._operation_records = operations
         except Exception as e:
             logger.warning(f"读取操作日志失败: {e}")
             self.info_label.setText("读取操作日志失败，请稍后重试。")
@@ -329,3 +347,17 @@ class LogViewerDialog(QDialog):
             self.info_label.setText(f"已导出 {self.operation_table.rowCount()} 条操作审计日志：{path}")
         except OSError as exc:
             self.info_label.setText(f"导出操作审计日志失败：{exc}")
+
+    def _export_operations_pdf(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出审计报表", "audit_report.pdf", "PDF 文件 (*.pdf)"
+        )
+        if not path:
+            return
+        try:
+            output = get_report_service().generate_audit_report(
+                getattr(self, "_operation_records", []), path,
+            )
+            self.info_label.setText(f"已导出审计报表：{output}")
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.info_label.setText(f"导出审计报表失败：{exc}")

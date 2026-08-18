@@ -2,31 +2,71 @@
 import json
 from pathlib import Path
 
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView,
-    QGroupBox, QFormLayout, QScrollArea,
-    QMessageBox, QAbstractItemView, QProgressBar, QFrame, QSizePolicy, QProgressDialog,
-    QComboBox, QDialog, QDialogButtonBox, QLineEdit, QTextEdit,
-)
 from PySide6.QtCore import Qt, QThread, Signal, Slot
-from PySide6.QtGui import QPixmap, QColor
+from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QFrame,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QProgressBar,
+    QProgressDialog,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
-from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.App.feature_flags import is_enabled
+from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import RATING_LABELS
 from DITWorkstation.Services.thumbnail_service import SIZE_LARGE
 from DITWorkstation.Utils import (
-    format_size, get_db_service, get_metadata_service, get_thumbnail_service,
-    get_report_service, get_asset_relink_service, safe_slot, logger, WorkerThread,
-    open_in_file_manager, pick_directory, pick_save_file,
+    WorkerThread,
+    format_size,
+    get_asset_relink_service,
+    get_db_service,
+    get_metadata_service,
+    get_report_service,
+    get_thumbnail_service,
+    logger,
+    now_local,
+    open_in_file_manager,
+    pick_directory,
+    pick_save_file,
+    safe_slot,
 )
 from DITWorkstation.ViewModels import TaskViewModel
-from DITWorkstation.Views.Widgets import AssetTableModel, RefreshOnShowView, WorkspaceProjectSelector
-from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Styles.theme import (
+    COLOR,
+    FONT_SIZE,
+    RADIUS,
+    SUBTITLE_QSS,
+    TITLE_QSS,
+)
+from DITWorkstation.Views.Widgets import (
+    AssetTableModel,
+    RefreshOnShowView,
+    WorkspaceProjectSelector,
+)
+from DITWorkstation.Views.Widgets.empty_state import (
+    attach_empty_state,
+    sync_empty_state,
+)
 from DITWorkstation.Views.Widgets.error_dialog import show_error
 from DITWorkstation.Views.Widgets.table_factory import make_table_view
-from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS
 
 # 缺失值占位符
 _PLACEHOLDER = "—"
@@ -713,8 +753,7 @@ class AssetInfoView(RefreshOnShowView):
         if not project_id or self._asset_total == 0:
             QMessageBox.information(self, "提示", "当前项目没有可导出的素材")
             return
-        from datetime import datetime
-        default_name = f"素材清单_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        default_name = f"素材清单_{now_local().strftime('%Y%m%d_%H%M%S')}.csv"
         path = pick_save_file(
             self, "导出素材清单 CSV", default_name, "CSV 文件 (*.csv);;所有文件 (*)"
         )

@@ -4,15 +4,14 @@
 AlternatingRowColors、setDefaultSectionSize(32) 等）。本工厂将其集中为
 一个 make_table(...) 调用，仅改创建配置，不影响 setItem / 信号连接 / 右键菜单等业务逻辑。
 """
-from typing import List, Optional
 
-from PySide6.QtWidgets import QTableWidget, QTableView, QHeaderView, QAbstractItemView
+from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableView, QTableWidget
 
 DEFAULT_ROW_HEIGHT = 32
 
 
 def make_table(
-    headers: List[str],
+    headers: list[str],
     *,
     sortable: bool = False,
     selection_mode=QAbstractItemView.SingleSelection,
@@ -20,7 +19,7 @@ def make_table(
     row_height: int = DEFAULT_ROW_HEIGHT,
     alternating: bool = True,
     stretch_columns: bool = True,
-    resize_to_contents_cols: Optional[List[int]] = None,
+    resize_to_contents_cols: list[int] | None = None,
 ) -> QTableWidget:
     """创建标准配置的 QTableWidget。
 
@@ -61,7 +60,7 @@ def make_table_view(
     selection_behavior=QAbstractItemView.SelectRows,
     row_height: int = DEFAULT_ROW_HEIGHT,
     alternating: bool = True,
-    resize_to_contents_cols: Optional[List[int]] = None,
+    resize_to_contents_cols: list[int] | None = None,
 ) -> QTableView:
     """创建标准配置的 ``QTableView``，由调用方设置数据模型。"""
     table = QTableView()

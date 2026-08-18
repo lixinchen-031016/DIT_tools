@@ -21,7 +21,6 @@
   navigation.get_nav_index() 需要过滤激活列表时使用局部导入。
 """
 from enum import Enum
-from typing import List, Optional, Tuple
 
 from DITWorkstation.App import config
 from DITWorkstation.App.navigation import NAV_ITEMS
@@ -105,7 +104,7 @@ def is_team_mode() -> bool:
     return get_usage_mode() == UsageMode.TEAM
 
 
-def get_active_nav_items() -> List[Tuple[str, str, str]]:
+def get_active_nav_items() -> list[tuple[str, str, str]]:
     """返回当前模式激活的导航项列表。
 
     团队模式返回全部 9 项；个人模式返回 7 项（隐藏 log / report），
@@ -122,7 +121,7 @@ def is_nav_enabled(key: str) -> bool:
     return any(item[0] == key for item in get_active_nav_items())
 
 
-def get_active_nav_index(key: str) -> Optional[int]:
+def get_active_nav_index(key: str) -> int | None:
     """按 key 查询其在激活导航列表中的索引；未激活或不存在时返回 None。
 
     调用方必须对 None 做容错，禁止把 None 直接传给 setCurrentRow()。
@@ -144,7 +143,7 @@ def is_enabled(feature: str) -> bool:
     return feature not in _TEAM_ONLY_FEATURES
 
 
-def ensure_personal_default_workspace_path(db_service) -> Optional[str]:
+def ensure_personal_default_workspace_path(db_service) -> str | None:
     """个人模式：确保 default 工作区拥有合法物理路径（步骤1）。
 
     设计文档指出个人模式无「创建工作区」步骤，default 工作区 path 初始为空，

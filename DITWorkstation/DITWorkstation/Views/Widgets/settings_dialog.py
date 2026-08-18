@@ -3,24 +3,53 @@ import shutil
 import sys
 from pathlib import Path
 
+from PySide6.QtCore import QProcess, Qt
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QGroupBox, QFormLayout, QCheckBox, QMessageBox, QApplication, QComboBox, QFileDialog,
-    QScrollArea, QWidget,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
 )
-from PySide6.QtCore import Qt, QProcess
 
 from DITWorkstation.App import config
 from DITWorkstation.App.feature_flags import (
-    UsageMode, get_usage_mode, set_usage_mode, is_enabled,
+    UsageMode,
+    get_usage_mode,
+    is_enabled,
+    set_usage_mode,
 )
 from DITWorkstation.Utils import (
-    format_size, clear_recent_paths, count_recent_paths, open_in_file_manager,
-    save_app_settings, pick_directory, get_db_service, get_thumbnail_service, logger,
-    export_settings, import_settings,
-    log_files_summary, delete_log_files,
+    clear_recent_paths,
+    count_recent_paths,
+    delete_log_files,
+    export_settings,
+    format_size,
+    get_db_service,
+    get_thumbnail_service,
+    import_settings,
+    log_files_summary,
+    logger,
+    open_in_file_manager,
+    pick_directory,
+    save_app_settings,
 )
-from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS
+from DITWorkstation.Views.Styles.theme import (
+    COLOR,
+    FONT_SIZE,
+    SUBTITLE_QSS,
+    TITLE_QSS,
+)
 
 
 class SettingsDialog(QDialog):
@@ -191,6 +220,37 @@ class SettingsDialog(QDialog):
         self.auto_card_backup_check.toggled.connect(self._on_auto_card_backup_toggled)
         volume_layout.addWidget(self.auto_card_backup_check)
 
+        self.auto_card_steps_edit = QLineEdit()
+        self.auto_card_steps_edit.setPlaceholderText("留空使用上面两个开关；或输入 import,backup,report")
+        self.auto_card_steps_edit.setToolTip(
+            "可选步骤：import, backup, raw_extract, rename, report；按输入顺序执行。"
+        )
+        self.auto_card_steps_label = QLabel("高级 SOP 步骤（逗号分隔）:")
+        volume_layout.addWidget(self.auto_card_steps_label)
+        volume_layout.addWidget(self.auto_card_steps_edit)
+        self.auto_card_raw_output_edit = QLineEdit()
+        self.auto_card_raw_output_edit.setPlaceholderText("raw_extract 步骤的输出目录")
+        self.auto_card_raw_output_label = QLabel("RAW 提取输出目录:")
+        volume_layout.addWidget(self.auto_card_raw_output_label)
+        volume_layout.addWidget(self.auto_card_raw_output_edit)
+        self.auto_card_rename_pattern_edit = QLineEdit()
+        self.auto_card_rename_pattern_edit.setPlaceholderText("rename 步骤的命名模板，例如 {scene}_{number}")
+        self.auto_card_rename_pattern_label = QLabel("自动重命名模板:")
+        volume_layout.addWidget(self.auto_card_rename_pattern_label)
+        volume_layout.addWidget(self.auto_card_rename_pattern_edit)
+        self.auto_card_report_path_edit = QLineEdit()
+        self.auto_card_report_path_edit.setPlaceholderText("report 步骤的 PDF 路径，可留空使用默认目录")
+        self.auto_card_report_path_label = QLabel("自动报告路径:")
+        volume_layout.addWidget(self.auto_card_report_path_label)
+        volume_layout.addWidget(self.auto_card_report_path_edit)
+        for editor in (
+            self.auto_card_steps_edit,
+            self.auto_card_raw_output_edit,
+            self.auto_card_rename_pattern_edit,
+            self.auto_card_report_path_edit,
+        ):
+            editor.editingFinished.connect(self._save_advanced_card_automation)
+
         volume_form = QFormLayout()
         self.auto_card_project_combo = QComboBox()
         self.auto_card_template_combo = QComboBox()
@@ -213,6 +273,14 @@ class SettingsDialog(QDialog):
             self.auto_card_automation_check,
             self.auto_card_import_check,
             self.auto_card_backup_check,
+            self.auto_card_steps_label,
+            self.auto_card_steps_edit,
+            self.auto_card_raw_output_label,
+            self.auto_card_raw_output_edit,
+            self.auto_card_rename_pattern_label,
+            self.auto_card_rename_pattern_edit,
+            self.auto_card_report_path_label,
+            self.auto_card_report_path_edit,
             self.auto_card_project_label,
             self.auto_card_project_combo,
             self.auto_card_template_label,
@@ -318,6 +386,10 @@ class SettingsDialog(QDialog):
         self.auto_card_automation_check.setChecked(config.auto_card_automation_enabled)
         self.auto_card_import_check.setChecked(config.auto_card_import)
         self.auto_card_backup_check.setChecked(config.auto_card_backup)
+        self.auto_card_steps_edit.setText(",".join(config.auto_card_steps))
+        self.auto_card_raw_output_edit.setText(config.auto_card_raw_output_dir)
+        self.auto_card_rename_pattern_edit.setText(config.auto_card_rename_pattern)
+        self.auto_card_report_path_edit.setText(config.auto_card_report_path)
 
     # ===== 使用场景（功能模式开关）=====
 
@@ -558,6 +630,22 @@ class SettingsDialog(QDialog):
     def _on_auto_card_backup_toggled(self, checked: bool):
         config.auto_card_backup = checked
         save_app_settings(auto_card_backup=checked)
+
+    def _save_advanced_card_automation(self):
+        """保存高级 SOP 字段；由编辑完成信号调用，空步骤回退兼容开关。"""
+        from DITWorkstation.Services.card_automation_service import SOP_STEPS
+        raw_steps = [item.strip() for item in self.auto_card_steps_edit.text().split(",") if item.strip()]
+        steps = list(dict.fromkeys(item for item in raw_steps if item in SOP_STEPS))
+        config.auto_card_steps = steps
+        config.auto_card_raw_output_dir = self.auto_card_raw_output_edit.text().strip()
+        config.auto_card_rename_pattern = self.auto_card_rename_pattern_edit.text().strip()
+        config.auto_card_report_path = self.auto_card_report_path_edit.text().strip()
+        save_app_settings(
+            auto_card_steps=steps,
+            auto_card_raw_output_dir=config.auto_card_raw_output_dir,
+            auto_card_rename_pattern=config.auto_card_rename_pattern,
+            auto_card_report_path=config.auto_card_report_path,
+        )
 
     def _on_auto_card_project_changed(self, index: int):
         value = self.auto_card_project_combo.itemData(index) or ""

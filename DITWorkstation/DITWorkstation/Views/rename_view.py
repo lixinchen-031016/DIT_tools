@@ -1,23 +1,39 @@
 """文件重命名页面"""
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QGroupBox, QFormLayout,
-    QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
-    QSpinBox, QComboBox, QProgressBar
-)
-from PySide6.QtCore import Slot, Signal, Qt
 from pathlib import Path
+
+from PySide6.QtCore import Signal, Slot
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QSpinBox,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import RenameRule
 from DITWorkstation.Services.rename_service import RenameService
-from DITWorkstation.Utils import safe_slot, get_db_service, logger, pick_directory
+from DITWorkstation.Utils import get_db_service, logger, pick_directory, safe_slot
 from DITWorkstation.ViewModels import TaskViewModel
-from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
+from DITWorkstation.Views.Styles.theme import (
+    PRIMARY_BUTTON_QSS,
+    SUBTITLE_QSS,
+    TITLE_QSS,
+)
+from DITWorkstation.Views.Widgets.empty_state import (
+    attach_empty_state,
+    sync_empty_state,
+)
 from DITWorkstation.Views.Widgets.error_dialog import show_error
 from DITWorkstation.Views.Widgets.status_panel import StatusPanel
 from DITWorkstation.Views.Widgets.table_factory import make_table
-from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, TITLE_QSS, SUBTITLE_QSS, PRIMARY_BUTTON_QSS
 
 
 class RenameView(QWidget):

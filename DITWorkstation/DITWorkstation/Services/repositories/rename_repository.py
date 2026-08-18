@@ -1,11 +1,10 @@
 """Persistent rename-history operations used by safe rollback."""
-from datetime import datetime
 import json
 import sqlite3
 import uuid
-from typing import Optional
 
 from DITWorkstation.Models import OperationResult, OperationStatus
+from DITWorkstation.Utils import now_local
 
 from .base_repository import BaseRepository
 
@@ -13,7 +12,7 @@ from .base_repository import BaseRepository
 class RenameRepository(BaseRepository):
     """Owns rename history while delegating shared audit writes to the facade."""
 
-    def create(self, mappings: list[tuple[str, str]], project_id: Optional[str] = None) -> OperationResult:
+    def create(self, mappings: list[tuple[str, str]], project_id: str | None = None) -> OperationResult:
         if not mappings:
             return OperationResult(OperationStatus.INVALID, "没有可记录的重命名映射")
         rename_id = str(uuid.uuid4())
@@ -22,7 +21,7 @@ class RenameRepository(BaseRepository):
                 conn.execute(
                     "INSERT INTO rename_history (rename_id, project_id, mappings_json, created_at) "
                     "VALUES (?, ?, ?, ?)",
-                    (rename_id, project_id, json.dumps(mappings, ensure_ascii=False), datetime.now().isoformat()),
+                    (rename_id, project_id, json.dumps(mappings, ensure_ascii=False), now_local().isoformat()),
                 )
                 self._database._record_operation_in_transaction(
                     conn, "文件重命名", f"成功 {len(mappings)} 个", project_id,
@@ -52,7 +51,7 @@ class RenameRepository(BaseRepository):
             with self._transaction() as conn:
                 cursor = conn.execute(
                     "UPDATE rename_history SET reverted_at = ? WHERE rename_id = ? AND reverted_at IS NULL",
-                    (datetime.now().isoformat(), rename_id),
+                    (now_local().isoformat(), rename_id),
                 )
                 if cursor.rowcount != 1:
                     return OperationResult(OperationStatus.CONFLICT, "重命名记录已回退或不存在")

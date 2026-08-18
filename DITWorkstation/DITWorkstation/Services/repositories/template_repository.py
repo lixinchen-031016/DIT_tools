@@ -1,9 +1,8 @@
 """Project and backup template persistence operations."""
-from datetime import datetime
 import json
 import sqlite3
 import uuid
-from typing import Optional
+from datetime import datetime
 
 from DITWorkstation.Models import BackupTemplate, ChecksumAlgorithm, ProjectTemplate
 from DITWorkstation.Utils import logger
@@ -52,7 +51,7 @@ class TemplateRepository(BaseRepository):
             rows = conn.execute("SELECT * FROM project_templates ORDER BY created_at DESC").fetchall()
         return [self._row_to_project_template(row) for row in rows]
 
-    def get_project(self, template_id: str) -> Optional[ProjectTemplate]:
+    def get_project(self, template_id: str) -> ProjectTemplate | None:
         with self._connection() as conn:
             row = conn.execute(
                 "SELECT * FROM project_templates WHERE template_id = ?", (template_id,)
@@ -123,7 +122,7 @@ class TemplateRepository(BaseRepository):
             rows = conn.execute("SELECT * FROM backup_templates ORDER BY created_at DESC").fetchall()
         return [self._row_to_backup_template(row) for row in rows]
 
-    def get_backup(self, template_id: str) -> Optional[BackupTemplate]:
+    def get_backup(self, template_id: str) -> BackupTemplate | None:
         with self._connection() as conn:
             row = conn.execute(
                 "SELECT * FROM backup_templates WHERE template_id = ?", (template_id,)

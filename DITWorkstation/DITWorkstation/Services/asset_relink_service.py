@@ -5,9 +5,9 @@
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Optional
 
 from DITWorkstation.Models import ChecksumAlgorithm, OperationResult, OperationStatus
 from DITWorkstation.Utils import normalize_path
@@ -60,9 +60,9 @@ class AssetRelinkService:
         self,
         project_id: str,
         new_root: str,
-        old_root: Optional[str] = None,
+        old_root: str | None = None,
         verify_checksum: bool = False,
-        cancel_check: Optional[Callable[[], bool]] = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> RelinkPreview:
         root = Path(new_root)
         if not root.is_dir():
@@ -116,7 +116,7 @@ class AssetRelinkService:
     def apply(
         self,
         preview: RelinkPreview,
-        selections: Optional[Iterable[tuple[str, str]]] = None,
+        selections: Iterable[tuple[str, str]] | None = None,
     ) -> OperationResult:
         chosen = dict(selections or (
             (match.asset_id, match.selected_path)
