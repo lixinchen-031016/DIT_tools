@@ -12,9 +12,9 @@ from PySide6.QtCore import Qt, Slot, QTimer
 
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import Project, ShootingLog, MediaAsset
-from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Utils import (
-    format_size, get_db_service, safe_slot, open_in_file_manager, normalize_name_key,
+    format_size, get_db_service, get_metadata_service, safe_slot,
+    open_in_file_manager, normalize_name_key,
 )
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import attach_empty_state, sync_empty_state
@@ -28,7 +28,7 @@ class ShootingLogView(RefreshOnShowView):
     def __init__(self):
         super().__init__()
         self.db_service = get_db_service()
-        self.metadata_service = MetadataService()
+        self.metadata_service = get_metadata_service()
         self.current_project: Project = None
         self.current_log_id: str = None
         self._pending_asset_ids: List[str] = []

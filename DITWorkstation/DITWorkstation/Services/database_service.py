@@ -1,12 +1,9 @@
 """拍摄日志与项目管理服务 - SQLite持久化"""
 import sqlite3
 import threading
-import uuid
-import shutil
 import re
-import json
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -16,12 +13,6 @@ from DITWorkstation.Models import (
     ChecksumAlgorithm, OperationResult, OperationStatus,
 )
 from DITWorkstation.Utils import logger, normalize_path
-from DITWorkstation.Services.repositories.field_registry import (
-    BACKUP_TEMPLATE_FIELDS,
-    PROJECT_FIELDS,
-    PROJECT_TEMPLATE_FIELDS,
-    WORKSPACE_FIELDS,
-)
 from DITWorkstation.Services.repositories.workspace_repository import WorkspaceRepository
 from DITWorkstation.Services.repositories.template_repository import TemplateRepository
 from DITWorkstation.Services.repositories.project_repository import ProjectRepository
@@ -72,6 +63,7 @@ class DatabaseService:
         self.renames = RenameRepository(self)
         self.backup_jobs = BackupJobRepository(self)
         self.tasks = TaskRepository(self)
+        self.cleanup_history()
 
     def _create_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
@@ -833,17 +825,6 @@ class DatabaseService:
         """获取单个项目"""
         return self.projects.get(project_id)
 
-    def _legacy_update_project(self, project_id: str, **kwargs) -> bool:
-        """兼容旧内部调用，委托给当前项目更新入口。"""
-        return bool(self.update_project_result(project_id, **kwargs))
-
-    def _legacy_delete_project(self, project_id: str):
-        """删除项目（事务级联清理 media_assets + shooting_logs + projects）
-
-        注意：backup_jobs 表无 project_id 外键，保留备份历史记录不级联删除。
-        """
-        self.projects.delete_legacy(project_id)
-
     def update_project_result(self, project_id: str, **kwargs) -> OperationResult:
         return self.projects.update_result(project_id, **kwargs)
 
@@ -1000,28 +981,6 @@ class DatabaseService:
     def get_media_asset(self, asset_id: str) -> Optional[MediaAsset]:
         """获取单个素材资产"""
         return self.assets.get(asset_id)
-
-    def _legacy_update_media_asset(self, asset_id: str, **kwargs) -> bool:
-        """兼容旧内部调用，委托给当前素材更新入口。"""
-        return bool(self.update_media_asset_result(asset_id, **kwargs))
-
-    def _legacy_delete_media_asset(self, asset_id: str) -> bool:
-        """删除素材资产"""
-        return self.assets.delete_legacy(asset_id)
-
-    def _legacy_delete_media_assets(self, asset_ids: List[str]) -> int:
-        """批量删除素材资产记录（不触碰磁盘文件），返回成功删除的条数。
-
-        用于「清理文件已丢失的素材」场景：仅移除数据库中失效的路径记录，
-        保持数据库与实际文件系统一致，绝不删除磁盘上的源文件。
-
-        Args:
-            asset_ids: 待删除素材的 asset_id 列表
-
-        Returns:
-            实际删除的记录数量；重复或不存在的 ID 不重复计数。
-        """
-        return self.assets.delete_many_legacy(asset_ids)
 
     def _record_operation_in_transaction(
         self, conn, event: str, detail: str = "", project_id: Optional[str] = None,
@@ -1392,6 +1351,42 @@ class DatabaseService:
         return self.logs.list_recent(
             limit, project_id, event, status, object_type, date_from, date_to,
         )
+
+    def cleanup_history(
+        self,
+        now: Optional[datetime] = None,
+        *,
+        operation_log_retention_days: Optional[int] = None,
+        task_history_limit_per_project: Optional[int] = None,
+    ) -> dict[str, int]:
+        """按保留策略清理审计日志和任务历史。
+
+        清理只影响历史记录，不触碰素材、项目、备份作业或恢复快照。参数可覆盖
+        全局配置，供维护命令和测试传入确定性的时间与容量。
+        """
+        retention_days = (
+            config.operation_log_retention_days
+            if operation_log_retention_days is None else operation_log_retention_days
+        )
+        task_limit = (
+            config.task_history_limit_per_project
+            if task_history_limit_per_project is None else task_history_limit_per_project
+        )
+        if not isinstance(retention_days, int) or isinstance(retention_days, bool) or retention_days <= 0:
+            raise ValueError("operation_log_retention_days 必须是正整数")
+        if not isinstance(task_limit, int) or isinstance(task_limit, bool) or task_limit <= 0:
+            raise ValueError("task_history_limit_per_project 必须是正整数")
+
+        current_time = now or datetime.now()
+        deleted_logs = self.logs.delete_older_than(
+            current_time - timedelta(days=retention_days)
+        )
+        deleted_tasks = self.tasks.prune_per_project(task_limit)
+        if deleted_logs or deleted_tasks:
+            logger.info(
+                f"历史记录清理完成: 操作日志 {deleted_logs} 条，任务历史 {deleted_tasks} 条"
+            )
+        return {"operation_logs": deleted_logs, "task_history": deleted_tasks}
 
     # ===== 统一任务历史 =====
 

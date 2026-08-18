@@ -1,8 +1,9 @@
 """校验和计算服务 - 支持MD5和XXHash64"""
 import hashlib
 import threading
+from collections import OrderedDict
 from pathlib import Path
-from typing import Optional, Callable, Dict
+from typing import Optional, Callable
 
 import xxhash
 
@@ -14,9 +15,16 @@ from DITWorkstation.Utils import logger
 class ChecksumService:
     """校验和计算服务"""
 
-    def __init__(self, buffer_size: int = None):
+    def __init__(self, buffer_size: int = None, cache_size: int = None):
         self.buffer_size = buffer_size or config.checksum_buffer_size
-        self._cache: Dict[str, FileChecksum] = {}
+        self._max_cache_size = (
+            config.checksum_cache_size if cache_size is None else cache_size
+        )
+        if not isinstance(self._max_cache_size, int) or isinstance(self._max_cache_size, bool):
+            raise TypeError("cache_size 必须是正整数")
+        if self._max_cache_size <= 0:
+            raise ValueError("cache_size 必须是正整数")
+        self._cache: OrderedDict[str, FileChecksum] = OrderedDict()
         self._cache_lock = threading.Lock()
 
     def compute_file_checksum(
@@ -49,11 +57,13 @@ class ChecksumService:
         file_key = f"{file_path}_{file_size}_{mtime_ns}_{algorithm.value}"
 
         with self._cache_lock:
-            if file_key in self._cache:
-                cached = self._cache[file_key]
+            cached = self._cache.get(file_key)
+            if cached is not None:
                 if self._is_cache_valid(cached, path):
+                    self._cache.move_to_end(file_key)
                     logger.debug(f"使用缓存的校验和: {file_path}")
                     return cached
+                self._cache.pop(file_key, None)
 
         hash_value = self._compute_hash(
             path, algorithm, file_size, progress_callback, cancel_check
@@ -69,6 +79,9 @@ class ChecksumService:
 
         with self._cache_lock:
             self._cache[file_key] = checksum
+            self._cache.move_to_end(file_key)
+            while len(self._cache) > self._max_cache_size:
+                self._cache.popitem(last=False)
 
         return checksum
 
@@ -302,3 +315,8 @@ class ChecksumService:
         with self._cache_lock:
             self._cache.clear()
             logger.info("校验和缓存已清空")
+
+    def cache_size(self) -> int:
+        """返回当前内存缓存条数。"""
+        with self._cache_lock:
+            return len(self._cache)

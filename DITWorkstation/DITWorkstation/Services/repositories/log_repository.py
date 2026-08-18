@@ -186,6 +186,15 @@ class LogRepository(BaseRepository):
             })
         return results
 
+    def delete_older_than(self, cutoff: datetime) -> int:
+        """删除早于 cutoff 的操作审计日志并返回删除条数。"""
+        with self._transaction() as conn:
+            cursor = conn.execute(
+                "DELETE FROM operation_logs WHERE created_at < ?",
+                (cutoff.isoformat(),),
+            )
+            return cursor.rowcount
+
     @staticmethod
     def _row_to_shooting(row: sqlite3.Row) -> ShootingLog:
         return ShootingLog(

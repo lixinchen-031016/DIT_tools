@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QCompleter
 
 from DITWorkstation.Utils import (
     format_size, get_db_service, safe_slot, logger,
-    open_in_file_manager, pick_save_file,
+    get_report_service, open_in_file_manager, pick_save_file,
 )
 from DITWorkstation.App import config
 from DITWorkstation.App.feature_flags import is_enabled
@@ -651,8 +651,6 @@ class SearchView(RefreshOnShowView):
             QMessageBox.information(self, "提示", "请先搜索，再将结果导出为 CSV")
             return
         from datetime import datetime
-        from DITWorkstation.Services.report_service import ReportService
-
         default_name = f"素材清单_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         path = pick_save_file(
             self, "导出素材清单 CSV", default_name, "CSV 文件 (*.csv);;所有文件 (*)"
@@ -667,7 +665,7 @@ class SearchView(RefreshOnShowView):
 
         def export_task(progress_callback, cancel_check):
             assets = self.db_service.iter_search_assets(**self._current_filters)
-            ReportService().export_assets_csv_iter(
+            get_report_service().export_assets_csv_iter(
                 assets, path, total=self._total, cancel_check=cancel_check,
                 progress_callback=lambda current, total, message: progress_callback(
                     "export", current / total if total else 0.0, message,

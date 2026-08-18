@@ -14,6 +14,7 @@ from DITWorkstation.Utils.common import (
     get_file_stem, calculate_speed, generate_timestamp, generate_log_message,
     normalize_path, normalize_name_key, find_overwrite_conflicts,
     add_recent_path, clear_recent_paths, count_recent_paths,
+    get_metadata_service, get_report_service,
 )
 from DITWorkstation.App import config
 
@@ -358,7 +359,15 @@ class TestMediainfoLibPaths(unittest.TestCase):
         finally:
             if orig is not None:
                 _sys._MEIPASS = orig
-        self.assertFalse(any("_MEIPASS" in p for p in paths))
+            self.assertFalse(any("_MEIPASS" in p for p in paths))
+
+
+class TestSharedServices(unittest.TestCase):
+    """共享服务入口应在同一进程内复用实例。"""
+
+    def test_stateless_services_are_shared(self):
+        self.assertIs(get_metadata_service(), get_metadata_service())
+        self.assertIs(get_report_service(), get_report_service())
 
 
 if __name__ == "__main__":

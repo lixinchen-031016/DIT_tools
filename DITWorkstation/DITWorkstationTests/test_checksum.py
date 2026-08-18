@@ -117,6 +117,46 @@ class TestChecksumService(unittest.TestCase):
         h2 = self.service.compute_file_checksum(str(path)).hash_value
         self.assertEqual(h1, h2)
 
+    def test_cache_has_capacity_limit(self):
+        """缓存达到容量后淘汰最久未使用的条目"""
+        service = ChecksumService(cache_size=1)
+        second_file = os.path.join(self.temp_dir, "second.bin")
+        with open(second_file, "wb") as f:
+            f.write(b"second file")
+
+        service.compute_file_checksum(self.test_file)
+        self.assertEqual(service.cache_size(), 1)
+        service.compute_file_checksum(second_file)
+        self.assertEqual(service.cache_size(), 1)
+
+        # 重新计算第一个文件后，第二个文件应成为唯一的最新条目。
+        service.compute_file_checksum(self.test_file)
+        self.assertEqual(service.cache_size(), 1)
+
+    def test_cache_access_refreshes_lru_order(self):
+        """命中缓存会刷新 LRU 顺序，避免活跃条目被淘汰"""
+        service = ChecksumService(cache_size=2)
+        second_file = os.path.join(self.temp_dir, "second.bin")
+        third_file = os.path.join(self.temp_dir, "third.bin")
+        for path, content in ((second_file, b"second"), (third_file, b"third")):
+            with open(path, "wb") as f:
+                f.write(content)
+
+        service.compute_file_checksum(self.test_file)
+        service.compute_file_checksum(second_file)
+        first = service.compute_file_checksum(self.test_file)
+        service.compute_file_checksum(third_file)
+
+        # 第一个文件刚被访问过，应仍命中缓存并返回同一个对象。
+        self.assertIs(service.compute_file_checksum(self.test_file), first)
+
+    def test_cache_size_rejects_invalid_capacity(self):
+        """缓存容量必须为正整数"""
+        with self.assertRaises(ValueError):
+            ChecksumService(cache_size=0)
+        with self.assertRaises(TypeError):
+            ChecksumService(cache_size=True)
+
     def test_cancel_check_raises_interrupted(self):
         """取消回调返回 True 时中断哈希计算"""
         service = ChecksumService(buffer_size=1024)

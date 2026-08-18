@@ -80,6 +80,22 @@ class TaskRepository(BaseRepository):
             result.append(item)
         return result
 
+    def prune_per_project(self, limit: int = 200) -> int:
+        """每个项目仅保留最近 limit 条任务，返回删除条数。"""
+        limit = max(1, int(limit))
+        with self._transaction() as conn:
+            cursor = conn.execute(
+                "DELETE FROM task_history WHERE task_id IN ("
+                "SELECT task_id FROM ("
+                "SELECT task_id, ROW_NUMBER() OVER ("
+                "PARTITION BY project_id ORDER BY created_at DESC, rowid DESC"
+                ") AS row_number FROM task_history"
+                ") WHERE row_number > ?"
+                ")",
+                (limit,),
+            )
+            return cursor.rowcount
+
     def record_storage_health(
         self, project_id: Optional[str], target_path: str, total_bytes: int, free_bytes: int,
     ) -> bool:

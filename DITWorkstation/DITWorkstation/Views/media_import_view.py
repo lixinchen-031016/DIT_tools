@@ -19,11 +19,11 @@ from DITWorkstation.App.feature_flags import is_enabled
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import Project
 from DITWorkstation.Services.media_import_service import MediaImportService
-from DITWorkstation.Services.thumbnail_service import ThumbnailService, SIZE_LARGE
+from DITWorkstation.Services.thumbnail_service import SIZE_LARGE
 from DITWorkstation.Utils import (
     format_size, get_db_service, pick_directory,
     find_overwrite_conflicts, open_in_file_manager, is_writable_directory,
-    logger,
+    get_thumbnail_service, logger,
 )
 from DITWorkstation.ViewModels import TaskViewModel
 from DITWorkstation.Views.Widgets import WorkspaceProjectSelector, RefreshOnShowView
@@ -54,7 +54,7 @@ class MediaImportView(RefreshOnShowView):
         # 扫描得到的全部文件（含 stat 信息），时间筛选时在此列表上过滤，
         # 避免每次调整时间范围都重新扫描存储卡。
         self._all_scanned_files: list[Path] = []
-        self.thumbnail_service = ThumbnailService()
+        self.thumbnail_service = get_thumbnail_service()
         self._preview_key = ""  # 当前预览的缓存键
         self._setup_ui()
         self._preview_ready.connect(self._on_preview_ready)

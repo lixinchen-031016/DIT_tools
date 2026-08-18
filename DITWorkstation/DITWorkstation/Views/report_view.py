@@ -6,8 +6,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Slot, Qt
 
-from DITWorkstation.Services.report_service import ReportService
-from DITWorkstation.Utils import get_db_service, safe_slot, pick_save_file
+from DITWorkstation.Utils import get_db_service, get_report_service, safe_slot, pick_save_file
 from DITWorkstation.ViewModels import TaskViewModel
 from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
 from DITWorkstation.Views.Widgets.error_dialog import show_error
@@ -21,7 +20,7 @@ class ReportView(RefreshOnShowView):
     def __init__(self):
         super().__init__()
         self.db_service = get_db_service()
-        self.report_service = ReportService()
+        self.report_service = get_report_service()
         self.task_vm = TaskViewModel(self, task_store=self.db_service)
         self.task_vm.finished.connect(self._on_finished)
         self.task_vm.error.connect(self._on_error)

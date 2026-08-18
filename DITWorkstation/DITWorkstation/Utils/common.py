@@ -178,7 +178,9 @@ _MAX_RECENT = 10
 _APP_SETTINGS_KEY = "app_config"
 _PATH_CONFIG_FIELDS = {"db_dir", "report_dir", "log_dir", "thumbnail_cache_dir"}
 _POSITIVE_INT_CONFIG_FIELDS = {
-    "checksum_buffer_size", "max_parallel_copies", "search_page_size", "max_import_workers",
+    "checksum_buffer_size", "checksum_cache_size", "operation_log_retention_days",
+    "task_history_limit_per_project", "max_parallel_copies", "search_page_size",
+    "max_import_workers",
 }
 _settings_load_issue: str | None = None
 
@@ -850,6 +852,10 @@ def get_db_service():
 # ChecksumService 内部维护文件级缓存（path+size+algo -> hash），
 # 多个 Service 实例各自缓存会导致重复计算和内存浪费。
 _shared_checksum_service = None
+_shared_metadata_service = None
+_shared_thumbnail_service = None
+_shared_report_service = None
+_shared_asset_relink_service = None
 
 
 def get_checksum_service():
@@ -869,13 +875,73 @@ def get_checksum_service():
     return _shared_checksum_service
 
 
+def get_metadata_service():
+    """返回共享的无状态元数据服务实例。"""
+    global _shared_metadata_service
+    if _shared_metadata_service is None:
+        with _singleton_lock:
+            if _shared_metadata_service is None:
+                from DITWorkstation.Services.metadata_service import MetadataService
+                _shared_metadata_service = MetadataService()
+    return _shared_metadata_service
+
+
+def get_thumbnail_service():
+    """返回共享的缩略图服务实例。
+
+    该服务管理全局 QThreadPool；统一实例也统一缓存目录和完成信号来源。
+    调用方应在 Qt 应用线程中首次调用。
+    """
+    global _shared_thumbnail_service
+    if _shared_thumbnail_service is None:
+        with _singleton_lock:
+            if _shared_thumbnail_service is None:
+                from DITWorkstation.Services.thumbnail_service import ThumbnailService
+                _shared_thumbnail_service = ThumbnailService()
+    expected_cache_dir = config.effective_thumbnail_dir
+    if _shared_thumbnail_service.cache_dir != expected_cache_dir:
+        _shared_thumbnail_service.set_cache_dir(expected_cache_dir)
+    return _shared_thumbnail_service
+
+
+def get_report_service():
+    """返回共享的报告服务实例，复用字体注册状态。"""
+    global _shared_report_service
+    if _shared_report_service is None:
+        with _singleton_lock:
+            if _shared_report_service is None:
+                from DITWorkstation.Services.report_service import ReportService
+                _shared_report_service = ReportService()
+    return _shared_report_service
+
+
+def get_asset_relink_service(db_service=None, checksum_service=None):
+    """返回素材重新链接服务；显式注入时创建隔离实例供测试使用。"""
+    global _shared_asset_relink_service
+    if db_service is not None or checksum_service is not None:
+        from DITWorkstation.Services.asset_relink_service import AssetRelinkService
+        return AssetRelinkService(
+            db_service or get_db_service(),
+            checksum_service or get_checksum_service(),
+        )
+    if _shared_asset_relink_service is None:
+        with _singleton_lock:
+            if _shared_asset_relink_service is None:
+                from DITWorkstation.Services.asset_relink_service import AssetRelinkService
+                _shared_asset_relink_service = AssetRelinkService(
+                    get_db_service(), get_checksum_service()
+                )
+    return _shared_asset_relink_service
+
+
 def reset_singletons():
-    """重置全局单例（DatabaseService + ChecksumService）。
+    """重置全局服务单例。
 
     供单元测试在 setup/teardown 中调用，确保每个测试使用独立的 DB 实例，
     避免跨测试数据污染。生产代码不应调用此函数。
     """
-    global _shared_db_service, _shared_checksum_service
+    global _shared_db_service, _shared_checksum_service, _shared_metadata_service
+    global _shared_thumbnail_service, _shared_report_service, _shared_asset_relink_service
     with _singleton_lock:
         if _shared_db_service is not None:
             try:
@@ -884,6 +950,10 @@ def reset_singletons():
                 pass
         _shared_db_service = None
         _shared_checksum_service = None
+        _shared_metadata_service = None
+        _shared_thumbnail_service = None
+        _shared_report_service = None
+        _shared_asset_relink_service = None
 
 
 # ===== Qt 槽函数异常安全装饰器 =====

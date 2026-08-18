@@ -14,10 +14,10 @@ from DITWorkstation.App import config
 from DITWorkstation.App.feature_flags import (
     UsageMode, get_usage_mode, set_usage_mode, is_enabled,
 )
-from DITWorkstation.Services.thumbnail_service import ThumbnailService
 from DITWorkstation.Utils import (
     format_size, clear_recent_paths, count_recent_paths, open_in_file_manager,
-    save_app_settings, pick_directory, get_db_service, logger, export_settings, import_settings,
+    save_app_settings, pick_directory, get_db_service, get_thumbnail_service, logger,
+    export_settings, import_settings,
     log_files_summary, delete_log_files,
 )
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS, SUBTITLE_QSS
@@ -30,7 +30,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("设置")
         self.resize(640, 640)
-        self.thumbnail_service = ThumbnailService()
+        self.thumbnail_service = get_thumbnail_service()
         self._setup_ui()
         self._refresh_states()
 

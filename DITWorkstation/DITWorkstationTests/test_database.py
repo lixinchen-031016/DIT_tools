@@ -1469,6 +1469,47 @@ class TestWorkspaceManagement(unittest.TestCase):
         )
         self.assertEqual([row["object_id"] for row in rows], ["job-1"])
 
+    def test_history_cleanup_applies_retention_and_per_project_limit(self):
+        """历史清理删除过期审计日志，并按项目保留最新任务。"""
+        from datetime import timedelta
+
+        now = datetime(2026, 1, 1, 12, 0, 0)
+        project = self.db.create_project(name="历史清理项目")
+        self.db.record_operation("旧操作")
+        self.db.record_operation("新操作")
+
+        task_ids = [
+            self.db.create_task_history(f"任务 {index}", project.project_id)
+            for index in range(3)
+        ]
+        with self.db._transaction() as conn:
+            conn.execute(
+                "UPDATE operation_logs SET created_at = ? WHERE event = ?",
+                ((now - timedelta(days=181)).isoformat(), "旧操作"),
+            )
+            conn.execute(
+                "UPDATE operation_logs SET created_at = ? WHERE event = ?",
+                ((now - timedelta(days=1)).isoformat(), "新操作"),
+            )
+            for index, task_id in enumerate(task_ids):
+                conn.execute(
+                    "UPDATE task_history SET created_at = ? WHERE task_id = ?",
+                    ((now - timedelta(days=3 - index)).isoformat(), task_id),
+                )
+
+        deleted = self.db.cleanup_history(
+            now=now, operation_log_retention_days=180, task_history_limit_per_project=2,
+        )
+        self.assertEqual(deleted, {"operation_logs": 1, "task_history": 1})
+        self.assertEqual(
+            [row["event"] for row in self.db.get_recent_operations(limit=10)],
+            ["新操作"],
+        )
+        self.assertEqual(
+            [row["task_id"] for row in self.db.get_task_history(project.project_id)],
+            [task_ids[2], task_ids[1]],
+        )
+
 
 class TestMissingFileDetection(unittest.TestCase):
     """文件存在性验证与批量删除失效记录（对应素材信息模块的丢失检测功能）"""

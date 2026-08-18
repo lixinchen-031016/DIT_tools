@@ -14,6 +14,28 @@ from .field_registry import MEDIA_ASSET_FIELDS, build_update_clause
 class AssetRepository(BaseRepository):
     """Owns basic media-asset CRUD while recovery flows remain in the facade."""
 
+    _INSERT_SQL = """INSERT INTO media_assets
+       (asset_id, project_id, file_path, file_name, file_size, file_type,
+        asset_type, checksum_algorithm, checksum_value, scene, shot, take, date_imported,
+        date_taken, camera_make, camera_model, backup_locations, log_id,
+        is_working_copy, original_path, width, height, duration_seconds,
+        lens_model, focal_length, video_metadata, rating, tags, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+
+    @staticmethod
+    def _asset_values(asset: MediaAsset) -> tuple:
+        return (
+            asset.asset_id, asset.project_id, asset.file_path, asset.file_name,
+            asset.file_size, asset.file_type, asset.asset_type,
+            asset.checksum_algorithm, asset.checksum_value, asset.scene, asset.shot,
+            asset.take, asset.date_imported.isoformat(),
+            asset.date_taken.isoformat() if asset.date_taken else None,
+            asset.camera_make, asset.camera_model, "|".join(asset.backup_locations),
+            asset.log_id, 1 if asset.is_working_copy else 0, asset.original_path,
+            asset.width, asset.height, asset.duration_seconds, asset.lens_model,
+            asset.focal_length, asset.video_metadata, asset.rating, asset.tags, asset.notes,
+        )
+
     def sync_tags(self, conn, asset_id: str, tags: str) -> None:
         """Synchronize the denormalized comma-separated tags with the relation table."""
         conn.execute("DELETE FROM asset_tags WHERE asset_id = ?", (asset_id,))
@@ -25,24 +47,7 @@ class AssetRepository(BaseRepository):
 
     @staticmethod
     def _insert_asset(conn, asset: MediaAsset) -> None:
-        conn.execute(
-            """INSERT INTO media_assets
-               (asset_id, project_id, file_path, file_name, file_size, file_type,
-                asset_type, checksum_algorithm, checksum_value, scene, shot, take, date_imported,
-                date_taken, camera_make, camera_model, backup_locations, log_id,
-                is_working_copy, original_path, width, height, duration_seconds,
-                lens_model, focal_length, video_metadata, rating, tags, notes)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (asset.asset_id, asset.project_id, asset.file_path, asset.file_name,
-             asset.file_size, asset.file_type, asset.asset_type,
-             asset.checksum_algorithm, asset.checksum_value, asset.scene, asset.shot,
-             asset.take, asset.date_imported.isoformat(),
-             asset.date_taken.isoformat() if asset.date_taken else None,
-             asset.camera_make, asset.camera_model, "|".join(asset.backup_locations),
-             asset.log_id, 1 if asset.is_working_copy else 0, asset.original_path,
-             asset.width, asset.height, asset.duration_seconds, asset.lens_model,
-             asset.focal_length, asset.video_metadata, asset.rating, asset.tags, asset.notes),
-        )
+        conn.execute(AssetRepository._INSERT_SQL, AssetRepository._asset_values(asset))
 
     def create(self, asset: MediaAsset) -> MediaAsset:
         with self._transaction() as conn:
@@ -60,9 +65,20 @@ class AssetRepository(BaseRepository):
             return 0
         try:
             with self._transaction() as conn:
+                conn.executemany(
+                    self._INSERT_SQL, [self._asset_values(asset) for asset in assets]
+                )
+                tag_rows = [
+                    (asset.asset_id, tag)
+                    for asset in assets
+                    for tag in self._database._split_tags(asset.tags)
+                ]
+                if tag_rows:
+                    conn.executemany(
+                        "INSERT OR IGNORE INTO asset_tags (asset_id, tag) VALUES (?, ?)",
+                        tag_rows,
+                    )
                 for asset in assets:
-                    self._insert_asset(conn, asset)
-                    self.sync_tags(conn, asset.asset_id, asset.tags)
                     self._database._sync_asset_fts(
                         conn, asset.asset_id, file_name=asset.file_name, scene=asset.scene,
                         shot=asset.shot, notes=asset.notes, tags=asset.tags,

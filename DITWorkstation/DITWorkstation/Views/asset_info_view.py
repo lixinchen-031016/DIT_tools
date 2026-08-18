@@ -15,11 +15,10 @@ from PySide6.QtGui import QPixmap, QColor
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.App.feature_flags import is_enabled
 from DITWorkstation.Models import RATING_LABELS
-from DITWorkstation.Services.metadata_service import MetadataService
-from DITWorkstation.Services.thumbnail_service import ThumbnailService, SIZE_LARGE
-from DITWorkstation.Services.asset_relink_service import AssetRelinkService
+from DITWorkstation.Services.thumbnail_service import SIZE_LARGE
 from DITWorkstation.Utils import (
-    format_size, get_db_service, safe_slot, logger, WorkerThread,
+    format_size, get_db_service, get_metadata_service, get_thumbnail_service,
+    get_report_service, get_asset_relink_service, safe_slot, logger, WorkerThread,
     open_in_file_manager, pick_directory, pick_save_file,
 )
 from DITWorkstation.ViewModels import TaskViewModel
@@ -63,12 +62,12 @@ class _BatchExifWorker(QThread):
     finished_batch = Signal(int, int)  # success_count, total_count
     error = Signal(str)  # 错误信息（确保异常时 UI 能恢复）
 
-    def __init__(self, db_service, project_id, total):
+    def __init__(self, db_service, project_id, total, metadata_service):
         super().__init__()
         self._db_service = db_service
         self._project_id = project_id
         self._total = total
-        self._metadata_service = MetadataService()
+        self._metadata_service = metadata_service
         self._cancelled = False
 
     def cancel(self):
@@ -153,8 +152,8 @@ class AssetInfoView(RefreshOnShowView):
     def __init__(self):
         super().__init__()
         self.db_service = get_db_service()
-        self.metadata_service = MetadataService()
-        self.thumbnail_service = ThumbnailService()
+        self.metadata_service = get_metadata_service()
+        self.thumbnail_service = get_thumbnail_service()
         self.thumbnail_service.thumbnail_ready.connect(self._on_thumbnail_ready)
         self.current_asset = None
         self._batch_worker = None
@@ -715,8 +714,6 @@ class AssetInfoView(RefreshOnShowView):
             QMessageBox.information(self, "提示", "当前项目没有可导出的素材")
             return
         from datetime import datetime
-        from DITWorkstation.Services.report_service import ReportService
-
         default_name = f"素材清单_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         path = pick_save_file(
             self, "导出素材清单 CSV", default_name, "CSV 文件 (*.csv);;所有文件 (*)"
@@ -730,7 +727,7 @@ class AssetInfoView(RefreshOnShowView):
         self._export_progress_dialog.show()
 
         def export_task(progress_callback, cancel_check):
-            ReportService().export_assets_csv_iter(
+            get_report_service().export_assets_csv_iter(
                 self.db_service.iter_project_assets(project_id), path,
                 total=self._asset_total, cancel_check=cancel_check,
                 progress_callback=lambda current, total, message: progress_callback(
@@ -1146,7 +1143,7 @@ class AssetInfoView(RefreshOnShowView):
         root = pick_directory(self, "选择素材的新根目录", category="relink_root")
         if not root:
             return
-        service = AssetRelinkService(self.db_service)
+        service = get_asset_relink_service()
         preview = service.preview(project_id, root)
         if preview.matched_count == 0:
             QMessageBox.information(
@@ -1546,7 +1543,9 @@ class AssetInfoView(RefreshOnShowView):
         self.batch_progress.setValue(0)
         self.batch_status_label.setText("正在读取 EXIF 信息...")
 
-        self._batch_worker = _BatchExifWorker(self.db_service, project_id, total)
+        self._batch_worker = _BatchExifWorker(
+            self.db_service, project_id, total, self.metadata_service
+        )
         self._batch_worker.progress.connect(self._on_batch_progress)
         self._batch_worker.finished_batch.connect(self._on_batch_finished)
         self._batch_worker.error.connect(self._on_batch_error)

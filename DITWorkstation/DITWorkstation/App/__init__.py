@@ -109,6 +109,11 @@ class AppConfig:
     # 校验和配置
     default_checksum_algorithm: str = "xxhash64"  # xxhash64 或 md5
     checksum_buffer_size: int = 1024 * 1024 * 4  # 4MB 缓冲区
+    checksum_cache_size: int = 10_000  # 校验和内存缓存最大条数
+
+    # 历史记录保留策略
+    operation_log_retention_days: int = 180  # 操作审计日志保留天数
+    task_history_limit_per_project: int = 200  # 每个项目保留的最近任务数
 
     # 备份配置
     max_parallel_copies: int = 4  # 最大并行拷贝数

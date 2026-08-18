@@ -54,6 +54,7 @@ def test_invalid_known_config_values_fall_back_without_dropping_other_settings(t
     target = _patch_settings_path(monkeypatch, tmp_path)
     target.write_text(
         '{"app_config": {"verify_after_copy": "yes", "search_page_size": 0, '
+        '"checksum_cache_size": 0, '
         '"usage_mode": "personal", "future_field": {"enabled": true}}}',
         encoding="utf-8",
     )

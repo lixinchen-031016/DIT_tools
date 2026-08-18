@@ -45,7 +45,7 @@ from DITWorkstation.Services.report_service import ReportService  # noqa: E402
 
 T = TypeVar("T")
 DEFAULT_COUNTS = (10_000, 50_000, 100_000)
-SEED_BATCH_SIZE = 1_000
+SEED_BATCH_SIZE = 5_000
 PAGE_SIZE = 500
 
 

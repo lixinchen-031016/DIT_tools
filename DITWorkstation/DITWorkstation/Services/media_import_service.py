@@ -14,8 +14,8 @@ from DITWorkstation.App import config
 from DITWorkstation.Models import MediaAsset, AssetType, ChecksumAlgorithm
 from DITWorkstation.Services.checksum_service import ChecksumService
 from DITWorkstation.Services.database_service import DatabaseService
-from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Utils import logger, get_checksum_service, normalize_path, scan_files
+from DITWorkstation.Utils import get_metadata_service
 
 
 class MediaImportService:
@@ -28,7 +28,7 @@ class MediaImportService:
     ):
         # 优先使用注入的 checksum_service，否则取全局单例（避免重复计算缓存）
         self.checksum_service = checksum_service or get_checksum_service()
-        self.metadata_service = MetadataService()
+        self.metadata_service = get_metadata_service()
         self.db_service = db_service or DatabaseService()
         # 复制模式唯一命名互斥锁：并发导入同目录时避免文件名竞态
         self._copy_lock = threading.Lock()
