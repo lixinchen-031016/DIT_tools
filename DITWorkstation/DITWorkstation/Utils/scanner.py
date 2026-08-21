@@ -1,6 +1,7 @@
 """统一的可取消文件扫描器。"""
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
@@ -23,11 +24,13 @@ def scan_files(
     base = Path(root)
     if not base.exists():
         raise FileNotFoundError(f"目录不存在: {base}")
+    if cancel_check and cancel_check():
+        raise InterruptedError("文件扫描已取消")
     if base.is_file():
         return [base] if _matches(base, extensions, include_hidden) else []
     allowed = {extension.lower() for extension in extensions} if extensions else None
     files, batch = [], []
-    for path in _iter_scan_paths(base, recursive):
+    for path in _iter_scan_paths(base, recursive, cancel_check):
         if cancel_check and cancel_check():
             raise InterruptedError("文件扫描已取消")
         if not _is_visible_file(path, include_hidden):
@@ -44,9 +47,34 @@ def scan_files(
     return files
 
 
-def _iter_scan_paths(base: Path, recursive: bool):
-    """返回扫描路径迭代器，集中处理递归策略。"""
-    return base.rglob("*") if recursive else base.glob("*")
+def _iter_scan_paths(
+    base: Path,
+    recursive: bool,
+    cancel_check: Callable[[], bool] | None = None,
+):
+    """以可中断的 scandir 遍历返回路径，避免 rglob 卡住取消响应。"""
+    pending = [base]
+    while pending:
+        if cancel_check and cancel_check():
+            raise InterruptedError("文件扫描已取消")
+        directory = pending.pop()
+        try:
+            entries = list(os.scandir(directory))
+        except OSError:
+            continue
+        for entry in reversed(entries):
+            if cancel_check and cancel_check():
+                raise InterruptedError("文件扫描已取消")
+            path = Path(entry.path)
+            yield path
+            if recursive:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(path)
+                except OSError:
+                    continue
+        if not recursive:
+            break
 
 
 def _is_visible_file(path: Path, include_hidden: bool) -> bool:

@@ -26,6 +26,46 @@ class TaskState(str, Enum):
     RECOVERABLE = "recoverable"
 
 
+_ACTIVE_STATES = frozenset((TaskState.IDLE, TaskState.RUNNING, TaskState.CANCELLING))
+
+
+class _WorkerStateMixin:
+    """统一 Worker 状态转换，避免两个线程实现产生不同协议。"""
+
+    def _init_state(self):
+        self._state_lock = threading.Lock()
+        self._state = TaskState.IDLE
+
+    @property
+    def state(self) -> TaskState:
+        with self._state_lock:
+            return self._state
+
+    def _set_state(self, state: TaskState):
+        with self._state_lock:
+            if self._state == state:
+                return
+            self._state = state
+        self.state_changed.emit(state.value)
+
+    def _begin_run(self):
+        # 允许“启动前取消”保留 CANCELLING 状态，避免状态倒退为 RUNNING。
+        with self._state_lock:
+            state = self._state
+        if state == TaskState.IDLE:
+            self._set_state(TaskState.RUNNING)
+
+    def cancel(self):
+        with self._state_lock:
+            if self._state not in _ACTIVE_STATES:
+                return
+            state_changed = self._state != TaskState.CANCELLING
+            self._state = TaskState.CANCELLING
+            self._cancel_event.set()
+        if state_changed:
+            self.state_changed.emit(TaskState.CANCELLING.value)
+
+
 class WorkerSignals(QObject):
     """工作线程信号"""
     progress = Signal(str, float, str)  # target, progress, message
@@ -35,7 +75,7 @@ class WorkerSignals(QObject):
     state_changed = Signal(str)
 
 
-class WorkerThread(QThread):
+class WorkerThread(_WorkerStateMixin, QThread):
     """通用后台工作线程
 
     回调注入采用显式契约：调用方通过 ``inject_progress`` /
@@ -74,8 +114,8 @@ class WorkerThread(QThread):
         self._inject_file_completed = inject_file_completed
         self._inject_cancel_check = inject_cancel_check
         self._result = None
-        self._state = TaskState.IDLE
         self._cancel_event = threading.Event()
+        self._init_state()
         self.thread_finished.connect(self._on_native_finished)
 
     def start(self, priority=QThread.Priority.InheritPriority):
@@ -88,29 +128,11 @@ class WorkerThread(QThread):
         # 调用方已丢弃引用时先释放 self，导致后续 thread_finished 槽位丢失。
         QTimer.singleShot(0, lambda: _running_workers.discard(self))
 
-    @property
-    def state(self) -> TaskState:
-        return self._state
-
-    def cancel(self):
-        """请求取消；目标函数可通过 ``cancel_check`` 感知请求。"""
-        # 终态任务可能仍被界面保留一小段时间；不要让迟到的取消请求
-        # 污染下一次复用或把已完成任务重新解释为 cancelled。
-        if self._state not in (TaskState.IDLE, TaskState.RUNNING, TaskState.CANCELLING):
-            return
-        if self._state in (TaskState.IDLE, TaskState.RUNNING):
-            self._set_state(TaskState.CANCELLING)
-        self._cancel_event.set()
-
     def is_cancelled(self) -> bool:
         return self._cancel_event.is_set()
 
-    def _set_state(self, state: TaskState):
-        self._state = state
-        self.state_changed.emit(state.value)
-
     def run(self):
-        self._set_state(TaskState.RUNNING)
+        self._begin_run()
         try:
             kwargs = dict(self._kwargs)
             if self._inject_cancel_check:
@@ -139,7 +161,7 @@ class WorkerThread(QThread):
         self.file_completed.emit(target, task)
 
 
-class SimpleWorkerThread(QThread):
+class SimpleWorkerThread(_WorkerStateMixin, QThread):
     """简单后台工作线程（支持进度回调）"""
     finished = Signal(object)
     thread_finished = QThread.finished
@@ -152,8 +174,8 @@ class SimpleWorkerThread(QThread):
         self.args = args
         self.kwargs = kwargs
         self._inject_cancel_check = inject_cancel_check
-        self._state = TaskState.IDLE
         self._cancel_event = threading.Event()
+        self._init_state()
         self.thread_finished.connect(self._on_native_finished)
 
     def start(self, priority=QThread.Priority.InheritPriority):
@@ -164,33 +186,22 @@ class SimpleWorkerThread(QThread):
     def _on_native_finished(self):
         QTimer.singleShot(0, lambda: _running_workers.discard(self))
 
-    @property
-    def state(self) -> TaskState:
-        return self._state
-
-    def cancel(self):
-        if self._state not in (TaskState.IDLE, TaskState.RUNNING, TaskState.CANCELLING):
-            return
-        self._cancel_event.set()
-        if self._state in (TaskState.IDLE, TaskState.RUNNING):
-            self._state = TaskState.CANCELLING
-            self.state_changed.emit(self._state.value)
-
     def is_cancelled(self) -> bool:
         return self._cancel_event.is_set()
 
     def run(self):
-        self._state = TaskState.RUNNING
-        self.state_changed.emit(self._state.value)
+        self._begin_run()
         try:
             kwargs = dict(self.kwargs)
             if self._inject_cancel_check:
                 kwargs['cancel_check'] = self.is_cancelled
             result = self.func(*self.args, **kwargs)
-            self._state = TaskState.CANCELLED if self.is_cancelled() else TaskState.COMPLETED
-            self.state_changed.emit(self._state.value)
+            self._set_state(TaskState.CANCELLED if self.is_cancelled() else TaskState.COMPLETED)
             self.finished.emit(result)
         except Exception as e:
-            self._state = TaskState.CANCELLED if self.is_cancelled() or isinstance(e, InterruptedError) else TaskState.FAILED
-            self.state_changed.emit(self._state.value)
+            self._set_state(
+                TaskState.CANCELLED
+                if self.is_cancelled() or isinstance(e, InterruptedError)
+                else TaskState.FAILED
+            )
             self.error.emit(str(e))

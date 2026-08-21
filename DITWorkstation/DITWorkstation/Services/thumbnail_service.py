@@ -15,6 +15,7 @@ import platform
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
@@ -41,6 +42,8 @@ class ThumbnailService(QObject):
         # 复用全局 QThreadPool，限制并发避免大批量导入时抢占资源
         self._pool = QThreadPool.globalInstance()
         self._pool.setMaxThreadCount(4)
+        self._inflight: set[tuple[str, int]] = set()
+        self._inflight_lock = threading.Lock()
         # 视频抽帧依赖系统 ffmpeg（缺失时视频显示占位，不报错）
         self._ffmpeg_available = shutil.which("ffmpeg") is not None
         if not self._ffmpeg_available:
@@ -63,9 +66,19 @@ class ThumbnailService(QObject):
             pix = QPixmap(str(cache_file))
             if not pix.isNull():
                 return pix
-        # 未命中：异步生成
+        # 未命中：同一素材/尺寸只允许一个后台生成任务。
+        request_key = (cache_key, size)
+        with self._inflight_lock:
+            if request_key in self._inflight:
+                return None
+            self._inflight.add(request_key)
         worker = _ThumbnailWorker(self, cache_key, file_path, asset_type, size, cache_file)
-        self._pool.start(worker)
+        try:
+            self._pool.start(worker)
+        except Exception:
+            with self._inflight_lock:
+                self._inflight.discard(request_key)
+            raise
         return None
 
     @property
@@ -79,6 +92,12 @@ class ThumbnailService(QObject):
         path.mkdir(parents=True, exist_ok=True)
         self._cache_dir = path
         logger.info(f"缩略图缓存目录已更新: {path}")
+
+    def close(self):
+        """等待缩略图任务结束，供单例重置/应用退出使用。"""
+        self._pool.waitForDone()
+        with self._inflight_lock:
+            self._inflight.clear()
 
     def cache_size(self) -> int:
         """返回缩略图缓存占用总字节数。"""
@@ -305,15 +324,19 @@ class _ThumbnailWorker(QRunnable):
 
     @Slot()
     def run(self):
-        data = self._service._generate(self._file_path, self._asset_type, self._size)
-        if data is None:
-            return
-        # 写缓存（失败仅记日志，不影响功能）
         try:
-            self._cache_file.write_bytes(data)
-        except OSError as e:
-            logger.warning(f"缩略图缓存写入失败 {self._cache_file}: {e}")
-        pix = QPixmap()
-        pix.loadFromData(data)
-        if not pix.isNull():
-            self._service.thumbnail_ready.emit(self._cache_key, pix)
+            data = self._service._generate(self._file_path, self._asset_type, self._size)
+            if data is None:
+                return
+            # 写缓存（失败仅记日志，不影响功能）
+            try:
+                self._cache_file.write_bytes(data)
+            except OSError as e:
+                logger.warning(f"缩略图缓存写入失败 {self._cache_file}: {e}")
+            pix = QPixmap()
+            pix.loadFromData(data)
+            if not pix.isNull():
+                self._service.thumbnail_ready.emit(self._cache_key, pix)
+        finally:
+            with self._service._inflight_lock:
+                self._service._inflight.discard((self._cache_key, self._size))

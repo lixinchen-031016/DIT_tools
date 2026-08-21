@@ -28,6 +28,7 @@ from DITWorkstation.Utils import (
     format_size,
     get_db_service,
     get_metadata_service,
+    logger,
     normalize_name_key,
     open_in_file_manager,
     safe_slot,
@@ -53,6 +54,7 @@ class ShootingLogView(RefreshOnShowView):
         self._pending_asset_ids: list[str] = []
         self._logs = []
         self._setup_ui()
+        get_data_bus().data_changed.connect(self._on_data_changed)
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
@@ -327,6 +329,21 @@ class ShootingLogView(RefreshOnShowView):
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
         self.selector.refresh()
+
+    @Slot(str)
+    def _on_data_changed(self, event: str):
+        """刷新本视图自己的数据，避免主窗口依赖私有加载方法。"""
+        if not self.isVisible() or event not in {"assets_changed", "logs_changed"}:
+            return
+        try:
+            if event == "assets_changed":
+                self._load_project_assets()
+                if self.current_log_id:
+                    self._load_assets_for_log(self.current_log_id)
+            if event == "logs_changed":
+                self._load_logs()
+        except Exception as exc:
+            logger.warning(f"拍摄日志视图刷新失败: {exc}")
 
     @Slot(object)
     def _on_project_changed(self, project_id):

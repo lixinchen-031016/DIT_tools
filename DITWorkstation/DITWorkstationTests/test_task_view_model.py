@@ -3,7 +3,7 @@ import time
 
 from PySide6.QtCore import QEventLoop, QTimer
 
-from DITWorkstation.Utils.workers import TaskState, WorkerThread
+from DITWorkstation.Utils.workers import SimpleWorkerThread, TaskState, WorkerThread
 from DITWorkstation.ViewModels import TaskViewModel
 
 
@@ -53,6 +53,16 @@ def test_cancel_after_terminal_state_does_not_set_cancel_event():
     worker.cancel()
     assert worker.state is TaskState.COMPLETED
     assert not worker.is_cancelled()
+
+
+def test_simple_worker_uses_same_state_protocol():
+    worker = SimpleWorkerThread(lambda: "done")
+    states = []
+    worker.state_changed.connect(states.append)
+    worker.run()
+    worker.cancel()
+    assert worker.state is TaskState.COMPLETED
+    assert states == [TaskState.RUNNING.value, TaskState.COMPLETED.value]
 
 
 def test_task_view_model_retains_terminal_state_after_completion():

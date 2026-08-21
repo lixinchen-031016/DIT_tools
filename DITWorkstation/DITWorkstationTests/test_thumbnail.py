@@ -158,6 +158,25 @@ class TestThumbnailService(unittest.TestCase):
         old_cache = Path(self.temp_dir) / "appdata" / "thumbnails"
         self.assertNotEqual(self.service.cache_dir, old_cache)
 
+    def test_duplicate_thumbnail_requests_are_deduplicated(self):
+        """同一缓存键/尺寸未完成时只提交一个后台任务。"""
+        started = []
+
+        class FakePool:
+            def start(self, worker):
+                started.append(worker)
+
+            def waitForDone(self):
+                return None
+
+        self.service._pool = FakePool()
+        self.service.get_thumbnail("asset-1", "/missing.jpg", "image", 64)
+        self.service.get_thumbnail("asset-1", "/missing.jpg", "image", 64)
+        self.assertEqual(len(started), 1)
+        started[0].run()
+        self.service.get_thumbnail("asset-1", "/missing.jpg", "image", 64)
+        self.assertEqual(len(started), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -219,6 +219,7 @@ class AssetInfoView(RefreshOnShowView):
         self._setup_ui()
         # 项目切换由共享控件广播到全局，本视图仅需监听后刷新素材列表
         self.selector.project_changed.connect(self._on_project_changed)
+        get_data_bus().data_changed.connect(self._on_data_changed)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -741,6 +742,12 @@ class AssetInfoView(RefreshOnShowView):
         """showEvent 节流后的实际刷新逻辑"""
         self.selector.refresh()
         self._load_assets()
+
+    @Slot(str)
+    def _on_data_changed(self, event: str):
+        """素材数据变更时由本视图负责刷新自身列表。"""
+        if self.isVisible() and event == "assets_changed":
+            self._load_assets()
 
     def _on_project_changed(self, _project_id):
         """项目切换（由共享控件广播）→ 刷新素材列表"""

@@ -1,6 +1,7 @@
 """无头 UI 测试：布局、分页、设置持久化与模板入口（复用 conftest 的 offscreen QApplication）"""
-from PySide6.QtGui import QShortcut
-from PySide6.QtWidgets import QComboBox, QGridLayout, QPushButton
+import pytest
+from PySide6.QtGui import QFont, QShortcut
+from PySide6.QtWidgets import QComboBox, QGridLayout, QPushButton, QWidget
 
 from DITWorkstation.Services.database_service import DatabaseService
 from DITWorkstation.Views.Widgets.workspace_project_selector import (
@@ -206,6 +207,160 @@ def test_task_history_dialog_shows_recoverable_backup_and_retry_entry(tmp_dir):
     dialog.task_table.selectRow(0)
     assert not dialog.retry_btn.isEnabled()
     dialog.close()
+
+
+def test_low_coverage_dialogs_construct_and_validate(tmp_dir):
+    """关键对话框至少能在 offscreen 环境创建并完成基本字段校验。"""
+    from DITWorkstation.Models import BackupTemplate, Project, Workspace
+    from DITWorkstation.Views.Widgets.backup_template_dialog import BackupTemplateDialog
+    from DITWorkstation.Views.Widgets.error_dialog import ErrorDialog
+    from DITWorkstation.Views.Widgets.log_viewer_dialog import LogViewerDialog
+    from DITWorkstation.Views.Widgets.project_template_dialog import (
+        ProjectFromTemplateDialog,
+        SaveProjectAsTemplateDialog,
+    )
+    from DITWorkstation.Views.Widgets.workspace_dialog import WorkspaceDialog
+    from DITWorkstation.Views.Widgets.zoom import ZoomableMixin
+
+    db = DatabaseService(db_path=tmp_dir / "dialogs.db")
+    workspace = Workspace(workspace_id="ws-1", name="测试工作区", path=str(tmp_dir))
+    project = Project(project_id="project-1", name="测试项目", workspace_id="ws-1")
+    backup = BackupTemplate(
+        template_id="backup-1", name="双盘备份", target_paths=["/tmp/A"],
+    )
+
+    error = ErrorDialog("失败", "操作失败", details="traceback")
+    assert error.details_text.toPlainText() == "traceback"
+    error.close()
+
+    workspace_dialog = WorkspaceDialog(workspace=workspace)
+    workspace_dialog.name_edit.setText("新名称")
+    workspace_dialog._on_save()
+    assert workspace_dialog.get_saved_workspace().name == "新名称"
+    workspace_dialog.close()
+
+    backup_dialog = BackupTemplateDialog(template=backup)
+    backup_dialog.name_edit.setText("新备份方案")
+    backup_dialog._save()
+    assert backup_dialog.saved_values["name"] == "新备份方案"
+    backup_dialog.close()
+
+    project_dialog = ProjectFromTemplateDialog(db_service=db, templates=[])
+    assert project_dialog.workspace_combo.count() >= 1
+    project_dialog.close()
+    save_dialog = SaveProjectAsTemplateDialog(project=project)
+    assert "测试项目" in save_dialog.name_edit.text()
+    save_dialog.close()
+
+    log_dialog = LogViewerDialog()
+    assert log_dialog.tabs.count() >= 2
+    log_dialog.close()
+
+    class ZoomProbe(ZoomableMixin, QWidget):
+        pass
+
+    zoom = ZoomProbe()
+    zoom.zoom_in()
+    assert zoom._zoom_factor > 1.0
+    zoom.zoom_reset()
+    assert zoom._zoom_factor == 1.0
+    zoom.close()
+
+
+def test_maybe_show_wizard_executes_only_on_first_run(monkeypatch):
+    from DITWorkstation.Views import first_run_wizard
+
+    class FakeWizard:
+        def __init__(self, parent=None):
+            self.parent = parent
+            self.executed = False
+
+        def exec(self):
+            self.executed = True
+            return 1
+
+    monkeypatch.setattr(first_run_wizard, "should_show_wizard", lambda: True)
+    monkeypatch.setattr(first_run_wizard, "FirstRunWizard", FakeWizard)
+    monkeypatch.setattr(first_run_wizard, "get_db_service", lambda: object())
+    monkeypatch.setattr(first_run_wizard, "ensure_personal_default_workspace_path", lambda _db: None)
+    wizard = first_run_wizard.maybe_show_wizard(parent="parent")
+    assert isinstance(wizard, FakeWizard)
+    assert wizard.executed is True
+
+    monkeypatch.setattr(first_run_wizard, "should_show_wizard", lambda: False)
+    assert first_run_wizard.maybe_show_wizard() is None
+
+
+def test_main_startup_routes_wizard_and_restored_config(monkeypatch):
+    """启动入口应应用配置、创建窗口，并将向导结果路由到导入页。"""
+    import DITWorkstation.main as app_main
+
+    events = []
+
+    class FakeApp:
+        def __init__(self, _argv):
+            self._font = QFont()
+
+        @staticmethod
+        def setHighDpiScaleFactorRoundingPolicy(_policy):
+            events.append("dpi")
+
+        @staticmethod
+        def instance():
+            return None
+
+        def setApplicationName(self, _name):
+            pass
+
+        def setOrganizationName(self, _name):
+            pass
+
+        def setApplicationVersion(self, _version):
+            pass
+
+        def setWindowIcon(self, _icon):
+            pass
+
+        def setFont(self, _font):
+            pass
+
+        def font(self):
+            return self._font
+
+        def exec(self):
+            raise RuntimeError("APP_EXEC")
+
+    class FakeWindow:
+        def __init__(self):
+            self.nav_list = type("Nav", (), {"setCurrentRow": lambda _self, row: events.append(("nav", row))})()
+
+        def show(self):
+            events.append("show")
+
+    class FakeWizard:
+        _created_workspace_id = "ws-created"
+        _created_project_id = "project-created"
+
+    monkeypatch.setattr(app_main, "QApplication", FakeApp)
+    monkeypatch.setattr(app_main.config, "ensure_dirs", lambda: events.append("dirs"))
+    monkeypatch.setattr(app_main, "apply_saved_config", lambda: "recovered.json")
+    monkeypatch.setattr(app_main, "ensure_personal_default_workspace_path", lambda _db: None)
+    monkeypatch.setattr(app_main, "get_db_service", lambda: object())
+    monkeypatch.setattr(app_main, "MainWindow", FakeWindow)
+    monkeypatch.setattr(app_main, "maybe_show_wizard", lambda parent=None: FakeWizard())
+    monkeypatch.setattr(app_main, "apply_global_style", lambda _app: events.append("style"))
+    monkeypatch.setattr(app_main, "get_nav_index", lambda _key: 1)
+    monkeypatch.setattr(app_main, "set_current_workspace", lambda value: events.append(("workspace", value)))
+    monkeypatch.setattr(app_main, "set_current_project", lambda value: events.append(("project", value)))
+    monkeypatch.setattr(app_main.QMessageBox, "warning", lambda *_args: events.append("warning"))
+
+    with pytest.raises(RuntimeError, match="APP_EXEC"):
+        app_main.main()
+    assert events[:4] == ["dirs", "dpi", "warning", "style"]
+    assert "show" in events
+    assert ("workspace", "ws-created") in events
+    assert ("project", "project-created") in events
+    assert ("nav", 1) in events
 
 
 def test_settings_dialog_has_location_and_cleanup_controls(tmp_dir, monkeypatch):

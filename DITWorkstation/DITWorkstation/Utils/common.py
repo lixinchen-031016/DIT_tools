@@ -965,6 +965,20 @@ def reset_singletons():
     global _shared_db_service, _shared_checksum_service, _shared_metadata_service
     global _shared_thumbnail_service, _shared_report_service, _shared_asset_relink_service
     with _singleton_lock:
+        # 先停止仍可能持有数据库/服务引用的后台资源，再关闭数据库连接。
+        for service in (
+            _shared_thumbnail_service,
+            _shared_asset_relink_service,
+            _shared_report_service,
+            _shared_metadata_service,
+            _shared_checksum_service,
+        ):
+            close = getattr(service, "close", None) if service is not None else None
+            if close is not None:
+                try:
+                    close()
+                except Exception as exc:
+                    logger.debug(f"关闭共享服务失败: {exc}")
         if _shared_db_service is not None:
             try:
                 _shared_db_service.close_all()

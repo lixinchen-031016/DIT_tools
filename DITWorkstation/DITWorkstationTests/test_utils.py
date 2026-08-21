@@ -17,6 +17,7 @@ from DITWorkstation.Utils.common import (
     add_recent_path, clear_recent_paths, count_recent_paths,
     get_metadata_service, get_report_service, now_local, now_local_iso,
 )
+from DITWorkstation.Utils.scanner import scan_files
 from DITWorkstation.App import config
 
 
@@ -39,6 +40,15 @@ class TestFormatSize(unittest.TestCase):
     def test_gb(self):
         self.assertEqual(format_size(1024 ** 3), "1.00 GB")
         self.assertEqual(format_size(2.5 * 1024 ** 3), "2.50 GB")
+
+
+class TestScanner(unittest.TestCase):
+    def test_cancel_check_interrupts_directory_walk(self):
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, "nested").mkdir()
+            Path(root, "nested", "clip.cr2").write_bytes(b"raw")
+            with self.assertRaises(InterruptedError):
+                scan_files(root, cancel_check=lambda: True)
 
 
 class TestSanitizeFilename(unittest.TestCase):

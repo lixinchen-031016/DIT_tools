@@ -82,7 +82,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.stack, 1)
 
         bus = get_data_bus()
-        bus.data_changed.connect(self._on_data_changed)
         self._build_shortcuts()
         self._build_status_bar(bus)
         self._build_background_services()
@@ -579,47 +578,6 @@ class MainWindow(QMainWindow):
         self.card_automation_worker = None
         self.status_label_task.setText(f"❌ 相机卡自动处理失败: {error}")
         logger.error(f"相机卡自动处理失败: {error}")
-
-    def _on_data_changed(self, event: str):
-        """
-        跨视图数据变更广播处理。
-
-        各视图的 showEvent 已会刷新项目列表，这里针对联动断链场景：
-        - assets_changed: 切到 log_view/search_view/asset_info_view 时刷新明细
-        - logs_changed: 刷新 import_view 的日志下拉、log_view 的日志列表
-        - projects_changed: 各视图 showEvent 已处理
-
-        本方法由 data_bus 信号触发（非用户主动操作），异常仅记日志不弹框，
-        避免单个子视图的刷新异常中断整个广播链路。
-
-        注意：视图已被 QScrollArea 包裹，stack.currentWidget() 返回的是
-        QScrollArea 而非视图本身，故用 currentIndex + 激活导航列表 key 判断。
-        隐藏页面不在视图栈中，其视图属性仍存在（MVP 全量实例化）但不会被访问。
-        """
-        idx = self.stack.currentIndex()
-        if idx < 0 or idx >= len(self.active_nav_items):
-            return
-        key = self.active_nav_items[idx][0]
-        try:
-            if event in ("assets_changed", "all"):
-                # 素材变更：刷新日志关联面板、检索结果、素材信息
-                if key == "log":
-                    self.log_view._load_project_assets()
-                    if self.log_view.current_log_id:
-                        self.log_view._load_assets_for_log(self.log_view.current_log_id)
-                elif key == "search":
-                    # 不自动重搜（会丢失用户筛选条件），仅提示结果可能过期
-                    pass
-                elif key == "asset_info":
-                    self.asset_info_view._load_assets()
-            if event in ("logs_changed", "all"):
-                # 日志变更：刷新导入视图的日志下拉
-                if key == "import" and self.import_view.current_project:
-                    self.import_view._load_logs(self.import_view.current_project.project_id)
-                elif key == "log":
-                    self.log_view._load_logs()
-        except Exception as e:
-            logger.error(f"_on_data_changed 处理 event={event} 失败: {e}", exc_info=True)
 
     def _apply_style(self):
         """应用样式（主窗口 + 侧栏）。全局 QSS 由 main.py 通过 theme.apply_global_style 注入。"""

@@ -85,6 +85,7 @@ class MediaImportView(RefreshOnShowView):
         # 监听选择控件的 项目切换 信号，做本视图业务联动
         # （工作区/项目下拉与全局信号同步已由 WorkspaceProjectSelector 内部处理）
         self.selector.project_changed.connect(self._on_project_changed)
+        get_data_bus().data_changed.connect(self._on_data_changed)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -393,6 +394,16 @@ class MediaImportView(RefreshOnShowView):
         """showEvent 节流后的实际刷新逻辑"""
         self.selector.refresh()
         self._sync_copy_check_state()
+
+    @Slot(str)
+    def _on_data_changed(self, event: str):
+        """日志数据变更时刷新导入关联下拉框。"""
+        if (
+            self.isVisible()
+            and event == "logs_changed"
+            and self.current_project
+        ):
+            self._load_logs(self.current_project.project_id)
 
     @Slot(object)
     def _on_project_changed(self, project_id):
