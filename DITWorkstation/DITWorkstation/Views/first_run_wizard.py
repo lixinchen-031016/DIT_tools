@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-import sys
+import platform
 
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -66,12 +66,15 @@ _WELCOME_TEXT = (
 )
 
 def _workspace_hint() -> str:
-    """按平台生成工作区示例路径（Windows 盘符 / macOS 挂载点）。"""
-    example = (
-        r"D:\Work\2026SpringAd"
-        if sys.platform == "win32"
-        else "/Volumes/Work/2026SpringAd"
-    )
+    """按平台生成工作区示例路径（Windows 盘符 / macOS 挂载点 / Linux 挂载点）。"""
+    system = platform.system()
+    if system == "Windows":
+        example = r"D:\Work\2026SpringAd"
+    elif system == "Darwin":
+        example = "/Volumes/Work/2026SpringAd"
+    else:
+        # Linux：/mnt 或 /media 为常见外部挂载点
+        example = "/mnt/Work/2026SpringAd"
     return (
         "工作区是项目的父级容器，对应一个物理目录。\n"
         f"示例：工作区「2026 春季广告片」对应目录 {example}。\n"
@@ -102,7 +105,7 @@ _FINISH_TEXT_PERSONAL = (
 )
 
 # 合并后的 SOP 提示（原 3 页内容整合为 1 页，避免向导页数过多）
-_SOP_GUIDE_TEXT = (
+SOP_GUIDE_TEXT = (
     "点击「下一步」后将自动跳转到「媒体导入」视图。\n\n"
     "完整 SOP 操作链提示：\n\n"
     "② 媒体导入\n"
@@ -303,7 +306,7 @@ class _SopGuidePage(QWizardPage):
         super().__init__()
         self.setTitle("SOP 操作链提示")
         layout = QVBoxLayout(self)
-        text = QLabel(_SOP_GUIDE_TEXT)
+        text = QLabel(SOP_GUIDE_TEXT)
         text.setWordWrap(True)
         layout.addWidget(text)
 

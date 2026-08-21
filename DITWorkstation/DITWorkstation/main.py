@@ -58,11 +58,15 @@ def _pick_default_font_point_size() -> int:
 
 
 def _ensure_emoji_font_fallback():
-    """补充 emoji / 符号字体回退，避免 Windows 上导航 emoji 渲染为缺字方块。
+    """补充 emoji / 符号字体回退，避免 Windows 上 emoji 渲染为缺字方块。
 
     Qt 在 setFont 后会按 family 链回退，但默认回退表可能不包含 Segoe UI Emoji。
     这里显式将 Segoe UI Emoji / Segoe UI Symbol / Apple Color Emoji 加入回退链。
     仅在对应字体存在时生效。
+
+    回退策略：
+    1. 尝试 QFont.setFamilies()（PySide6 6.x+），为主字体添加 emoji 字体回退
+    2. 若 setFamilies 不可用，通过 QFont.setStyleHint 设置字体回退策略
     """
     system = platform.system()
     families = QFontDatabase.families()
@@ -80,31 +84,37 @@ def _ensure_emoji_font_fallback():
                 fallback.append(name)
 
     if fallback:
-        # 用 app 全局字体的 substitution 列表插入回退
         app = QApplication.instance()
         if app is not None:
             current = app.font()
-            # QFont.setFamilies 在 PySide6 6.x 支持；若不可用则静默跳过
+            # QFont.setFamilies 在 PySide6 6.x 支持；若不可用则设置 style hint
             set_families = getattr(current, "setFamilies", None)
             if callable(set_families):
                 primary = current.family()
                 set_families([primary] + fallback)
+            else:
+                # 回退：设置 style strategy 让 Qt 自动搜索回退字体
+                current.setStyleStrategy(QFont.PreferMatch)
+                app.setFont(current)
 
 
 def _create_app_icon() -> QIcon:
     """用代码生成应用图标（主蓝色圆角方块 + 白色 D），避免依赖外部资源文件。
 
     跨平台一致：macOS Dock、Windows 任务栏/标题栏、打包后可执行文件图标统一。
+    在深色背景下通过白色描边保持可见性。
     """
     size = 256
+    border = 6  # 白色描边宽度，确保深色 Dock/任务栏上可见
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
-    # 主蓝色圆角方块背景
+    # 白色描边圆角方块（在深色背景下形成轮廓）
     painter.setBrush(QColor("#0a84ff"))
-    painter.setPen(Qt.NoPen)
-    painter.drawRoundedRect(0, 0, size, size, size * 0.22, size * 0.22)
+    painter.setPen(QColor("#ffffff"))
+    painter.drawRoundedRect(border, border, size - 2 * border, size - 2 * border,
+                            size * 0.22, size * 0.22)
     # 白色 "D" 字母
     font = QFont("Helvetica", int(size * 0.6), QFont.Bold)
     painter.setFont(font)

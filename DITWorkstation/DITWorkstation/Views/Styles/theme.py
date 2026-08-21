@@ -354,6 +354,8 @@ def _ensure_checkmark_svg() -> str:
     Qt QSS 的 image: url() 不支持 data URI，必须引用实际文件路径。
     将白色对勾 SVG 写到临时目录，QSS 中引用该路径实现跨平台对勾样式。
     幂等：若文件已存在则直接复用。
+
+    并发安全：先写入临时文件再原子重命名，避免多进程同时写入时文件损坏。
     """
     tmp_dir = tempfile.gettempdir()
     svg_path = os.path.join(tmp_dir, "dit_checkmark.svg")
@@ -365,9 +367,17 @@ def _ensure_checkmark_svg() -> str:
             "stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>"
         )
         try:
-            with open(svg_path, "w", encoding="utf-8") as f:
+            # 先写入临时文件，再原子重命名，避免并发写入导致文件损坏
+            tmp_path = svg_path + ".tmp." + str(os.getpid())
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 f.write(svg_content)
+            os.replace(tmp_path, svg_path)
         except OSError:
+            # 清理可能的临时文件残留
+            try:
+                os.unlink(tmp_path)
+            except (OSError, NameError):
+                pass
             # 写入失败时返回空字符串，回退到纯色块
             return ""
     # 转为 URL 友好路径（Windows 反斜杠需转为正斜杠）

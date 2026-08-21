@@ -509,9 +509,10 @@ def test_main_window_personal_mode_builds_trimmed_nav(tmp_dir, monkeypatch):
         assert "Ctrl+7" in keys
         assert "Ctrl+8" not in keys
         assert "Ctrl+9" not in keys
-        # 隐藏视图仍被实例化（关闭流程/worker 检查依赖视图属性）
-        assert window.view_by_key["log"] is window.log_view
-        assert window.view_by_key["report"] is window.report_view
+        # 个人模式下隐藏视图不被实例化，view_by_key 中无对应条目
+        assert "log" not in window.view_by_key
+        assert "report" not in window.view_by_key
+        assert window.log_view is None
     finally:
         _teardown_main_window(window)
 

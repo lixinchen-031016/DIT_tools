@@ -43,7 +43,7 @@ from DITWorkstation.Utils import get_db_service, logger
 from DITWorkstation.Utils.workers import WorkerThread
 from DITWorkstation.Views.asset_info_view import AssetInfoView
 from DITWorkstation.Views.backup_view import BackupView
-from DITWorkstation.Views.first_run_wizard import _SOP_GUIDE_TEXT, FirstRunWizard
+from DITWorkstation.Views.first_run_wizard import SOP_GUIDE_TEXT, FirstRunWizard
 from DITWorkstation.Views.media_import_view import MediaImportView
 from DITWorkstation.Views.project_dashboard_view import ProjectDashboardView
 from DITWorkstation.Views.raw_extraction_view import RawExtractionView
@@ -105,34 +105,40 @@ class MainWindow(QMainWindow):
         self.nav_list.currentRowChanged.connect(self._on_nav_changed)
 
     def _build_view_stack(self):
-        """实例化视图并按当前功能模式填充内容栈。"""
-        # 右侧内容区：第一版不做视图懒加载，仍实例化全部视图
-        # （关闭事件、后台 worker、数据总线和跨视图跳转直接引用视图属性，
-        #  不实例化隐藏视图会扩大改动范围并可能遗漏后台任务收尾），
-        # 但只把激活视图加入导航和 QStackedWidget。
+        """实例化视图并按当前功能模式填充内容栈。
+
+        个人模式下 ShootingLogView 和 ReportView 不会被实例化，
+        避免不必要的数据库连接、后台线程等资源占用。
+        """
         self.stack = QStackedWidget()
+        # 始终实例化的视图（所有模式下均需要）
         self.dashboard_view = ProjectDashboardView()
         self.import_view = MediaImportView()
         self.backup_view = BackupView()
         self.raw_view = RawExtractionView()
         self.rename_view = RenameView()
-        self.log_view = ShootingLogView()
         self.search_view = SearchView()
         self.asset_info_view = AssetInfoView()
-        self.report_view = ReportView()
+
+        # 按当前激活导航列表条件实例化（个人模式隐藏 log/report）
+        active_keys = {k for k, _, _ in self.active_nav_items}
+        self.log_view = ShootingLogView() if "log" in active_keys else None
+        self.report_view = ReportView() if "report" in active_keys else None
 
         # key → 视图映射：F5 刷新、视图栈填充等索引逻辑统一经由此映射
         self.view_by_key = {
             "dashboard": self.dashboard_view,
             "import": self.import_view,
             "backup": self.backup_view,
-            "log": self.log_view,
             "raw": self.raw_view,
             "rename": self.rename_view,
             "search": self.search_view,
             "asset_info": self.asset_info_view,
-            "report": self.report_view,
         }
+        if self.log_view is not None:
+            self.view_by_key["log"] = self.log_view
+        if self.report_view is not None:
+            self.view_by_key["report"] = self.report_view
 
         # 统一用 QScrollArea 包裹视图，保证内容超出窗口时出现滚动条。
         # addWidget 顺序与 active_nav_items 顺序保持一致（索引即导航行号）。
@@ -257,7 +263,7 @@ class MainWindow(QMainWindow):
 
     def _show_sop_guide(self):
         """弹出 SOP 操作链说明对话框"""
-        QMessageBox.information(self, "SOP 操作链说明", _SOP_GUIDE_TEXT)
+        QMessageBox.information(self, "SOP 操作链说明", SOP_GUIDE_TEXT)
 
     def _show_shortcuts(self):
         """弹出快捷键大全对话框（内容随功能模式裁剪）"""
@@ -381,6 +387,7 @@ class MainWindow(QMainWindow):
 
         用于关闭窗口前判断是否有未完成的长耗时操作（备份/导入/RAW提取/重命名/报告/批量EXIF），
         避免强杀 QThread 导致 DB 写半截或文件拷贝残留。
+        个人模式下隐藏的视图（log/report）为 None，getattr 安全跳过。
         """
         candidates = []
         for view, attr in (
@@ -391,6 +398,8 @@ class MainWindow(QMainWindow):
             (self.report_view, "worker"),
             (self.asset_info_view, "_batch_worker"),
         ):
+            if view is None:
+                continue
             w = getattr(view, attr, None)
             if w is not None and w.isRunning():
                 candidates.append((view, attr, w))
@@ -454,14 +463,17 @@ class MainWindow(QMainWindow):
             return
 
         names = []
-        view_name_map = {
-            id(self.backup_view): "数据备份",
-            id(self.import_view): "媒体导入",
-            id(self.raw_view): "RAW提取",
-            id(self.rename_view): "文件重命名",
-            id(self.report_view): "报告生成",
-            id(self.asset_info_view): "批量EXIF读取",
-        }
+        view_name_map = {}
+        for v, name in (
+            (self.backup_view, "数据备份"),
+            (self.import_view, "媒体导入"),
+            (self.raw_view, "RAW提取"),
+            (self.rename_view, "文件重命名"),
+            (self.report_view, "报告生成"),
+            (self.asset_info_view, "批量EXIF读取"),
+        ):
+            if v is not None:
+                view_name_map[id(v)] = name
         for view, _attr, _w in running:
             names.append(view_name_map.get(id(view), "后台任务"))
         task_text = "、".join(names)

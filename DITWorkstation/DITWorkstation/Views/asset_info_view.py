@@ -101,6 +101,8 @@ class _BatchExifWorker(QThread):
     progress = Signal(int, int, str)  # current, total, message
     finished_batch = Signal(int, int)  # success_count, total_count
     error = Signal(str)  # 错误信息（确保异常时 UI 能恢复）
+    # 保持与 WorkerThread 一致的信号别名，使调用方可以统一用 thread_finished 释放资源
+    thread_finished = QThread.finished
 
     def __init__(self, db_service, project_id, total, metadata_service):
         super().__init__()

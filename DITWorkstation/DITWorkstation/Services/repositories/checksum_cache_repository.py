@@ -26,7 +26,8 @@ class ChecksumCacheRepository(BaseRepository):
                     (now_local().isoformat(), file_path, file_size, mtime_ns, algorithm),
                 )
                 return row["hash_value"]
-        except Exception:
+        except Exception as exc:
+            logger.debug("校验和缓存查询失败: %s", exc)
             return None
 
     def put(
@@ -50,19 +51,22 @@ class ChecksumCacheRepository(BaseRepository):
                     ")",
                     (limit,),
                 )
-        except Exception:
+        except Exception as exc:
+            logger.debug("校验和缓存操作失败: %s", exc)
             return
 
     def clear(self) -> None:
         try:
             with self._transaction() as conn:
                 conn.execute("DELETE FROM checksum_cache")
-        except Exception:
+        except Exception as exc:
+            logger.debug("校验和缓存操作失败: %s", exc)
             return
 
     def count(self) -> int:
         try:
             with self._connection() as conn:
                 return int(conn.execute("SELECT COUNT(*) FROM checksum_cache").fetchone()[0])
-        except Exception:
+        except Exception as exc:
+            logger.debug("校验和缓存计数失败: %s", exc)
             return 0

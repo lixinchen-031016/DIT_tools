@@ -544,7 +544,7 @@ class SettingsDialog(QDialog):
         args = list(sys.argv)
         if getattr(sys, "frozen", False):
             # 打包态：可执行文件自身即应用入口，直接启动
-            exe = sys.executable
+            exe = sys.argv[0]
             args = []
         started = QProcess.startDetached(exe, args)
         if started:

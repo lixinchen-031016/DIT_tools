@@ -1,7 +1,7 @@
 """文件重命名服务
 
 MetadataService 已拆离到 metadata_service.py（两者零耦合）。
-向后兼容：`from rename_service import MetadataService` 仍可用（re-export）。
+向后兼容：MetadataService 已拆离，请直接导入 metadata_service。
 """
 import re
 from collections.abc import Callable
@@ -183,5 +183,5 @@ class RenameService:
 
 
 # 向后兼容：MetadataService 已拆离到 metadata_service.py
-# 现有代码 `from rename_service import MetadataService` 仍可用
-from DITWorkstation.Services.metadata_service import MetadataService  # noqa: F401
+# 不再 re-export 以避免命名空间污染。
+# 请直接 from DITWorkstation.Services.metadata_service import MetadataService

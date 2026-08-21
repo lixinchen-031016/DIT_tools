@@ -26,6 +26,26 @@ def now_local_iso() -> str:
     return now_local().isoformat()
 
 
+def parse_iso_datetime(text: str) -> datetime:
+    """安全解析 ISO-8601 时间戳字符串，兼容 timezone-aware 和 timezone-naive 格式。
+
+    Python 3.10 及以下版本的 datetime.fromisoformat 不支持 'Z' 后缀（UTC），
+    此函数先规范化 'Z' → '+00:00' 再解析，确保跨时区归档 manifest 兼容。
+
+    Args:
+        text: ISO-8601 格式的时间戳字符串（如 '2026-08-21T18:30:00+08:00'）
+
+    Returns:
+        解析后的 datetime 对象（始终带 timezone 信息）
+    """
+    normalized = text.replace("Z", "+00:00").replace("z", "+00:00")
+    dt = datetime.fromisoformat(normalized)
+    if dt.tzinfo is None:
+        # 无时区信息时视为本地时间
+        dt = dt.astimezone()
+    return dt
+
+
 def format_size(size_bytes: int) -> str:
     """格式化文件大小"""
     if size_bytes < 1024:
@@ -777,8 +797,8 @@ class Logger:
             if isinstance(handler, RotatingFileHandler):
                 try:
                     handler.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"关闭日志处理器失败: {exc}")
                 self.logger.removeHandler(handler)
 
     def info(self, message: str):
@@ -982,8 +1002,8 @@ def reset_singletons():
         if _shared_db_service is not None:
             try:
                 _shared_db_service.close_all()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"关闭数据库服务失败: {exc}")
         _shared_db_service = None
         _shared_checksum_service = None
         _shared_metadata_service = None

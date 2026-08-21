@@ -8,8 +8,15 @@ from DITWorkstation.Models import MediaAsset
 from DITWorkstation.Views.Widgets.recycle_bin_dialog import RecycleBinDialog
 
 
-def test_alpha_version_uses_current_date():
-    assert APP_VERSION == f"alpha.{date.today():%Y%m%d}"
+def test_alpha_version_uses_fixed_date():
+    """版本号在模块导入时固定，不随运行日期变化。"""
+    assert APP_VERSION.startswith("alpha.")
+    # 验证版本号格式为 alpha.YYYYMMDD
+    parts = APP_VERSION.split(".")
+    assert len(parts) == 2
+    assert parts[0] == "alpha"
+    assert len(parts[1]) == 8
+    assert parts[1].isdigit()
 
 
 def test_recycle_bin_dialog_lists_and_restores_asset(db_service, project, tmp_path, monkeypatch):

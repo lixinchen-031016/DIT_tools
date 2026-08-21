@@ -1,5 +1,14 @@
-"""应用版本信息。"""
-from datetime import date
+"""应用版本信息。
+
+使用构建时间戳，在模块导入时固定一次，避免每次启动生成不同版本号。
+构建时可通过环境变量 DIT_BUILD_VERSION 覆盖，便于 CI/CD 注入版本号。
+"""
+import os
 
 VERSION_PREFIX = "alpha"
-APP_VERSION = f"{VERSION_PREFIX}.{date.today():%Y%m%d}"
+
+# 默认构建版本：模块导入时固定一次，之后不再变化。
+# 可通过环境变量 DIT_BUILD_VERSION 在 CI/CD 中覆盖为正式版本号。
+_DEFAULT_BUILD = "20260818"
+
+APP_VERSION = os.environ.get("DIT_BUILD_VERSION") or f"{VERSION_PREFIX}.{_DEFAULT_BUILD}"

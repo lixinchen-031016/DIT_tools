@@ -301,7 +301,8 @@ class LogViewerDialog(QDialog):
         if not value:
             return None
         try:
-            parsed = datetime.fromisoformat(value)
+            from DITWorkstation.Utils import parse_iso_datetime
+            parsed = parse_iso_datetime(value)
             if len(value) == 10 and end:
                 return parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
             return parsed
