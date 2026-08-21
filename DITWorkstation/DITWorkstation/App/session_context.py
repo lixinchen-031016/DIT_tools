@@ -79,23 +79,37 @@ def set_current_workspace(workspace_id):
       - 广播 data_changed("all") 触发各视图刷新
     """
     global _current_workspace_id, _current_project_id
+    # 先拍摄状态快照；数据库查询不应阻塞全局状态锁。
     with _state_lock:
         if _current_workspace_id == workspace_id:
             return
         _current_workspace_id = workspace_id
+        project_id = _current_project_id
 
-        # 当前项目若不属于新工作区则清除
-        if workspace_id is not None and _current_project_id is not None:
-            try:
-                proj = get_db_service().get_project(_current_project_id)
-                if proj is None or proj.workspace_id != workspace_id:
-                    _current_project_id = None
-            except Exception:
-                _current_project_id = None
+    # 当前项目若不属于新工作区则清除。查询失败时保留选择，避免瞬态
+    # 数据库锁/IO 错误无声地清空用户状态。
+    project_invalid = False
+    if workspace_id is not None and project_id is not None:
+        try:
+            proj = get_db_service().get_project(project_id)
+            project_invalid = proj is None or proj.workspace_id != workspace_id
+        except Exception:
+            project_invalid = False
+
+    with _state_lock:
+        # 若查询期间发生了另一次切换，不覆盖更新后的状态。
+        if (
+            _current_workspace_id == workspace_id
+            and _current_project_id == project_id
+            and project_invalid
+        ):
+            _current_project_id = None
+        project_snapshot = _current_project_id
+        workspace_snapshot = _current_workspace_id
 
     # 信号发射放在锁外，避免槽函数中再次获取锁导致死锁
-    get_data_bus().emit_workspace_focus_changed(workspace_id)
-    get_data_bus().emit_project_focus_changed(_current_project_id)
+    get_data_bus().emit_workspace_focus_changed(workspace_snapshot)
+    get_data_bus().emit_project_focus_changed(project_snapshot)
     get_data_bus().emit_data_changed("all")
 
 
@@ -120,28 +134,36 @@ def set_current_project(project_id):
     保证工作区下拉与项目下拉始终一致。
     """
     global _current_project_id, _current_workspace_id
+    # 查询项目归属不应持有状态锁，否则慢磁盘/WAL 竞争会阻塞所有读写。
+    project_workspace_id = None
+    project_lookup_succeeded = project_id is None
+    if project_id is not None:
+        try:
+            proj = get_db_service().get_project(project_id)
+            project_workspace_id = proj.workspace_id if proj is not None else None
+            project_lookup_succeeded = proj is not None
+        except Exception:
+            project_lookup_succeeded = False
+
     with _state_lock:
         if _current_project_id == project_id:
             return
         _current_project_id = project_id
 
         # 顺带同步工作区：若项目有 workspace_id，把当前工作区切到该项目所属工作区
-        if project_id is not None:
-            try:
-                proj = get_db_service().get_project(project_id)
-                if proj is not None and proj.workspace_id != _current_workspace_id:
-                    _current_workspace_id = proj.workspace_id
-                    _ws_changed = True
-                else:
-                    _ws_changed = False
-            except Exception:
+        if project_id is not None and project_lookup_succeeded:
+            if project_workspace_id != _current_workspace_id:
+                _current_workspace_id = project_workspace_id
+                _ws_changed = True
+            else:
                 _ws_changed = False
         else:
             _ws_changed = False
+        workspace_snapshot = _current_workspace_id
 
     # 信号发射放在锁外，避免槽函数中再次获取锁导致死锁
     if project_id is not None and _ws_changed:
-        get_data_bus().emit_workspace_focus_changed(_current_workspace_id)
+        get_data_bus().emit_workspace_focus_changed(workspace_snapshot)
     get_data_bus().emit_project_focus_changed(project_id)
     # 项目切换也视为数据变更，触发各视图刷新
     get_data_bus().emit_data_changed("all")

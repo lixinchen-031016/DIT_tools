@@ -47,6 +47,14 @@ def test_worker_cancelled_by_cancel_check():
     assert states[-1] == TaskState.CANCELLED.value
 
 
+def test_cancel_after_terminal_state_does_not_set_cancel_event():
+    worker = WorkerThread(lambda: "done")
+    worker.run()
+    worker.cancel()
+    assert worker.state is TaskState.COMPLETED
+    assert not worker.is_cancelled()
+
+
 def test_task_view_model_retains_terminal_state_after_completion():
     vm = TaskViewModel()
     finished = _wait_for_signal(
@@ -89,6 +97,25 @@ def test_task_view_model_persists_history(db_service, project):
     assert rows[0]["state"] == TaskState.COMPLETED.value
     assert rows[0]["output"] == {"result": {"written": 2}}
     assert rows[0]["recovery"]["output_path"] == "/tmp/test.csv"
+
+
+def test_task_view_model_persists_keyword_values(db_service, project):
+    vm = TaskViewModel(task_store=db_service)
+    _wait_for_signal(
+        vm.finished,
+        start=lambda: vm.start(
+            lambda **kwargs: kwargs,
+            task_name="parameter_capture",
+            project_id=project.project_id,
+            output_path="/tmp/export.csv",
+            include_hidden=True,
+        ),
+    )
+    row = db_service.get_task_history(project.project_id)[0]
+    assert row["parameters"]["kwargs"] == {
+        "output_path": "/tmp/export.csv",
+        "include_hidden": True,
+    }
 
 
 def test_worker_cleanup_waits_for_native_thread_completion():

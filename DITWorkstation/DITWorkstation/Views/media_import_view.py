@@ -416,16 +416,25 @@ class MediaImportView(RefreshOnShowView):
             self._update_copy_dest_label()
 
     def _get_current_workspace(self):
-        """返回当前项目所属工作区，个人模式下不依赖隐藏的工作区下拉框。"""
-        if not is_enabled("workspace_selector"):
-            if self.current_project and self.current_project.workspace_id:
-                workspace = self.db_service.get_workspace(
-                    self.current_project.workspace_id
-                )
-                if workspace is not None:
-                    return workspace
-            return self.db_service.get_or_create_default_workspace()
-        return self.selector.get_current_workspace()
+        """返回当前项目所属工作区，作为「复制到工作区」的目标根。
+
+        复制目标固定为 <工作区目录>/<项目名>/，因此必须跟随<当前项目>所属的
+        工作区：无论团队/个人模式，切换项目后目标目录都应随之改变。若仅以
+        选择器选中的工作区为准，当项目来自「全部工作区」列表时目标会停留在
+        旧工作区或不跟随项目。
+        """
+        if self.current_project and self.current_project.workspace_id:
+            workspace = self.db_service.get_workspace(
+                self.current_project.workspace_id
+            )
+            if workspace is not None:
+                return workspace
+        # 当前项目无归属工作区时，依次回退到选择器选中的工作区 / 默认工作区
+        if is_enabled("workspace_selector"):
+            selected = self.selector.get_current_workspace()
+            if selected is not None:
+                return selected
+        return self.db_service.get_or_create_default_workspace()
 
     def _sync_copy_check_state(self):
         """根据当前工作区是否有 path，调整「复制到工作区」复选框与目录选择入口。

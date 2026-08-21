@@ -27,6 +27,7 @@ from DITWorkstation.Views.Styles.theme import (
     SUBTITLE_QSS,
     TITLE_QSS,
 )
+from DITWorkstation.Views.Widgets.base_views import RefreshOnShowView
 from DITWorkstation.Views.Widgets.empty_state import (
     attach_empty_state,
     sync_empty_state,
@@ -36,14 +37,14 @@ from DITWorkstation.Views.Widgets.status_panel import StatusPanel
 from DITWorkstation.Views.Widgets.table_factory import make_table
 
 
-class RenameView(QWidget):
+class RenameView(RefreshOnShowView):
     """文件重命名视图"""
 
     # 跨线程进度信号（current, total, filename），在工作线程发射、主线程消费
     _progress_sig = Signal(int, int, str)
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.rename_service = RenameService()
         # 共享 db_service 单例，用于重命名后同步 DB 中 asset 的 file_path/file_name
         self.db_service = get_db_service()
@@ -213,6 +214,12 @@ class RenameView(QWidget):
         ]
         self.rename_btn.setEnabled(len(self.selected_files) > 0)
         self._preview()
+
+    def _on_show_refresh(self):
+        """重新读取当前目录，避免切回页面后显示已过期的文件列表。"""
+        path = self.folder_edit.text()
+        if path and not self.task_vm.is_running() and Path(path).is_dir():
+            self._scan_folder(path)
 
     def _get_rule(self) -> RenameRule:
         return RenameRule(

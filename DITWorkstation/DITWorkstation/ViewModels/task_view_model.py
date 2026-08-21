@@ -13,6 +13,17 @@ from DITWorkstation.Utils import now_local
 from DITWorkstation.Utils.workers import TaskState, WorkerThread
 
 
+def _history_value(value):
+    """Keep task parameters useful while remaining JSON-serializable."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_history_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _history_value(item) for key, item in value.items()}
+    return repr(value)
+
+
 @dataclass
 class TaskRecord:
     """任务观测基线；后续可直接映射至持久化任务历史。"""
@@ -82,7 +93,13 @@ class TaskViewModel(QObject):
             try:
                 self.current_record.task_id = self.task_store.create_task_history(
                     self.current_record.task_name, project_id,
-                    parameters={"args_count": len(args), "kwargs": sorted(kwargs)},
+                    parameters={
+                        "args_count": len(args),
+                        "kwargs": {
+                            str(key): _history_value(value)
+                            for key, value in kwargs.items()
+                        },
+                    },
                     recovery_info=self.current_record.recovery_info,
                 )
             except Exception:

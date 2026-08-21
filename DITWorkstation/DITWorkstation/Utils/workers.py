@@ -94,6 +94,10 @@ class WorkerThread(QThread):
 
     def cancel(self):
         """请求取消；目标函数可通过 ``cancel_check`` 感知请求。"""
+        # 终态任务可能仍被界面保留一小段时间；不要让迟到的取消请求
+        # 污染下一次复用或把已完成任务重新解释为 cancelled。
+        if self._state not in (TaskState.IDLE, TaskState.RUNNING, TaskState.CANCELLING):
+            return
         if self._state in (TaskState.IDLE, TaskState.RUNNING):
             self._set_state(TaskState.CANCELLING)
         self._cancel_event.set()
@@ -165,6 +169,8 @@ class SimpleWorkerThread(QThread):
         return self._state
 
     def cancel(self):
+        if self._state not in (TaskState.IDLE, TaskState.RUNNING, TaskState.CANCELLING):
+            return
         self._cancel_event.set()
         if self._state in (TaskState.IDLE, TaskState.RUNNING):
             self._state = TaskState.CANCELLING

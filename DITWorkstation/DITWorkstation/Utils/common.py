@@ -914,14 +914,13 @@ def get_thumbnail_service():
     调用方应在 Qt 应用线程中首次调用。
     """
     global _shared_thumbnail_service
-    if _shared_thumbnail_service is None:
-        with _singleton_lock:
-            if _shared_thumbnail_service is None:
-                from DITWorkstation.Services.thumbnail_service import ThumbnailService
-                _shared_thumbnail_service = ThumbnailService()
     expected_cache_dir = config.effective_thumbnail_dir
-    if _shared_thumbnail_service.cache_dir != expected_cache_dir:
-        _shared_thumbnail_service.set_cache_dir(expected_cache_dir)
+    with _singleton_lock:
+        if _shared_thumbnail_service is None:
+            from DITWorkstation.Services.thumbnail_service import ThumbnailService
+            _shared_thumbnail_service = ThumbnailService()
+        if _shared_thumbnail_service.cache_dir != expected_cache_dir:
+            _shared_thumbnail_service.set_cache_dir(expected_cache_dir)
     return _shared_thumbnail_service
 
 
@@ -1049,7 +1048,7 @@ def safe_slot(error_title: str = "操作失败"):
                                 f"{error_title}\n{type(e).__name__}: {e}\n\n"
                                 f"Traceback:\n{traceback.format_exc()}"
                             )
-                except Exception as e:
-                    logger.debug(f"错误对话框/剪贴板操作失败: {e}")
+                except Exception as dialog_error:
+                    logger.debug(f"错误对话框/剪贴板操作失败: {dialog_error}")
         return wrapper
     return decorator
