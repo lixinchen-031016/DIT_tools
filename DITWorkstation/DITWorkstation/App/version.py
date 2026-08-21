@@ -9,6 +9,6 @@ VERSION_PREFIX = "alpha"
 
 # 默认构建版本：模块导入时固定一次，之后不再变化。
 # 可通过环境变量 DIT_BUILD_VERSION 在 CI/CD 中覆盖为正式版本号。
-_DEFAULT_BUILD = "20260818"
+_DEFAULT_BUILD = "V1.0"
 
-APP_VERSION = os.environ.get("DIT_BUILD_VERSION") or f"{VERSION_PREFIX}.{_DEFAULT_BUILD}"
+APP_VERSION = os.environ.get("DIT_BUILD_VERSION") or f"{VERSION_PREFIX}_{_DEFAULT_BUILD}"
