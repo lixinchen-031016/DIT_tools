@@ -349,6 +349,7 @@ class MetadataService:
         # 原子写入：避免进程中断产生半成品
         import tempfile
 
+        tmp_name: str | None = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -358,16 +359,26 @@ class MetadataService:
                 delete=False,
             ) as tmp:
                 tmp.write(xmp_content)
-                if xmp_path.exists():
-                    existing = xmp_path.read_text(encoding="utf-8", errors="replace")
-                    if existing == xmp_content:
-                        Path(tmp.name).unlink(missing_ok=True)
-                        return True
-                Path(tmp.name).replace(str(xmp_path))
-                return True
+                tmp_name = tmp.name
+
+            if xmp_path.exists():
+                existing = xmp_path.read_text(encoding="utf-8", errors="replace")
+                if existing == xmp_content:
+                    Path(tmp_name).unlink(missing_ok=True)
+                    tmp_name = None
+                    return True
+            Path(tmp_name).replace(xmp_path)
+            tmp_name = None
+            return True
         except (OSError, PermissionError) as exc:
             logger.warning(f"XMP 写入失败 {xmp_path}: {exc}")
             return False
+        finally:
+            if tmp_name is not None:
+                try:
+                    Path(tmp_name).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 _XMP_PACKET_BEGIN = "\ufeff"
