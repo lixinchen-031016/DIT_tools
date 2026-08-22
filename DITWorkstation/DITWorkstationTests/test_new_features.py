@@ -265,7 +265,7 @@ class TestXmpWriteback:
         assert svc.write_xmp_sidecar(str(f), rating=3, tags=["日戏"], notes="备注")
         xmp = tmp_dir / "IMG_001.CR3.xmp"
         assert xmp.exists()
-        content = xmp.read_text()
+        content = xmp.read_text(encoding="utf-8")
         assert "<xmp:Rating>3</xmp:Rating>" in content
         assert "日戏" in content
         assert "备注" in content
