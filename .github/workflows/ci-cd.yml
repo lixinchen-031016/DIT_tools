@@ -79,6 +79,7 @@ jobs:
 
       - name: 质量门禁：Ruff 检查
         run: |
+          python -m pip install ruff
           python -m ruff check DITWorkstation/DITWorkstation --output-format=github
           python -m ruff format --check DITWorkstation/DITWorkstation
 
