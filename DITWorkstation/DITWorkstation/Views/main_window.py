@@ -156,22 +156,25 @@ class MainWindow(QMainWindow):
 
     def _build_shortcuts(self):
         """注册全局导航、刷新和取消快捷键。"""
-        QShortcut(QKeySequence("Ctrl+F"), self, activated=self._focus_search)
-        QShortcut(QKeySequence("Ctrl+I"), self, activated=self._focus_import)
-        QShortcut(QKeySequence("Ctrl+B"), self, activated=self._focus_backup)
+
+        def add_shortcut(sequence, callback):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.activated.connect(callback)
+
+        add_shortcut("Ctrl+F", self._focus_search)
+        add_shortcut("Ctrl+I", self._focus_import)
+        add_shortcut("Ctrl+B", self._focus_backup)
         # Ctrl+L 跳拍摄日志仅团队模式注册（个人模式无日志页）
         if is_nav_enabled("log"):
-            QShortcut(QKeySequence("Ctrl+L"), self, activated=self._focus_log)
+            add_shortcut("Ctrl+L", self._focus_log)
         # Ctrl+1~N 切换到对应导航页（N = 激活导航项数量，个人模式为 7）
         for i in range(1, len(self.active_nav_items) + 1):
-            QShortcut(
-                QKeySequence(f"Ctrl+{i}"),
-                self,
-                activated=lambda idx=i - 1: self.nav_list.setCurrentRow(idx),
+            add_shortcut(
+                f"Ctrl+{i}", lambda idx=i - 1: self.nav_list.setCurrentRow(idx)
             )
-        QShortcut(QKeySequence("F5"), self, activated=self._refresh_current_view)
-        QShortcut(QKeySequence("Ctrl+K"), self, activated=self._show_command_palette)
-        QShortcut(QKeySequence("Esc"), self, activated=self._cancel_running_workers)
+        add_shortcut("F5", self._refresh_current_view)
+        add_shortcut("Ctrl+K", self._show_command_palette)
+        add_shortcut("Esc", self._cancel_running_workers)
 
     def _build_status_bar(self, bus):
         """创建状态栏并绑定会话上下文事件。"""
@@ -592,20 +595,6 @@ class MainWindow(QMainWindow):
             self.card_automation_worker.wait(5000)
         super().closeEvent(event)
 
-    def _on_volume_mounted(self, path: str):
-        """检测到存储卡：预填导入视图，并按配置启动自动化流程。"""
-        name = Path(path).name or path
-        self.status_label_task.setText(f"💾 检测到存储卡: {name}")
-        if getattr(config, "auto_detect_volume", True):
-            self._navigate_to("import")
-            self.import_view.set_source_folder(path, auto_scan=True)
-        # 自动化启动条件必须同时满足配置开关与功能模式开关：
-        # 个人模式下即使用户曾在团队模式开启过自动化配置，也不得启动。
-        if getattr(config, "auto_card_automation_enabled", False) and is_enabled(
-            "card_automation"
-        ):
-            self._start_card_automation(path)
-
     def _start_card_automation(self, source_path: str):
         """按设置启动一次相机卡自动任务；同一时间只允许一个自动任务。"""
         if self.card_automation_worker and self.card_automation_worker.isRunning():
@@ -670,30 +659,6 @@ class MainWindow(QMainWindow):
     def _on_card_automation_progress(self, target: str, progress: float, message: str):
         self.status_label_task.setText(f"⚙ {message} ({int(progress * 100)}%)")
 
-    @Slot(object)
-    def _on_card_automation_finished(self, result):
-        self.card_automation_worker = None
-        backup = result.get("backup") if isinstance(result, dict) else None
-        imported = (
-            (result.get("import") or {}).get("imported", 0)
-            if isinstance(result, dict)
-            else 0
-        )
-        backup_text = ""
-        if backup is not None:
-            backup_text = f"，备份状态 {backup.status.value}"
-        self.status_label_task.setText(
-            f"✅ 相机卡自动处理完成：导入 {imported} 个{backup_text}"
-        )
-        if imported:
-            get_data_bus().emit_data_changed("assets_changed")
-
-    @Slot(str)
-    def _on_card_automation_error(self, error: str):
-        self.card_automation_worker = None
-        self.status_label_task.setText(f"❌ 相机卡自动处理失败: {error}")
-        logger.error(f"相机卡自动处理失败: {error}")
-
     def _show_command_palette(self):
         """打开 Ctrl+K 全局命令面板。"""
         from DITWorkstation.Views.Widgets.command_palette import CommandPalette
@@ -707,15 +672,16 @@ class MainWindow(QMainWindow):
 
     def _on_volume_mounted(self, path: str):
         """检测到新存储卡：入多卡队列（去重/防重复处理）。"""
+        if getattr(config, "auto_detect_volume", True):
+            self.status_label_task.setText(
+                f"💾 检测到存储卡: {Path(path).name or path}"
+            )
+            self._navigate_to("import")
+            self.import_view.set_source_folder(path, auto_scan=True)
         if getattr(config, "auto_card_automation_enabled", False) and is_enabled(
             "card_automation"
         ):
             self.card_batch_queue.enqueue(path)
-        elif getattr(config, "auto_detect_volume", True) and is_enabled(
-            "card_automation"
-        ):
-            # 未启用自动任务时，仍跳转导入视图
-            self.status_label_task.setText(f"💾 检测到存储卡: {Path(path).name}")
 
     def _on_card_automation_finished(self, result):
         self.card_automation_worker = None
@@ -782,7 +748,7 @@ class MainWindow(QMainWindow):
                 logger.info(f"发现新版本 {info.version}，当前 {APP_VERSION}")
 
         def _err(exc):
-            logger.debug("启动时更新检查失败: %s", exc)
+            logger.debug(f"启动时更新检查失败: {exc}")
 
         worker.finished.connect(_done)
         worker.error.connect(_err)

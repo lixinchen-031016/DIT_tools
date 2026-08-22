@@ -371,7 +371,7 @@ class RawExtractionView(RefreshOnShowView):
         auto_import = self.auto_import_check.isChecked() and project_id is not None
         imported_count = 0
         log_inherited = 0
-        if auto_import and success > 0:
+        if auto_import and success > 0 and project_id is not None:
             try:
                 imported_count, log_inherited = self._auto_import_extracted(
                     result, project_id

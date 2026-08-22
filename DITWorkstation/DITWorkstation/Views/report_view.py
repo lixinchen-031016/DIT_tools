@@ -172,6 +172,9 @@ class ReportView(RefreshOnShowView):
             return
 
         project = self.db_service.get_project(project_id)
+        if project is None:
+            QMessageBox.warning(self, "提示", "当前项目不存在，请重新选择")
+            return
         output_path = self.output_edit.text().strip() or None
         report_type = self.report_type_combo.currentIndex()
 

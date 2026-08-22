@@ -77,28 +77,27 @@ jobs:
             libx11-6 libxext6 libxrender1 libxcb1 libx11-xcb1 \
             libxau6 libxdmcp6 libfontconfig1 libicu70 libgl1-mesa-dri
 
+      - name: 安装 Python 依赖
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements.txt pytest-cov ruff pyright
+
       - name: 质量门禁：Ruff 检查
         run: |
-          python -m pip install ruff
-          python -m ruff check DITWorkstation/DITWorkstation --output-format=github
-          python -m ruff format --check DITWorkstation/DITWorkstation
+          .venv/bin/python -m ruff check DITWorkstation/DITWorkstation --output-format=github
+          .venv/bin/python -m ruff format --check DITWorkstation/DITWorkstation
 
       - name: 质量门禁：Pyright 类型检查
         run: |
-          python -m pip install pyright
-          python -m pyright DITWorkstation/DITWorkstation
-
-      - name: 安装 Python 依赖
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest-cov
+          .venv/bin/python -m pyright DITWorkstation/DITWorkstation
 
       - name: 运行单元测试 (headless / offscreen)
         env:
           QT_QPA_PLATFORM: offscreen   # conftest 也会默认设置，此处显式保证
         run: |
           cd DITWorkstation
-          pytest DITWorkstationTests/ -v --junitxml=../test-report.xml --cov=DITWorkstation --cov-report=term --cov-fail-under=50
+          ../.venv/bin/pytest DITWorkstationTests/ -v --junitxml=../test-report.xml --cov=DITWorkstation --cov-report=term --cov-fail-under=50
 
       - name: 上传测试报告
         if: always()

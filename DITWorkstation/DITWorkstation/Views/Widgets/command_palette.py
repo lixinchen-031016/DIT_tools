@@ -253,7 +253,7 @@ class CommandPalette(QDialog):
                     }
                 )
         except Exception as exc:
-            logger.debug("命令面板加载工作区失败: %s", exc)
+            logger.debug(f"命令面板加载工作区失败: {exc}")
         try:
             for proj in self.db_service.get_projects():
                 self._all_items.append(
@@ -265,7 +265,7 @@ class CommandPalette(QDialog):
                     }
                 )
         except Exception as exc:
-            logger.debug("命令面板加载项目失败: %s", exc)
+            logger.debug(f"命令面板加载项目失败: {exc}")
         for item in self._all_items:
             self._add_item(item)
 
@@ -338,5 +338,5 @@ class CommandPalette(QDialog):
                     if parent and hasattr(parent, "nav_list"):
                         parent.nav_list.setCurrentRow(idx)
         except Exception as exc:
-            logger.warning("命令面板执行失败: %s", exc)
+            logger.warning(f"命令面板执行失败: {exc}")
             self.close()

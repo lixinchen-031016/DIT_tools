@@ -300,7 +300,8 @@ class MediaImportService:
                 details.append(detail)
                 if status == "imported":
                     imported += 1
-                    assets.append(asset)
+                    if asset is not None:
+                        assets.append(asset)
                 elif status == "skipped":
                     skipped += 1
                 elif status == "failed":

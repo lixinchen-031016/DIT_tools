@@ -435,7 +435,7 @@ class SearchView(RefreshOnShowView):
         self.result_table.setVisible(not timeline_mode)
         self.timeline.setVisible(timeline_mode)
         self.page_bar.setVisible(
-            False if timeline_mode else self._total and self._total > 0
+            bool(not timeline_mode and self._total and self._total > 0)
         )
         if timeline_mode:
             self._timeline_period = (None, None)
@@ -911,10 +911,11 @@ class SearchView(RefreshOnShowView):
 
         def export_task(progress_callback, cancel_check):
             assets = self.db_service.iter_search_assets(**self._current_filters)
+            total = self._total or 0
             get_report_service().export_assets_csv_iter(
                 assets,
                 path,
-                total=self._total,
+                total=total,
                 cancel_check=cancel_check,
                 progress_callback=lambda current, total, message: progress_callback(
                     "export",

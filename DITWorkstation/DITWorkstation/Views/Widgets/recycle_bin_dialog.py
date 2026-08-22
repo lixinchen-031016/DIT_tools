@@ -81,12 +81,14 @@ class RecycleBinDialog(QDialog):
         self.table.setRowCount(len(items))
         for row, item in enumerate(items):
             type_item = QTableWidgetItem(
-                _ENTITY_LABELS.get(item["entity_type"], item["entity_type"])
+                str(_ENTITY_LABELS.get(item["entity_type"], item["entity_type"]))
             )
             type_item.setData(Qt.UserRole, item["recycle_id"])
             self.table.setItem(row, 0, type_item)
-            self.table.setItem(row, 1, QTableWidgetItem(item["entity_id"]))
-            self.table.setItem(row, 2, QTableWidgetItem(item.get("project_id") or ""))
+            self.table.setItem(row, 1, QTableWidgetItem(str(item["entity_id"])))
+            self.table.setItem(
+                row, 2, QTableWidgetItem(str(item.get("project_id") or ""))
+            )
             self.table.setItem(row, 3, QTableWidgetItem(str(item["deleted_at"])))
             self.table.setItem(row, 4, QTableWidgetItem(str(item["expires_at"])))
         self.count_label.setText(f"共 {len(items)} 项")

@@ -132,7 +132,7 @@ def _create_app_icon() -> QIcon:
     font = QFont("Helvetica", int(size * 0.6), QFont.Bold)
     painter.setFont(font)
     painter.setPen(QColor("#ffffff"))
-    painter.drawText(QRect(0, -size * 0.03, size, size), Qt.AlignCenter, "D")
+    painter.drawText(QRect(0, int(-size * 0.03), size, size), Qt.AlignCenter, "D")
     painter.end()
     return QIcon(pixmap)
 

@@ -1096,7 +1096,8 @@ class AssetInfoView(RefreshOnShowView):
             self._on_asset_selected()
 
         if getattr(worker, "_missing_for_cleanup", False):
-            self._confirm_cleanup_missing(project_id)
+            if isinstance(project_id, str):
+                self._confirm_cleanup_missing(project_id)
 
     @Slot(str)
     def _on_missing_scan_error(self, error: str):
@@ -1130,7 +1131,7 @@ class AssetInfoView(RefreshOnShowView):
             return
         row = index.row()
         self.current_asset = self.asset_model.asset_at(row)
-        asset_id = self.current_asset.asset_id if self.current_asset else None
+        asset_id = str(self.current_asset.asset_id) if self.current_asset else ""
         if self.current_asset:
             # 使用最近一次后台扫描结果，避免在 UI 线程访问磁盘。
             is_missing = asset_id in self._missing_ids
@@ -1447,6 +1448,8 @@ class AssetInfoView(RefreshOnShowView):
         self.current_asset = self.db_service.get_media_asset(
             self.current_asset.asset_id
         )
+        if self.current_asset is None:
+            return
         self._sync_rating_buttons(rating)
         try:
             self.db_service.record_operation(
@@ -1623,6 +1626,8 @@ class AssetInfoView(RefreshOnShowView):
         self.current_asset = self.db_service.get_media_asset(
             self.current_asset.asset_id
         )
+        if self.current_asset is None:
+            return
         logger.info(f"已保存素材标签/备注: {self.current_asset.asset_id}")
         try:
             self.db_service.record_operation(
@@ -1732,6 +1737,8 @@ class AssetInfoView(RefreshOnShowView):
             self.current_asset = self.db_service.get_media_asset(
                 self.current_asset.asset_id
             )
+            if self.current_asset is None:
+                return
             self._display_properties(self.current_asset)
             self._load_assets()
             QMessageBox.information(

@@ -12,6 +12,7 @@ CSV 列（英文列头，兼容中文字段别名）：
 
 import csv
 from pathlib import Path
+from typing import Any, Literal, cast
 
 from DITWorkstation.Models import ShootingLog
 from DITWorkstation.Utils import logger, now_local
@@ -31,6 +32,18 @@ CSV_FIELDS = (
     "shutter_speed",
     "notes",
 )
+LogCsvField = Literal[
+    "scene",
+    "shot",
+    "take",
+    "description",
+    "camera",
+    "lens",
+    "iso",
+    "aperture",
+    "shutter_speed",
+    "notes",
+]
 
 # 中文别名 -> 标准字段
 _ALIASES = {
@@ -75,7 +88,9 @@ def export_logs_csv(logs: list, target_path: str) -> bool:
             writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
             writer.writeheader()
             for log in logs:
-                row = {f: getattr(log, f, "") for f in CSV_FIELDS}
+                row: dict[LogCsvField, Any] = {
+                    cast(LogCsvField, f): getattr(log, f, "") for f in CSV_FIELDS
+                }
                 row["iso"] = row["iso"] if row["iso"] else ""
                 writer.writerow(row)
         logger.info(f"拍摄日志导出完成: {target_path} ({len(logs)} 条)")

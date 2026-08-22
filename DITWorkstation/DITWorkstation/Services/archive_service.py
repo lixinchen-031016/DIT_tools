@@ -543,19 +543,19 @@ class ArchiveService:
         self, old_name: str, project_info: dict, workspace_id: str | None
     ) -> Project:
         """创建恢复后的项目；重名时自动追加时间戳后缀避免混淆。"""
+        db_service = self.db_service
+        if db_service is None:
+            raise RuntimeError("恢复项目需要数据库服务")
         ws_id = workspace_id
         if ws_id is None:
-            ws_id = (
-                self.db_service.get_workspace("default").workspace_id
-                if self.db_service.get_workspace("default")
-                else None
-            )
+            workspace = db_service.get_workspace("default")
+            ws_id = workspace.workspace_id if workspace else None
         name = old_name
-        existing = {p.name for p in self.db_service.get_projects(workspace_id=ws_id)}
+        existing = {p.name for p in db_service.get_projects(workspace_id=ws_id)}
         if name in existing:
             name = f"{old_name} (恢复 {now_local().strftime('%Y%m%d%H%M%S')})"
         desc = project_info.get("description", "")
-        return self.db_service.create_project(
+        return db_service.create_project(
             name=name,
             description=f"{desc}\n（由归档恢复）" if desc else "由归档恢复",
             base_path=project_info.get("base_path", ""),

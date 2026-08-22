@@ -98,6 +98,8 @@ class CardAutomationService:
                 break
 
             if step == STEP_BACKUP:
+                if template is None:
+                    raise ValueError("自动备份未选择备份方案")
                 targets = self.backup_service.resolve_template_targets(
                     template.target_paths, source_path
                 )

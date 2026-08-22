@@ -3,6 +3,7 @@
 import hashlib
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 from PySide6.QtCore import QDateTime, Qt, Signal, Slot
 from PySide6.QtGui import QPixmap
@@ -652,8 +653,8 @@ class MediaImportView(RefreshOnShowView):
             return
 
         if self.time_filter_check.isChecked():
-            start = self.start_time_edit.dateTime().toPython()
-            end = self.end_time_edit.dateTime().toPython()
+            start = cast(datetime, self.start_time_edit.dateTime().toPython())
+            end = cast(datetime, self.end_time_edit.dateTime().toPython())
             filtered = []
             for f in self._all_scanned_files:
                 try:

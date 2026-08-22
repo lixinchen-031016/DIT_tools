@@ -67,7 +67,10 @@ class SavedSearchRepository(BaseRepository):
                 ),
             )
         logger.info(f"创建保存搜索: {search_id} - {name}")
-        return self.get(search_id)
+        created = self.get(search_id)
+        if created is None:
+            raise RuntimeError(f"保存搜索创建后无法读取: {search_id}")
+        return created
 
     def list(
         self,

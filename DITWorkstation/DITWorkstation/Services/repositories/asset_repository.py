@@ -365,7 +365,7 @@ class AssetRepository(BaseRepository):
             "SELECT * FROM media_assets WHERE project_id = ? "
             "ORDER BY date_imported DESC, asset_id DESC"
         )
-        params = [project_id]
+        params: list[str | int] = [project_id]
         if limit is not None and limit > 0:
             query += " LIMIT ?"
             params.append(limit)
@@ -438,7 +438,7 @@ class AssetRepository(BaseRepository):
         """Return a keyset page ordered by ``date_imported, asset_id`` descending."""
         page_size = max(1, page_size)
         query = "SELECT * FROM media_assets WHERE project_id = ?"
-        params = [project_id]
+        params: list[str | int] = [project_id]
         if cursor:
             query += " AND (date_imported < ? OR (date_imported = ? AND asset_id < ?))"
             params.extend([cursor[0], cursor[0], cursor[1]])

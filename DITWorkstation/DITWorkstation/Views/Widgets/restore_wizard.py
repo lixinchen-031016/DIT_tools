@@ -74,7 +74,7 @@ class RestoreWizard(QDialog):
             for proj in self.db_service.get_projects():
                 self.project_combo.addItem(proj.name, proj.project_id)
         except Exception as e:
-            logger.warning("加载项目列表失败: %s", e)
+            logger.warning(f"加载项目列表失败: {e}")
         self.project_combo.currentIndexChanged.connect(self._on_project_changed)
         main.addWidget(QLabel("选择项目:"))
         main.addWidget(self.project_combo)
@@ -145,7 +145,7 @@ class RestoreWizard(QDialog):
                         seen.add(loc)
                         self.loc_combo.addItem(loc, loc)
         except Exception as e:
-            logger.warning("加载备份位置失败: %s", e)
+            logger.warning(f"加载备份位置失败: {e}")
         self.restore_btn.setEnabled(True)
 
     def _browse_dest(self):

@@ -150,7 +150,7 @@ class RawExtractionService:
                 continue
 
             try:
-                dest = self._get_unique_dest(output, raw_path)
+                dest: Path | None = self._get_unique_dest(output, raw_path)
 
                 # 边拷贝边计算源校验和：单次读盘，替代「先哈希再拷贝」的两次读盘
                 src_checksum = self.checksum_service.copy_file_with_checksum(
@@ -185,8 +185,9 @@ class RawExtractionService:
                 logger.error(f"RAW提取失败 {raw_path.name}: {e}")
                 # 清理残缺/损坏的目标文件，避免残留半成品
                 try:
-                    dest.unlink(missing_ok=True)
-                except (OSError, UnboundLocalError):
+                    if dest is not None:
+                        dest.unlink(missing_ok=True)
+                except OSError:
                     pass
                 results["details"].append(
                     {
@@ -258,7 +259,7 @@ class RawExtractionService:
                 continue
 
             try:
-                dest = self._get_unique_dest(output, raw_path)
+                dest: Path | None = self._get_unique_dest(output, raw_path)
 
                 # 边拷贝边计算源校验和：单次读盘，替代「先哈希再拷贝」的两次读盘
                 src_checksum = self.checksum_service.copy_file_with_checksum(
@@ -299,8 +300,9 @@ class RawExtractionService:
                     }
                 )
                 try:
-                    dest.unlink(missing_ok=True)
-                except (OSError, UnboundLocalError):
+                    if dest is not None:
+                        dest.unlink(missing_ok=True)
+                except OSError:
                     pass
 
         results["extracted"] = extracted

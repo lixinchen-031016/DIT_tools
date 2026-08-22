@@ -3,7 +3,7 @@
 import os
 import platform
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -169,7 +169,7 @@ class ReportService:
     def generate_backup_report(
         self,
         project: Project | None,
-        jobs: list[BackupJob | dict],
+        jobs: Sequence[BackupJob | dict],
         output_path: str | None = None,
     ) -> str:
         """
@@ -184,7 +184,7 @@ class ReportService:
             报告文件路径
         """
         self._register_fonts()
-        jobs = [self._coerce_backup_job(job) for job in jobs]
+        coerced_jobs = [self._coerce_backup_job(job) for job in jobs]
 
         if not output_path:
             timestamp = now_local().strftime("%Y%m%d_%H%M%S")
@@ -217,7 +217,7 @@ class ReportService:
         project_info = [
             ["项目名称", project.name if project else "未指定"],
             ["报告时间", now_local().strftime("%Y-%m-%d %H:%M:%S")],
-            ["备份任务数", str(len(jobs))],
+            ["备份任务数", str(len(coerced_jobs))],
         ]
         t = Table(project_info, colWidths=[40 * mm, 120 * mm])
         t.setStyle(
@@ -234,7 +234,7 @@ class ReportService:
         elements.append(Spacer(1, 8 * mm))
 
         elements.append(Paragraph("备份任务详情", heading_style))
-        for i, job in enumerate(jobs):
+        for i, job in enumerate(coerced_jobs):
             job_data = [
                 ["任务ID", job.job_id],
                 ["源路径", job.source_path],
@@ -335,11 +335,11 @@ class ReportService:
             str(item.get("status") or "success") for item in records
         )
         event_counts = Counter(str(item.get("event") or "未命名") for item in records)
-        day_counts = Counter(
-            self._safe_datetime(item.get("created_at")).strftime("%Y-%m-%d")
-            for item in records
-            if self._safe_datetime(item.get("created_at"))
-        )
+        day_counts = Counter()
+        for item in records:
+            created = self._safe_datetime(item.get("created_at"))
+            if created is not None:
+                day_counts[created.strftime("%Y-%m-%d")] += 1
         status_labels = {
             "success": "成功",
             "not_found": "未找到",
@@ -368,10 +368,14 @@ class ReportService:
         table.setStyle(self._report_table_style())
         elements.extend([Paragraph("汇总", heading_style), table, Spacer(1, 5 * mm)])
 
-        daily_rows = [["日期", "操作次数"]]
-        daily_rows.extend([list(row) for row in sorted(day_counts.items())])
-        event_rows = [["事件", "次数"]]
-        event_rows.extend([list(row) for row in event_counts.most_common()])
+        daily_rows: list[list[str]] = [["日期", "操作次数"]]
+        daily_rows.extend(
+            [[str(day), str(count)] for day, count in sorted(day_counts.items())]
+        )
+        event_rows: list[list[str]] = [["事件", "次数"]]
+        event_rows.extend(
+            [[str(event), str(count)] for event, count in event_counts.most_common()]
+        )
         for heading, rows in (("按日统计", daily_rows), ("按事件统计", event_rows)):
             table = Table(rows or [["无", "0"]], colWidths=[90 * mm, 35 * mm])
             table.setStyle(self._report_table_style(header=True))
@@ -379,7 +383,7 @@ class ReportService:
                 [Paragraph(heading, heading_style), table, Spacer(1, 5 * mm)]
             )
 
-        detail_rows = [["时间", "事件", "状态", "对象", "详情"]]
+        detail_rows: list[list[object]] = [["时间", "事件", "状态", "对象", "详情"]]
         for item in records:
             created = self._safe_datetime(item.get("created_at"))
             detail_rows.append(

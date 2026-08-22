@@ -34,7 +34,7 @@ class CaptureTimelineWidget(QWidget):
         )
         layout.addWidget(self.summary_label)
 
-        self.scroll = QScrollArea()
+        self.scroll: QScrollArea = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)

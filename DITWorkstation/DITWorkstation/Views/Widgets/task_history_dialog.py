@@ -133,13 +133,14 @@ class TaskHistoryDialog(QDialog):
         }
         self.task_table.setRowCount(len(self._records))
         for row, record in enumerate(self._records):
+            state = str(record.get("state") or "")
             values = [
                 self._format_datetime(record.get("created_at")),
                 record.get("task_name") or "",
                 project_names.get(
                     record.get("project_id"), record.get("project_id") or "—"
                 ),
-                _STATE_LABELS.get(record.get("state"), record.get("state") or ""),
+                _STATE_LABELS.get(state, state),
                 self._format_datetime(record.get("completed_at")),
                 record.get("error_summary") or "",
             ]
@@ -198,7 +199,9 @@ class TaskHistoryDialog(QDialog):
     @safe_slot("重试备份任务失败")
     def _retry_selected(self):
         record = self._selected_record()
-        job_id = self._retry_job_id(record or {})
+        if record is None:
+            return
+        job_id = self._retry_job_id(record)
         if not job_id:
             return
         if self.task_vm.is_running():

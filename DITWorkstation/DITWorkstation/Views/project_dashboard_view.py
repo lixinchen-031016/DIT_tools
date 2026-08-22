@@ -55,7 +55,7 @@ from DITWorkstation.Views.Widgets.project_template_dialog import (
 )
 
 
-def _nav_index(key: str) -> int:
+def _nav_index(key: str) -> int | None:
     """从 navigation 单一事实源查询导航索引"""
     return get_nav_index(key)
 
@@ -612,9 +612,10 @@ class ProjectDashboardView(RefreshOnShowView):
                 "③ 下一步：去「拍摄日志」补录场景/镜头/镜次，并关联已导入的素材。\n"
                 "  提示：可在日志视图用「从代表素材填充 EXIF」自动带出相机/镜头/ISO。"
             )
-        unlinked = asset_count - self._count_assets_with_log(
-            self.selector.get_current_project_id()
-        )
+        current_project_id = self.selector.get_current_project_id()
+        if current_project_id is None:
+            return ""
+        unlinked = asset_count - self._count_assets_with_log(current_project_id)
         if unlinked > 0:
             return (
                 f"⚠ 还有 {unlinked} 个素材未关联到任何拍摄日志。\n"

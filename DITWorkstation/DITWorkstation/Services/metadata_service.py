@@ -366,7 +366,7 @@ class MetadataService:
                 Path(tmp.name).replace(str(xmp_path))
                 return True
         except (OSError, PermissionError) as exc:
-            logger.warning("XMP 写入失败 %s: %s", xmp_path, exc)
+            logger.warning(f"XMP 写入失败 {xmp_path}: {exc}")
             return False
 
 

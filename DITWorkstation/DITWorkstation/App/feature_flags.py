@@ -25,6 +25,7 @@ from enum import Enum
 
 from DITWorkstation.App import config
 from DITWorkstation.App.navigation import NAV_ITEMS
+from DITWorkstation.Utils import logger
 
 
 class UsageMode(str, Enum):
@@ -170,7 +171,7 @@ def ensure_personal_default_workspace_path(db_service) -> str | None:
     if is_team_mode():
         return None
     try:
-        from DITWorkstation.Utils import is_writable_directory, logger
+        from DITWorkstation.Utils import is_writable_directory
 
         ws = db_service.get_or_create_default_workspace()
         if ws.path:

@@ -18,6 +18,8 @@
 - 跨平台：使用标准 QLabel + QSS，无平台依赖
 """
 
+from typing import cast
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QTableView
 
@@ -110,6 +112,6 @@ def _row_count(table: QTableView) -> int:
     """兼容 QTableWidget 与由模型驱动的 QTableView。"""
     row_count = getattr(table, "rowCount", None)
     if callable(row_count):
-        return row_count()
+        return cast(int, row_count())
     model = table.model()
     return model.rowCount() if model is not None else 0

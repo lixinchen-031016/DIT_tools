@@ -471,6 +471,7 @@ def _ensure_checkmark_svg() -> str:
     """生成复选框对勾 SVG 临时文件并返回其路径。"""
     tmp_dir = tempfile.gettempdir()
     svg_path = os.path.join(tmp_dir, "dit_checkmark.svg")
+    tmp_path = ""
     if not os.path.exists(svg_path):
         svg_content = (
             "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' "
