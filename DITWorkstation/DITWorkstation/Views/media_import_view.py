@@ -1,4 +1,5 @@
 """媒体导入页面"""
+
 import hashlib
 from datetime import datetime
 from pathlib import Path
@@ -140,7 +141,9 @@ class MediaImportView(RefreshOnShowView):
         scan_row = QHBoxLayout()
         self.recursive_check = QCheckBox("递归扫描子文件夹")
         self.recursive_check.setChecked(True)
-        self.recursive_check.setToolTip("勾选后会扫描子文件夹中的所有媒体文件。存储卡通常不需要递归。")
+        self.recursive_check.setToolTip(
+            "勾选后会扫描子文件夹中的所有媒体文件。存储卡通常不需要递归。"
+        )
         scan_row.addWidget(self.recursive_check)
 
         self.include_images = QCheckBox("图片")
@@ -227,7 +230,9 @@ class MediaImportView(RefreshOnShowView):
         select_row.addWidget(self.select_invert_btn)
         select_row.addStretch()
         self.selected_label = QLabel("")
-        self.selected_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        self.selected_label.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+        )
         select_row.addWidget(self.selected_label)
         files_layout.addLayout(select_row)
 
@@ -245,7 +250,9 @@ class MediaImportView(RefreshOnShowView):
         # 右键菜单：打开目录 / 复制路径
         self.files_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.files_table.customContextMenuRequested.connect(self._on_files_context_menu)
-        attach_empty_state(self.files_table, "📁", "暂无待导入文件", "点击上方「浏览…」选择存储卡目录")
+        attach_empty_state(
+            self.files_table, "📁", "暂无待导入文件", "点击上方「浏览…」选择存储卡目录"
+        )
 
         # 缩略图预览面板：选中行时显示对应素材缩略图
         preview_panel = QWidget()
@@ -254,7 +261,9 @@ class MediaImportView(RefreshOnShowView):
         preview_layout.setContentsMargins(8, 0, 0, 0)
         preview_layout.setSpacing(8)
         preview_title = QLabel("缩略图预览")
-        preview_title.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        preview_title.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+        )
         preview_layout.addWidget(preview_title)
 
         self.preview_label = QLabel("选中文件后在此预览")
@@ -269,7 +278,9 @@ class MediaImportView(RefreshOnShowView):
 
         self.preview_info = QLabel("")
         self.preview_info.setWordWrap(True)
-        self.preview_info.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        self.preview_info.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+        )
         preview_layout.addWidget(self.preview_info)
 
         # 表格 + 缩略图预览 左右排列（预览面板固定宽度）
@@ -280,7 +291,9 @@ class MediaImportView(RefreshOnShowView):
         files_layout.addLayout(files_row, 1)
 
         self.files_label = QLabel("")
-        self.files_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        self.files_label.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+        )
         files_layout.addWidget(self.files_label)
 
         right_layout.addWidget(files_group, 1)
@@ -298,17 +311,23 @@ class MediaImportView(RefreshOnShowView):
 
         self.checksum_check = QCheckBox("计算校验和")
         self.checksum_check.setChecked(True)
-        self.checksum_check.setToolTip("计算文件校验和（XXHash64），用于后续验证文件完整性和去重。建议勾选。")
+        self.checksum_check.setToolTip(
+            "计算文件校验和（XXHash64），用于后续验证文件完整性和去重。建议勾选。"
+        )
         opt_row1.addWidget(self.checksum_check)
 
         self.copy_mode_check = QCheckBox("复制到工作区")
         self.copy_mode_check.setChecked(False)
-        self.copy_mode_check.setToolTip("勾选后将文件复制到 当前工作区目录/项目名/ 下再导入，原文件保持不动")
+        self.copy_mode_check.setToolTip(
+            "勾选后将文件复制到 当前工作区目录/项目名/ 下再导入，原文件保持不动"
+        )
         opt_row1.addWidget(self.copy_mode_check)
 
         # 复制目标路径提示（只读，自动基于当前工作区.path/<项目名> 生成）
         self.copy_dest_label = QLabel("")
-        self.copy_dest_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        self.copy_dest_label.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+        )
         self.copy_mode_check.toggled.connect(self._on_copy_check_toggled)
         opt_row1.addWidget(self.copy_dest_label, 1)
 
@@ -316,7 +335,9 @@ class MediaImportView(RefreshOnShowView):
         # 个人模式常见（default 工作区初始 path 为空），此时不再禁用复选框，
         # 而是允许用户即时选择目标根目录（步骤2）。
         self.path_picker_btn = QPushButton("选择目录…")
-        self.path_picker_btn.setToolTip("为当前工作区选择本地目录，作为「复制到工作区」的目标根")
+        self.path_picker_btn.setToolTip(
+            "为当前工作区选择本地目录，作为「复制到工作区」的目标根"
+        )
         self.path_picker_btn.clicked.connect(self._on_pick_workspace_path)
         self.path_picker_btn.setVisible(False)
         opt_row1.addWidget(self.path_picker_btn)
@@ -398,11 +419,7 @@ class MediaImportView(RefreshOnShowView):
     @Slot(str)
     def _on_data_changed(self, event: str):
         """日志数据变更时刷新导入关联下拉框。"""
-        if (
-            self.isVisible()
-            and event == "logs_changed"
-            and self.current_project
-        ):
+        if self.isVisible() and event == "logs_changed" and self.current_project:
             self._load_logs(self.current_project.project_id)
 
     @Slot(object)
@@ -435,9 +452,7 @@ class MediaImportView(RefreshOnShowView):
         旧工作区或不跟随项目。
         """
         if self.current_project and self.current_project.workspace_id:
-            workspace = self.db_service.get_workspace(
-                self.current_project.workspace_id
-            )
+            workspace = self.db_service.get_workspace(self.current_project.workspace_id)
             if workspace is not None:
                 return workspace
         # 当前项目无归属工作区时，依次回退到选择器选中的工作区 / 默认工作区
@@ -455,7 +470,7 @@ class MediaImportView(RefreshOnShowView):
           （个人模式 default 工作区初始 path 为空，需提供设置入口而非卡死）
         - 工作区 path 非空：启用并提示目标路径
         """
-        if not hasattr(self, 'copy_mode_check'):
+        if not hasattr(self, "copy_mode_check"):
             return
         ws = self._get_current_workspace()
         if ws is None:
@@ -482,7 +497,7 @@ class MediaImportView(RefreshOnShowView):
 
     def _show_path_picker_button(self, visible: bool):
         """显示/隐藏「选择目录…」按钮（仅当工作区无本地目录时需要）"""
-        if hasattr(self, 'path_picker_btn'):
+        if hasattr(self, "path_picker_btn"):
             self.path_picker_btn.setVisible(visible)
 
     def _choose_workspace_path(self, ws, title: str) -> bool:
@@ -553,7 +568,7 @@ class MediaImportView(RefreshOnShowView):
 
     def _update_copy_dest_label(self):
         """根据当前工作区与项目，更新复制目标路径提示标签"""
-        if not hasattr(self, 'copy_dest_label'):
+        if not hasattr(self, "copy_dest_label"):
             return
         if not self.copy_mode_check.isChecked():
             self.copy_dest_label.setText("")
@@ -561,14 +576,18 @@ class MediaImportView(RefreshOnShowView):
         ws = self._get_current_workspace()
         if ws is None or not ws.path:
             self.copy_dest_label.setText("（请点击「选择目录…」指定复制目标根）")
-            self.copy_dest_label.setStyleSheet(f"color: {COLOR.DANGER}; font-size: {FONT_SIZE.SM}px;")
+            self.copy_dest_label.setStyleSheet(
+                f"color: {COLOR.DANGER}; font-size: {FONT_SIZE.SM}px;"
+            )
             return
         if self.current_project:
             dest = str(Path(ws.path) / self.current_project.name)
         else:
             dest = str(Path(ws.path) / "<项目名>")
         self.copy_dest_label.setText(f"→ {dest}")
-        self.copy_dest_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        self.copy_dest_label.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+        )
 
     def _scan_folder(self):
         folder = self.source_edit.text()
@@ -582,15 +601,18 @@ class MediaImportView(RefreshOnShowView):
                 recursive=self.recursive_check.isChecked(),
                 include_images=self.include_images.isChecked(),
                 include_videos=self.include_videos.isChecked(),
-                include_raw=self.include_raw.isChecked()
+                include_raw=self.include_raw.isChecked(),
             )
             # 保存全量列表，时间筛选时在此列表上过滤，无需重新扫描
             self._all_scanned_files = files
             self._apply_time_filter()
             total_size = sum(f.stat().st_size for f in files if f.exists())
-            self._log(f"扫描完成: 发现 {len(files)} 个媒体文件, 总大小 {format_size(total_size)}")
+            self._log(
+                f"扫描完成: 发现 {len(files)} 个媒体文件, 总大小 {format_size(total_size)}"
+            )
         except Exception as e:
             import traceback
+
             show_error(
                 title="扫描错误",
                 description=str(e),
@@ -610,6 +632,7 @@ class MediaImportView(RefreshOnShowView):
     def _set_time_range_today(self):
         """快捷设置时间范围为今天 00:00 ~ 23:59"""
         from PySide6.QtCore import QTime
+
         d = QDateTime.currentDateTime().date()
         self.start_time_edit.setDateTime(QDateTime(d, QTime(0, 0)))
         self.end_time_edit.setDateTime(QDateTime(d, QTime(23, 59)))
@@ -673,10 +696,16 @@ class MediaImportView(RefreshOnShowView):
                     "video": "🎬 视频",
                     "raw": "📷 RAW",
                     "audio": "🎵 音频",
-                    "other": "📄 其他"
+                    "other": "📄 其他",
                 }
-                self.files_table.setItem(i, 2, QTableWidgetItem(type_map.get(asset_type.value, asset_type.value)))
-                self.files_table.setItem(i, 3, QTableWidgetItem(format_size(stat.st_size)))
+                self.files_table.setItem(
+                    i,
+                    2,
+                    QTableWidgetItem(type_map.get(asset_type.value, asset_type.value)),
+                )
+                self.files_table.setItem(
+                    i, 3, QTableWidgetItem(format_size(stat.st_size))
+                )
                 # 修改时间列（存储 timestamp 供排序，显示友好格式）
                 mtime = datetime.fromtimestamp(stat.st_mtime)
                 mtime_item = QTableWidgetItem(mtime.strftime("%Y-%m-%d %H:%M"))
@@ -721,7 +750,9 @@ class MediaImportView(RefreshOnShowView):
                 item = self.files_table.item(row, 0)
                 if item is None:
                     continue
-                new_state = Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
+                new_state = (
+                    Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
+                )
                 item.setCheckState(new_state)
         finally:
             self.files_table.blockSignals(False)
@@ -732,9 +763,7 @@ class MediaImportView(RefreshOnShowView):
         total = self.files_table.rowCount()
         selected = len(self._selected_files())
         self.selected_label.setText(f"已选 {selected} / {total}")
-        self.import_btn.setEnabled(
-            selected > 0 and self.current_project is not None
-        )
+        self.import_btn.setEnabled(selected > 0 and self.current_project is not None)
 
     def _on_item_changed(self, item):
         """勾选状态变化时刷新计数（避免排序时误触发）。"""
@@ -771,9 +800,9 @@ class MediaImportView(RefreshOnShowView):
 
     def _apply_preview(self, cache_key: str, pixmap: QPixmap):
         self.preview_label.setText("")
-        self.preview_label.setPixmap(pixmap.scaled(
-            240, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation
-        ))
+        self.preview_label.setPixmap(
+            pixmap.scaled(240, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        )
 
     def _on_file_double_clicked(self, index):
         """双击待导入文件 → 打开所在目录（通过表格单元格文本定位，避免排序后行号错位）"""
@@ -842,9 +871,11 @@ class MediaImportView(RefreshOnShowView):
                     names = next(iter(conflicts.values()))
                     preview = "、".join(names[:5]) + ("…" if len(names) > 5 else "")
                     reply = QMessageBox.question(
-                        self, "存在同名文件",
+                        self,
+                        "存在同名文件",
                         f"工作区目标目录中已存在 {len(names)} 个同名文件，继续复制将覆盖：\n\n  · {preview}\n\n是否继续？",
-                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No,
                     )
                     if reply != QMessageBox.Yes:
                         self._log("用户取消导入：工作区目录存在同名文件")
@@ -881,7 +912,10 @@ class MediaImportView(RefreshOnShowView):
             inject_progress=True,
             task_name="媒体导入",
             project_id=self.current_project.project_id,
-            recovery_info={"source_path": self.source_edit.text(), "file_count": len(selected_files)},
+            recovery_info={
+                "source_path": self.source_edit.text(),
+                "file_count": len(selected_files),
+            },
         )
 
         self._log("开始导入...")
@@ -913,24 +947,30 @@ class MediaImportView(RefreshOnShowView):
             QMessageBox.warning(self, "导入异常", "导入任务返回了异常结果，请重试。")
             return
 
-        imported = result.get('imported', 0)
-        skipped = result.get('skipped', 0)
-        failed = result.get('failed', 0)
-        cancelled = result.get('cancelled', False)
+        imported = result.get("imported", 0)
+        skipped = result.get("skipped", 0)
+        failed = result.get("failed", 0)
+        cancelled = result.get("cancelled", False)
 
         if cancelled:
             self.status_label.setText(
                 f"⚠️ 已取消: 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个"
             )
-            self._log(f"导入已取消: 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个")
+            self._log(
+                f"导入已取消: 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个"
+            )
         else:
             self.status_label.setText(
                 f"✅ 导入完成: 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个"
             )
-            self._log(f"导入完成: 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个")
+            self._log(
+                f"导入完成: 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个"
+            )
 
         if failed > 0:
-            fail_details = [d for d in result.get('details', []) if d.get('status') == 'failed']
+            fail_details = [
+                d for d in result.get("details", []) if d.get("status") == "failed"
+            ]
             for d in fail_details[:5]:
                 self._log(f"  失败: {d['path']} - {d.get('error', '未知错误')}")
 
@@ -941,7 +981,9 @@ class MediaImportView(RefreshOnShowView):
         msg_box = QMessageBox(self)
         msg_box.setIcon(QMessageBox.Information)
         msg_box.setWindowTitle("导入完成")
-        msg_box.setText(f"导入完成！\n\n成功: {imported} 个\n跳过: {skipped} 个\n失败: {failed} 个")
+        msg_box.setText(
+            f"导入完成！\n\n成功: {imported} 个\n跳过: {skipped} 个\n失败: {failed} 个"
+        )
         goto_backup_btn = msg_box.addButton("去数据备份", QMessageBox.AcceptRole)
         ok_btn = msg_box.addButton("确定", QMessageBox.RejectRole)
         msg_box.setDefaultButton(ok_btn)
@@ -951,7 +993,7 @@ class MediaImportView(RefreshOnShowView):
                 main_window = self.window()
                 backup_idx = get_nav_index("backup")
                 # 目标页未激活时 get_nav_index 返回 None，禁止传给 setCurrentRow
-                if hasattr(main_window, 'nav_list') and backup_idx is not None:
+                if hasattr(main_window, "nav_list") and backup_idx is not None:
                     main_window.nav_list.setCurrentRow(backup_idx)
             except Exception as e:
                 logger.warning(f"跳转备份视图失败: {e}")

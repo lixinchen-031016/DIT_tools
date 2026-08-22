@@ -1,4 +1,5 @@
 """主窗口与导航框架"""
+
 from pathlib import Path
 
 from PySide6.QtCore import QSize, QTimer, Slot
@@ -164,7 +165,8 @@ class MainWindow(QMainWindow):
         # Ctrl+1~N 切换到对应导航页（N = 激活导航项数量，个人模式为 7）
         for i in range(1, len(self.active_nav_items) + 1):
             QShortcut(
-                QKeySequence(f"Ctrl+{i}"), self,
+                QKeySequence(f"Ctrl+{i}"),
+                self,
                 activated=lambda idx=i - 1: self.nav_list.setCurrentRow(idx),
             )
         QShortcut(QKeySequence("F5"), self, activated=self._refresh_current_view)
@@ -206,7 +208,9 @@ class MainWindow(QMainWindow):
         self.volume_monitor = VolumeMonitor(self)
         self.volume_monitor.volume_mounted.connect(self._on_volume_mounted)
         self.volume_monitor.start()
-        self.card_automation_service = CardAutomationService(self.backup_view.db_service)
+        self.card_automation_service = CardAutomationService(
+            self.backup_view.db_service
+        )
         # 多卡批处理队列
         self.card_batch_queue = CardBatchQueue(
             start_cb=self._start_card_from_queue,
@@ -257,7 +261,9 @@ class MainWindow(QMainWindow):
 
         restart_action = help_menu.addAction("重新启动新手向导...")
         restart_action.setShortcut("Ctrl+Shift+H")
-        restart_action.setToolTip("重新打开首次启动向导，回顾工作区/项目创建流程与 SOP 说明")
+        restart_action.setToolTip(
+            "重新打开首次启动向导，回顾工作区/项目创建流程与 SOP 说明"
+        )
         restart_action.triggered.connect(self._restart_wizard)
 
         sop_action = help_menu.addAction("SOP 操作链说明...")
@@ -318,40 +324,47 @@ class MainWindow(QMainWindow):
     def _show_about(self):
         """关于对话框"""
         QMessageBox.about(
-            self, "关于 DIT 工作站",
+            self,
+            "关于 DIT 工作站",
             "<h3>DIT 工作站</h3>"
             f"<p>版本：{APP_VERSION}</p>"
             "<p>专业摄影数据管理应用</p>"
             "<p>支持安全备份、校验和验证、JPG 筛选 RAW 提取、批量重命名、"
-            "拍摄日志管理、素材检索与报告生成。</p>"
+            "拍摄日志管理、素材检索与报告生成。</p>",
         )
 
     def _show_settings(self):
         """打开设置对话框"""
         from DITWorkstation.Views.Widgets.settings_dialog import SettingsDialog
+
         dialog = SettingsDialog(self)
         dialog.exec()
 
     def _show_recycle_bin(self):
         """打开数据库回收站；恢复操作完成后会广播数据刷新事件。"""
         from DITWorkstation.Views.Widgets.recycle_bin_dialog import RecycleBinDialog
+
         RecycleBinDialog(self, db_service=get_db_service()).exec()
 
     def _show_log_viewer(self):
         """打开日志查看器对话框。"""
         from DITWorkstation.Views.Widgets.log_viewer_dialog import LogViewerDialog
+
         LogViewerDialog(self).exec()
 
     def _show_restore_wizard(self):
         """打开「从备份恢复素材」向导。"""
         from DITWorkstation.Views.Widgets.restore_wizard import RestoreWizard
+
         RestoreWizard(self, db_service=self.backup_view.db_service).exec()
 
     def _trigger_integrity_check(self):
         """手动触发一次完整性校验（立即执行，走任务线程避免卡 UI）。"""
         from DITWorkstation.Services.integrity_scheduler import IntegrityScheduler
 
-        integrity = IntegrityScheduler(self.backup_view.backup_service, self.backup_view.db_service)
+        integrity = IntegrityScheduler(
+            self.backup_view.backup_service, self.backup_view.db_service
+        )
         worker = WorkerThread(integrity.run_all_projects)
         self._integrity_worker = worker
 
@@ -359,7 +372,8 @@ class MainWindow(QMainWindow):
             self.status_label_task.setText("✅ 完整性校验完成")
             total = len(results) if isinstance(results, dict) else 0
             QMessageBox.information(
-                self, "完整性校验",
+                self,
+                "完整性校验",
                 f"校验完成，共检查 {total} 个项目。\n详细结果已写入操作审计日志。",
             )
 
@@ -375,6 +389,7 @@ class MainWindow(QMainWindow):
     def _show_task_center(self):
         """打开后台任务历史中心。"""
         from DITWorkstation.Views.Widgets.task_history_dialog import TaskHistoryDialog
+
         TaskHistoryDialog(self).exec()
 
     def _wrap_scrollable(self, view: QWidget) -> QScrollArea:
@@ -497,7 +512,9 @@ class MainWindow(QMainWindow):
         count = len(running)
         if count > 0:
             self.status_label_task.setText(f"⚙ 后台任务: {count} 个")
-            self.status_label_task.setStyleSheet(f"color: {COLOR.WARNING}; font-weight: 600;")
+            self.status_label_task.setStyleSheet(
+                f"color: {COLOR.WARNING}; font-weight: 600;"
+            )
         else:
             self.status_label_task.setText("就绪")
             self.status_label_task.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY};")
@@ -510,7 +527,9 @@ class MainWindow(QMainWindow):
           用户取消则忽略关闭事件
         """
         running = self._running_workers()
-        card_running = self.card_automation_worker and self.card_automation_worker.isRunning()
+        card_running = (
+            self.card_automation_worker and self.card_automation_worker.isRunning()
+        )
         if not running and not card_running:
             self.volume_monitor.stop()
             super().closeEvent(event)
@@ -582,8 +601,9 @@ class MainWindow(QMainWindow):
             self.import_view.set_source_folder(path, auto_scan=True)
         # 自动化启动条件必须同时满足配置开关与功能模式开关：
         # 个人模式下即使用户曾在团队模式开启过自动化配置，也不得启动。
-        if (getattr(config, "auto_card_automation_enabled", False)
-                and is_enabled("card_automation")):
+        if getattr(config, "auto_card_automation_enabled", False) and is_enabled(
+            "card_automation"
+        ):
             self._start_card_automation(path)
 
     def _start_card_automation(self, source_path: str):
@@ -596,10 +616,18 @@ class MainWindow(QMainWindow):
         do_import = getattr(config, "auto_card_import", True)
         do_backup = getattr(config, "auto_card_backup", False)
         steps = getattr(config, "auto_card_steps", None) or None
-        template = self.backup_view.db_service.get_backup_template(template_id) if template_id else None
-        if not project_id or ((do_backup or (steps and "backup" in steps)) and template is None):
+        template = (
+            self.backup_view.db_service.get_backup_template(template_id)
+            if template_id
+            else None
+        )
+        if not project_id or (
+            (do_backup or (steps and "backup" in steps)) and template is None
+        ):
             self.status_label_task.setText("⚠ 相机卡自动化配置不完整，请检查设置")
-            logger.warning(f"相机卡自动化配置不完整: project={project_id} template={template_id}")
+            logger.warning(
+                f"相机卡自动化配置不完整: project={project_id} template={template_id}"
+            )
             return
         project = self.backup_view.db_service.get_project(project_id)
         if project is None:
@@ -615,10 +643,16 @@ class MainWindow(QMainWindow):
             do_import=do_import,
             do_backup=do_backup,
             steps=steps,
-            raw_config={"output_folder": getattr(config, "auto_card_raw_output_dir", "")}
-            if steps and "raw_extract" in steps else None,
+            raw_config={
+                "output_folder": getattr(config, "auto_card_raw_output_dir", "")
+            }
+            if steps and "raw_extract" in steps
+            else None,
             rename_config={"rule": {"pattern": config.auto_card_rename_pattern}}
-            if steps and "rename" in steps and getattr(config, "auto_card_rename_pattern", "") else None,
+            if steps
+            and "rename" in steps
+            and getattr(config, "auto_card_rename_pattern", "")
+            else None,
             report_path=getattr(config, "auto_card_report_path", "") or None,
             inject_progress=True,
             inject_cancel_check=True,
@@ -626,7 +660,9 @@ class MainWindow(QMainWindow):
         self.card_automation_worker.progress.connect(self._on_card_automation_progress)
         self.card_automation_worker.finished.connect(self._on_card_automation_finished)
         self.card_automation_worker.error.connect(self._on_card_automation_error)
-        self.card_automation_worker.thread_finished.connect(self.card_automation_worker.deleteLater)
+        self.card_automation_worker.thread_finished.connect(
+            self.card_automation_worker.deleteLater
+        )
         self.card_automation_worker.start()
         self.status_label_task.setText(f"⚙ 自动处理相机卡: {Path(source_path).name}")
 
@@ -638,11 +674,17 @@ class MainWindow(QMainWindow):
     def _on_card_automation_finished(self, result):
         self.card_automation_worker = None
         backup = result.get("backup") if isinstance(result, dict) else None
-        imported = (result.get("import") or {}).get("imported", 0) if isinstance(result, dict) else 0
+        imported = (
+            (result.get("import") or {}).get("imported", 0)
+            if isinstance(result, dict)
+            else 0
+        )
         backup_text = ""
         if backup is not None:
             backup_text = f"，备份状态 {backup.status.value}"
-        self.status_label_task.setText(f"✅ 相机卡自动处理完成：导入 {imported} 个{backup_text}")
+        self.status_label_task.setText(
+            f"✅ 相机卡自动处理完成：导入 {imported} 个{backup_text}"
+        )
         if imported:
             get_data_bus().emit_data_changed("assets_changed")
 
@@ -655,6 +697,7 @@ class MainWindow(QMainWindow):
     def _show_command_palette(self):
         """打开 Ctrl+K 全局命令面板。"""
         from DITWorkstation.Views.Widgets.command_palette import CommandPalette
+
         cp = CommandPalette(self)
         cp.exec()
 
@@ -664,11 +707,13 @@ class MainWindow(QMainWindow):
 
     def _on_volume_mounted(self, path: str):
         """检测到新存储卡：入多卡队列（去重/防重复处理）。"""
-        if (getattr(config, "auto_card_automation_enabled", False)
-                and is_enabled("card_automation")):
+        if getattr(config, "auto_card_automation_enabled", False) and is_enabled(
+            "card_automation"
+        ):
             self.card_batch_queue.enqueue(path)
-        elif (getattr(config, "auto_detect_volume", True)
-              and is_enabled("card_automation")):
+        elif getattr(config, "auto_detect_volume", True) and is_enabled(
+            "card_automation"
+        ):
             # 未启用自动任务时，仍跳转导入视图
             self.status_label_task.setText(f"💾 检测到存储卡: {Path(path).name}")
 
@@ -679,11 +724,17 @@ class MainWindow(QMainWindow):
             fp = compute_card_fingerprint(self.card_automation_source_path)
             self.card_batch_queue.on_finished(fingerprint=fp)
         backup = result.get("backup") if isinstance(result, dict) else None
-        imported = (result.get("import") or {}).get("imported", 0) if isinstance(result, dict) else 0
+        imported = (
+            (result.get("import") or {}).get("imported", 0)
+            if isinstance(result, dict)
+            else 0
+        )
         backup_text = ""
         if backup is not None:
             backup_text = f"，备份状态 {backup.status.value}"
-        self.status_label_task.setText(f"✅ 相机卡自动处理完成：导入 {imported} 个{backup_text}")
+        self.status_label_task.setText(
+            f"✅ 相机卡自动处理完成：导入 {imported} 个{backup_text}"
+        )
         if imported:
             get_data_bus().emit_data_changed("assets_changed")
 

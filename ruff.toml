@@ -1,0 +1,26 @@
+target-version = "py311"
+
+[lint]
+# 本仓库为桌面 GUI 应用（PySide6），以下规则按项目实际情况豁免。
+# N999: 包名 DITWorkstation 含大写字母，属有意命名
+# BLE001: GUI/后台线程广用"捕获 Exception 后记日志并降级"的防御模式
+# DTZ*: 桌面应用有意使用本地时间（文件 mtime、EXIF 时间）而非强制 tz 感知
+# B008: Qt 惯用 QModelIndex() 作为模型接口的默认参数
+# SIM401: sqlite3.Row 没有 .get() 方法，不能用 row.get(key, default)
+# SIM118: sqlite3.Row 不支持 in 运算符（in row 检查值而非键），必须用 in row.keys()
+# SIM102: 嵌套 if + return 在部分场景下比合并 if 更清晰
+# TRY004: 适用于类型检查的 ValueError 与 TypeError 偏好，属编码风格
+ignore = [
+    "BLE001",
+    "B008",
+    "DTZ011",
+    "DTZ006",
+    "DTZ007",
+    "DTZ012",
+    "DTZ901",
+    "N999",
+    "SIM401",
+    "SIM118",
+    "SIM102",
+    "TRY004",
+]

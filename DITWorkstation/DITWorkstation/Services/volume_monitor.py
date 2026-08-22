@@ -4,6 +4,7 @@
 新插入的存储卡，识别为媒体卡后发出 volume_mounted 信号，供主窗口自动跳转
 到导入视图并预填源目录。
 """
+
 import os
 import platform
 import string
@@ -21,7 +22,11 @@ def list_volume_roots() -> list:
     if system == "Darwin":
         vol = Path("/Volumes")
         if vol.is_dir():
-            return [str(p) for p in vol.iterdir() if p.is_dir() and not p.name.startswith(".")]
+            return [
+                str(p)
+                for p in vol.iterdir()
+                if p.is_dir() and not p.name.startswith(".")
+            ]
         return []
     if system == "Windows":
         roots = []

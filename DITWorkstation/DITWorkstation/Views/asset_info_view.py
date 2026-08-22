@@ -1,4 +1,5 @@
 """素材资产 EXIF 信息查看页面"""
+
 import json
 from pathlib import Path
 
@@ -72,8 +73,12 @@ from DITWorkstation.Views.Widgets.table_factory import make_table_view
 _PLACEHOLDER = "—"
 
 # 值标签样式：有值时深色加粗，缺失时灰色
-_STYLE_HAS_VALUE = f"color: {COLOR.TEXT_PRIMARY}; font-size: {FONT_SIZE.BASE}px; font-weight: 500;"
-_STYLE_MISSING = f"color: {COLOR.DISABLED}; font-size: {FONT_SIZE.BASE}px; font-style: italic;"
+_STYLE_HAS_VALUE = (
+    f"color: {COLOR.TEXT_PRIMARY}; font-size: {FONT_SIZE.BASE}px; font-weight: 500;"
+)
+_STYLE_MISSING = (
+    f"color: {COLOR.DISABLED}; font-size: {FONT_SIZE.BASE}px; font-style: italic;"
+)
 
 # 分组标题样式
 _GROUP_STYLE = f"""
@@ -119,13 +124,17 @@ class _BatchExifWorker(QThread):
         total = self._total
         success = 0
         try:
-            for i, asset in enumerate(self._db_service.iter_project_assets(self._project_id), 1):
+            for i, asset in enumerate(
+                self._db_service.iter_project_assets(self._project_id), 1
+            ):
                 if self._cancelled:
                     break
                 try:
                     file_path = asset.file_path
                     if not file_path or not Path(file_path).exists():
-                        self.progress.emit(i, total, f"跳过：{asset.file_name}（文件不存在）")
+                        self.progress.emit(
+                            i, total, f"跳过：{asset.file_name}（文件不存在）"
+                        )
                         continue
 
                     update_fields = {}
@@ -139,13 +148,15 @@ class _BatchExifWorker(QThread):
                             update_fields["height"] = vm.height
                         if vm.duration_seconds:
                             update_fields["duration_seconds"] = vm.duration_seconds
-                        update_fields["video_metadata"] = json.dumps({
-                            "codec": vm.codec,
-                            "frame_rate": vm.frame_rate,
-                            "bit_rate": vm.bit_rate,
-                            "audio_codec": vm.audio_codec,
-                            "audio_sample_rate": vm.audio_sample_rate,
-                        })
+                        update_fields["video_metadata"] = json.dumps(
+                            {
+                                "codec": vm.codec,
+                                "frame_rate": vm.frame_rate,
+                                "bit_rate": vm.bit_rate,
+                                "audio_codec": vm.audio_codec,
+                                "audio_sample_rate": vm.audio_sample_rate,
+                            }
+                        )
                     else:
                         # 图片/RAW 读取 EXIF
                         metadata = self._metadata_service.read_metadata(file_path)
@@ -171,7 +182,9 @@ class _BatchExifWorker(QThread):
                             update_fields["date_taken"] = metadata.date_taken
 
                     if update_fields:
-                        ok = self._db_service.update_media_asset(asset.asset_id, **update_fields)
+                        ok = self._db_service.update_media_asset(
+                            asset.asset_id, **update_fields
+                        )
                         if ok:
                             success += 1
                             self.progress.emit(i, total, f"已更新：{asset.file_name}")
@@ -240,7 +253,9 @@ class AssetInfoView(RefreshOnShowView):
         batch_layout.setSpacing(4)
 
         self.batch_status_label = QLabel("")
-        self.batch_status_label.setStyleSheet(f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};")
+        self.batch_status_label.setStyleSheet(
+            f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};"
+        )
         batch_layout.addWidget(self.batch_status_label)
 
         self.batch_progress = QProgressBar()
@@ -284,7 +299,9 @@ class AssetInfoView(RefreshOnShowView):
 
         # 导出素材清单 CSV
         self.export_csv_btn = QPushButton("📤 导出素材清单 CSV")
-        self.export_csv_btn.setToolTip("把当前项目的全部素材元数据导出为 CSV（Excel 可直接打开）")
+        self.export_csv_btn.setToolTip(
+            "把当前项目的全部素材元数据导出为 CSV（Excel 可直接打开）"
+        )
         self.export_csv_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLOR.BG_CARD};
@@ -300,14 +317,18 @@ class AssetInfoView(RefreshOnShowView):
         header.addWidget(self.export_csv_btn)
 
         self.relink_missing_btn = QPushButton("🔗 重新链接丢失素材")
-        self.relink_missing_btn.setToolTip("选择新根目录，预览并回写可唯一匹配的移动后素材路径")
+        self.relink_missing_btn.setToolTip(
+            "选择新根目录，预览并回写可唯一匹配的移动后素材路径"
+        )
         self.relink_missing_btn.clicked.connect(self._relink_missing_assets)
         self.relink_missing_btn.setEnabled(False)
         header.addWidget(self.relink_missing_btn)
 
         # 批量清理已丢失文件对应的素材记录
         self.cleanup_missing_btn = QPushButton("🧹 清理丢失素材")
-        self.cleanup_missing_btn.setToolTip("一键删除数据库中所有「文件已丢失」的素材记录（不删除磁盘文件）")
+        self.cleanup_missing_btn.setToolTip(
+            "一键删除数据库中所有「文件已丢失」的素材记录（不删除磁盘文件）"
+        )
         self.cleanup_missing_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLOR.DANGER_HOVER};
@@ -360,7 +381,9 @@ class AssetInfoView(RefreshOnShowView):
 
         # 素材计数标签
         self.asset_count_label = QLabel("")
-        self.asset_count_label.setStyleSheet(f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};")
+        self.asset_count_label.setStyleSheet(
+            f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};"
+        )
         left_layout.addWidget(self.asset_count_label)
 
         self.asset_table = make_table_view(
@@ -369,17 +392,23 @@ class AssetInfoView(RefreshOnShowView):
             selection_mode=QAbstractItemView.ExtendedSelection,
         )
         self.asset_model = AssetTableModel(
-            ["文件名", "类型", "大小", "EXIF", "状态"], self._asset_cell, self,
+            ["文件名", "类型", "大小", "EXIF", "状态"],
+            self._asset_cell,
+            self,
         )
         self.asset_table.setModel(self.asset_model)
         # 表格全局样式由 main.py 注入的 GLOBAL_QSS 统一控制，不再单独 setStyleSheet
-        self.asset_table.selectionModel().selectionChanged.connect(self._on_asset_selected)
+        self.asset_table.selectionModel().selectionChanged.connect(
+            self._on_asset_selected
+        )
         # 双击打开所在目录
         self.asset_table.doubleClicked.connect(self._on_asset_double_clicked)
         self.asset_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.asset_table.customContextMenuRequested.connect(self._on_asset_context_menu)
         left_layout.addWidget(self.asset_table, 1)
-        attach_empty_state(self.asset_table, "📦", "暂无素材", "请先在「媒体导入」中导入素材")
+        attach_empty_state(
+            self.asset_table, "📦", "暂无素材", "请先在「媒体导入」中导入素材"
+        )
 
         self.asset_page_bar = QWidget()
         page_layout = QHBoxLayout(self.asset_page_bar)
@@ -438,7 +467,9 @@ class AssetInfoView(RefreshOnShowView):
         self.batch_delete_btn.clicked.connect(self._batch_delete)
         batch_row.addWidget(self.batch_delete_btn)
         self.batch_selected_label = QLabel("")
-        self.batch_selected_label.setStyleSheet(f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};")
+        self.batch_selected_label.setStyleSheet(
+            f"font-size: {FONT_SIZE.SM}px; color: {COLOR.TEXT_SECONDARY};"
+        )
         batch_row.addWidget(self.batch_selected_label)
         batch_row.addStretch()
         left_layout.addLayout(batch_row)
@@ -460,7 +491,9 @@ class AssetInfoView(RefreshOnShowView):
         right_scroll = QScrollArea()
         right_scroll.setWidgetResizable(True)
         right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        right_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        right_scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
+        )
 
         props_widget = QWidget()
         props_widget.setStyleSheet("background: transparent;")
@@ -540,7 +573,9 @@ class AssetInfoView(RefreshOnShowView):
         # 镜次评级快捷按钮（评级值与标签来自 Models.RATING_LABELS 单一事实源）
         rating_row = QHBoxLayout()
         self.rating_label = QLabel("⭐ 镜次评级")
-        self.rating_label.setStyleSheet(f"font-size: {FONT_SIZE.BASE}px; font-weight: 600; color: {COLOR.TEXT_PRIMARY}; padding: 4px 0;")
+        self.rating_label.setStyleSheet(
+            f"font-size: {FONT_SIZE.BASE}px; font-weight: 600; color: {COLOR.TEXT_PRIMARY}; padding: 4px 0;"
+        )
         rating_row.addWidget(self.rating_label)
         rating_row.addStretch()
 
@@ -626,6 +661,7 @@ class AssetInfoView(RefreshOnShowView):
     def _refresh_tags_completer(self):
         """用数据库已有标签为输入框提供自动补全。"""
         from PySide6.QtWidgets import QCompleter
+
         try:
             tags = self.db_service.get_all_tags()
         except Exception as e:
@@ -642,57 +678,87 @@ class AssetInfoView(RefreshOnShowView):
         self._label_refs = {}
 
         # 分组 1：基本信息
-        self._create_group(props_layout, "basic", "📄 基本信息", [
-            ("file_name", "文件名"),
-            ("file_path", "文件路径"),
-            ("asset_type", "资产类型"),
-            ("file_type", "文件类型"),
-            ("file_size", "文件大小"),
-            ("date_imported", "导入时间"),
-            ("original_path", "原始路径"),
-            ("is_working_copy", "工作副本"),
-        ])
+        self._create_group(
+            props_layout,
+            "basic",
+            "📄 基本信息",
+            [
+                ("file_name", "文件名"),
+                ("file_path", "文件路径"),
+                ("asset_type", "资产类型"),
+                ("file_type", "文件类型"),
+                ("file_size", "文件大小"),
+                ("date_imported", "导入时间"),
+                ("original_path", "原始路径"),
+                ("is_working_copy", "工作副本"),
+            ],
+        )
 
         # 分组 2：拍摄参数
-        self._create_group(props_layout, "camera", "📷 拍摄参数 (EXIF)", [
-            ("camera_make", "相机制造商"),
-            ("camera_model", "相机型号"),
-            ("lens_model", "镜头型号"),
-            ("focal_length", "焦距"),
-            ("date_taken", "拍摄时间"),
-        ])
+        self._create_group(
+            props_layout,
+            "camera",
+            "📷 拍摄参数 (EXIF)",
+            [
+                ("camera_make", "相机制造商"),
+                ("camera_model", "相机型号"),
+                ("lens_model", "镜头型号"),
+                ("focal_length", "焦距"),
+                ("date_taken", "拍摄时间"),
+            ],
+        )
 
         # 分组 3：图像尺寸
-        self._create_group(props_layout, "image", "🖼 图像尺寸", [
-            ("dimensions", "尺寸"),
-            ("width", "宽度"),
-            ("height", "高度"),
-        ])
+        self._create_group(
+            props_layout,
+            "image",
+            "🖼 图像尺寸",
+            [
+                ("dimensions", "尺寸"),
+                ("width", "宽度"),
+                ("height", "高度"),
+            ],
+        )
 
         # 分组 4：视频信息
-        self._create_group(props_layout, "video", "🎬 视频信息", [
-            ("duration", "时长"),
-            ("codec", "视频编码"),
-            ("frame_rate", "帧率"),
-            ("bit_rate", "比特率"),
-            ("audio_codec", "音频编码"),
-            ("audio_sample_rate", "音频采样率"),
-        ])
+        self._create_group(
+            props_layout,
+            "video",
+            "🎬 视频信息",
+            [
+                ("duration", "时长"),
+                ("codec", "视频编码"),
+                ("frame_rate", "帧率"),
+                ("bit_rate", "比特率"),
+                ("audio_codec", "音频编码"),
+                ("audio_sample_rate", "音频采样率"),
+            ],
+        )
 
         # 分组 5：项目关联
-        self._create_group(props_layout, "project", "🔗 项目关联", [
-            ("scene", "场景号"),
-            ("shot", "镜头号"),
-            ("take", "镜次"),
-            ("log_id", "关联日志"),
-            ("backup_locations", "备份位置"),
-        ])
+        self._create_group(
+            props_layout,
+            "project",
+            "🔗 项目关联",
+            [
+                ("scene", "场景号"),
+                ("shot", "镜头号"),
+                ("take", "镜次"),
+                ("log_id", "关联日志"),
+                ("backup_locations", "备份位置"),
+            ],
+        )
 
         # 分组 6：完整性校验
-        self._create_group(props_layout, "checksum", "🔐 完整性校验", [
-            ("checksum_algorithm", "校验算法"),
-            ("checksum_value", "校验值"),
-        ])
+        self._create_group(
+            props_layout,
+            "checksum",
+            "🔐 完整性校验",
+            [
+                ("checksum_algorithm", "校验算法"),
+                ("checksum_value", "校验值"),
+            ],
+        )
 
     def _create_group(self, parent_layout, group_key, title, fields):
         """创建一个信息分组"""
@@ -768,7 +834,9 @@ class AssetInfoView(RefreshOnShowView):
         )
         if not path:
             return
-        self._export_progress_dialog = QProgressDialog("正在导出素材清单…", "取消", 0, 100, self)
+        self._export_progress_dialog = QProgressDialog(
+            "正在导出素材清单…", "取消", 0, 100, self
+        )
         self._export_progress_dialog.setWindowTitle("导出 CSV")
         self._export_progress_dialog.setWindowModality(Qt.WindowModal)
         self._export_progress_dialog.canceled.connect(self._export_vm.cancel)
@@ -776,17 +844,24 @@ class AssetInfoView(RefreshOnShowView):
 
         def export_task(progress_callback, cancel_check):
             get_report_service().export_assets_csv_iter(
-                self.db_service.iter_project_assets(project_id), path,
-                total=self._asset_total, cancel_check=cancel_check,
+                self.db_service.iter_project_assets(project_id),
+                path,
+                total=self._asset_total,
+                cancel_check=cancel_check,
                 progress_callback=lambda current, total, message: progress_callback(
-                    "export", current / total if total else 0.0, message,
+                    "export",
+                    current / total if total else 0.0,
+                    message,
                 ),
             )
             return {"path": path, "count": self._asset_total}
 
         self._export_vm.start(
-            export_task, inject_progress=True, inject_cancel_check=True,
-            task_name="project_csv_export", project_id=project_id,
+            export_task,
+            inject_progress=True,
+            inject_cancel_check=True,
+            task_name="project_csv_export",
+            project_id=project_id,
             recovery_info={"output_path": path},
         )
 
@@ -799,13 +874,17 @@ class AssetInfoView(RefreshOnShowView):
         if self._export_progress_dialog is not None:
             self._export_progress_dialog.close()
             self._export_progress_dialog = None
-        QMessageBox.information(self, "导出完成", f"已导出 {result['count']} 条素材记录：\n{result['path']}")
+        QMessageBox.information(
+            self, "导出完成", f"已导出 {result['count']} 条素材记录：\n{result['path']}"
+        )
 
     def _on_export_error(self, message):
         if self._export_progress_dialog is not None:
             self._export_progress_dialog.close()
             self._export_progress_dialog = None
-        QMessageBox.information(self, "导出已取消" if "取消" in message else "导出失败", message)
+        QMessageBox.information(
+            self, "导出已取消" if "取消" in message else "导出失败", message
+        )
 
     def _load_assets(self, reset_page=True):
         project_id = self.selector.get_current_project_id()
@@ -848,22 +927,34 @@ class AssetInfoView(RefreshOnShowView):
         def load_page(cancel_check):
             if cancel_check():
                 raise InterruptedError("素材列表加载已取消")
-            total = self.db_service.count_project_assets(project_id) if reset_page else self._asset_total
+            total = (
+                self.db_service.count_project_assets(project_id)
+                if reset_page
+                else self._asset_total
+            )
             if cancel_check():
                 raise InterruptedError("素材列表加载已取消")
             assets, next_cursor = self.db_service.get_project_asset_page(
-                project_id, page_size=page_size, cursor=cursor,
+                project_id,
+                page_size=page_size,
+                cursor=cursor,
             )
             return {
-                "generation": generation, "project_id": project_id, "total": total,
-                "assets": assets, "next_cursor": next_cursor,
+                "generation": generation,
+                "project_id": project_id,
+                "total": total,
+                "assets": assets,
+                "next_cursor": next_cursor,
             }
 
         self.asset_count_label.setText("正在加载素材列表…")
         self.prev_asset_page_btn.setEnabled(False)
         self.next_asset_page_btn.setEnabled(False)
         self._asset_page_vm.start(
-            load_page, inject_cancel_check=True, task_name="project_asset_page", project_id=project_id,
+            load_page,
+            inject_cancel_check=True,
+            task_name="project_asset_page",
+            project_id=project_id,
         )
 
     def _on_asset_page_finished(self, result):
@@ -882,7 +973,8 @@ class AssetInfoView(RefreshOnShowView):
             for asset in self._assets:
                 is_missing = asset.asset_id in self._missing_ids
                 self.asset_model.set_status(
-                    asset.asset_id, "⚠ 文件已丢失" if is_missing else "✓ 正常",
+                    asset.asset_id,
+                    "⚠ 文件已丢失" if is_missing else "✓ 正常",
                     QColor(COLOR.DANGER) if is_missing else QColor(COLOR.SUCCESS),
                 )
         self.batch_exif_btn.setEnabled(bool(self._assets))
@@ -912,9 +1004,15 @@ class AssetInfoView(RefreshOnShowView):
             return format_size(asset.file_size), None
         if column == 3:
             has_exif = bool(asset.camera_make or asset.camera_model or asset.lens_model)
-            return ("✓ 有", QColor(COLOR.SUCCESS)) if has_exif else ("— 无", QColor(COLOR.TEXT_SECONDARY))
-        default = ("⚠ 文件已丢失", QColor(COLOR.DANGER)) if asset.asset_id in self._missing_ids else (
-            "检查中…", QColor(COLOR.TEXT_SECONDARY)
+            return (
+                ("✓ 有", QColor(COLOR.SUCCESS))
+                if has_exif
+                else ("— 无", QColor(COLOR.TEXT_SECONDARY))
+            )
+        default = (
+            ("⚠ 文件已丢失", QColor(COLOR.DANGER))
+            if asset.asset_id in self._missing_ids
+            else ("检查中…", QColor(COLOR.TEXT_SECONDARY))
         )
         return self.asset_model.status_for(asset.asset_id, default)
 
@@ -961,9 +1059,7 @@ class AssetInfoView(RefreshOnShowView):
     def _start_missing_file_scan(self, project_id: str, for_cleanup: bool = False):
         """在后台扫描文件存在性；刷新序号用于丢弃过期扫描结果。"""
         generation = self._missing_scan_generation
-        worker = WorkerThread(
-            self.db_service.get_missing_file_asset_ids, project_id
-        )
+        worker = WorkerThread(self.db_service.get_missing_file_asset_ids, project_id)
         worker._missing_project_id = project_id
         worker._missing_generation = generation
         worker._missing_for_cleanup = for_cleanup
@@ -991,7 +1087,8 @@ class AssetInfoView(RefreshOnShowView):
         for asset in self._assets:
             is_missing = asset.asset_id in self._missing_ids
             self.asset_model.set_status(
-                asset.asset_id, "⚠ 文件已丢失" if is_missing else "✓ 正常",
+                asset.asset_id,
+                "⚠ 文件已丢失" if is_missing else "✓ 正常",
                 QColor(COLOR.DANGER) if is_missing else QColor(COLOR.SUCCESS),
             )
         self._refresh_missing_summary()
@@ -1014,7 +1111,9 @@ class AssetInfoView(RefreshOnShowView):
         self.cleanup_missing_btn.setEnabled(False)
         self.relink_missing_btn.setEnabled(False)
         for asset in self._assets:
-            self.asset_model.set_status(asset.asset_id, "⚠ 检查失败", QColor(COLOR.DANGER))
+            self.asset_model.set_status(
+                asset.asset_id, "⚠ 检查失败", QColor(COLOR.DANGER)
+            )
         logger.warning(f"文件存在性扫描失败: {error}")
 
     def _on_asset_selected(self):
@@ -1082,7 +1181,8 @@ class AssetInfoView(RefreshOnShowView):
         else:
             self._missing_ids.discard(asset_id)
         self.asset_model.set_status(
-            asset_id, "⚠ 文件已丢失" if is_missing else "✓ 正常",
+            asset_id,
+            "⚠ 文件已丢失" if is_missing else "✓ 正常",
             QColor(COLOR.DANGER) if is_missing else QColor(COLOR.SUCCESS),
         )
         self._refresh_missing_summary()
@@ -1113,19 +1213,19 @@ class AssetInfoView(RefreshOnShowView):
         if not ids:
             return
         reply = QMessageBox.question(
-            self, "确认删除",
+            self,
+            "确认删除",
             f"确定从项目移除 {len(ids)} 条素材记录？\n\n"
             "仅移除数据库记录，不会删除磁盘上的源文件。\n"
             "记录将在回收站保留 30 天，可恢复其元数据。",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return
         ok = self.db_service.delete_media_assets(ids)
         self._load_assets()
-        QMessageBox.information(
-            self, "删除完成", f"已移除 {ok}/{len(ids)} 条素材记录"
-        )
+        QMessageBox.information(self, "删除完成", f"已移除 {ok}/{len(ids)} 条素材记录")
         try:
             get_data_bus().emit_data_changed("assets_changed")
         except Exception as e:
@@ -1156,18 +1256,22 @@ class AssetInfoView(RefreshOnShowView):
             return
         missing_ids = sorted(self._missing_ids)
         if not missing_ids:
-            QMessageBox.information(self, "无丢失素材", "当前项目没有文件已丢失的素材记录。")
+            QMessageBox.information(
+                self, "无丢失素材", "当前项目没有文件已丢失的素材记录。"
+            )
             return
 
         # 二次确认：明确仅删除失效记录、不影响正常素材、操作不可撤销
         reply = QMessageBox.question(
-            self, "确认清理丢失素材",
+            self,
+            "确认清理丢失素材",
             f"即将删除 {len(missing_ids)} 条「文件已丢失」的素材记录。\n\n"
             "• 仅移除数据库中的素材记录，不会删除磁盘上的任何文件\n"
             "• 仅影响文件已丢失的无效记录，正常素材不会被改动\n"
             "• 记录将在回收站保留 30 天，可恢复其元数据\n\n"
             "确定要清理吗？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return
@@ -1195,7 +1299,8 @@ class AssetInfoView(RefreshOnShowView):
         preview = service.preview(project_id, root)
         if preview.matched_count == 0:
             QMessageBox.information(
-                self, "未找到可重新链接的素材",
+                self,
+                "未找到可重新链接的素材",
                 f"未匹配 {preview.unmatched_count} 个素材；存在冲突 {preview.conflict_count} 个。",
             )
             return
@@ -1207,7 +1312,9 @@ class AssetInfoView(RefreshOnShowView):
             QMessageBox.warning(self, "重新链接未完成", result.message)
             return
         self._load_assets()
-        QMessageBox.information(self, "重新链接完成", f"已重新链接 {result.affected_count} 个素材。")
+        QMessageBox.information(
+            self, "重新链接完成", f"已重新链接 {result.affected_count} 个素材。"
+        )
         get_data_bus().emit_data_changed("assets_changed")
 
     def _show_relink_preview(self, preview):
@@ -1216,10 +1323,12 @@ class AssetInfoView(RefreshOnShowView):
         dialog.setWindowTitle("预览重新链接")
         dialog.resize(920, 520)
         layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel(
-            f"唯一匹配 {preview.matched_count} 个，冲突 {preview.conflict_count} 个，"
-            f"未匹配 {preview.unmatched_count} 个。选择后将批量回写数据库路径。"
-        ))
+        layout.addWidget(
+            QLabel(
+                f"唯一匹配 {preview.matched_count} 个，冲突 {preview.conflict_count} 个，"
+                f"未匹配 {preview.unmatched_count} 个。选择后将批量回写数据库路径。"
+            )
+        )
         table = QTableWidget(len(preview.matches), 4)
         table.setHorizontalHeaderLabels(["原始文件", "匹配方式", "状态", "目标文件"])
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -1230,7 +1339,13 @@ class AssetInfoView(RefreshOnShowView):
         for row, match in enumerate(preview.matches):
             table.setItem(row, 0, QTableWidgetItem(Path(match.old_path).name))
             table.setItem(row, 1, QTableWidgetItem(match.match_method))
-            status = "冲突" if match.is_conflict else "可链接" if match.selected_path else "未匹配"
+            status = (
+                "冲突"
+                if match.is_conflict
+                else "可链接"
+                if match.selected_path
+                else "未匹配"
+            )
             table.setItem(row, 2, QTableWidgetItem(status))
             combo = QComboBox(table)
             combo.addItem("跳过", "")
@@ -1250,7 +1365,8 @@ class AssetInfoView(RefreshOnShowView):
             return None
         return [
             (asset_id, combo.currentData())
-            for asset_id, combo in selections.items() if combo.currentData()
+            for asset_id, combo in selections.items()
+            if combo.currentData()
         ]
 
     def _on_asset_double_clicked(self, index):
@@ -1264,6 +1380,7 @@ class AssetInfoView(RefreshOnShowView):
     def _on_asset_context_menu(self, pos):
         """素材表右键菜单：打开所在目录 / 复制路径"""
         from PySide6.QtWidgets import QMenu
+
         index = self.asset_table.indexAt(pos)
         if not index.isValid():
             return
@@ -1284,16 +1401,20 @@ class AssetInfoView(RefreshOnShowView):
     def _open_asset_directory(self, asset):
         """在文件管理器中打开素材所在目录"""
         import os
+
         path = asset.file_path
         if not path or not os.path.exists(path):
             QMessageBox.warning(self, "路径不存在", f"文件不存在：\n{path}")
             return
         if not open_in_file_manager(path):
-            QMessageBox.warning(self, "打开失败", "无法打开文件管理器，请检查路径权限。")
+            QMessageBox.warning(
+                self, "打开失败", "无法打开文件管理器，请检查路径权限。"
+            )
 
     def _copy_asset_path(self, asset):
         """复制文件路径到剪贴板"""
         from PySide6.QtWidgets import QApplication
+
         clipboard = QApplication.clipboard()
         clipboard.setText(asset.file_path or "")
         logger.info(f"已复制路径到剪贴板: {asset.file_path}")
@@ -1329,7 +1450,8 @@ class AssetInfoView(RefreshOnShowView):
         self._sync_rating_buttons(rating)
         try:
             self.db_service.record_operation(
-                "设置评级", f"{self.current_asset.file_name} -> {RATING_LABELS.get(rating, rating)}",
+                "设置评级",
+                f"{self.current_asset.file_name} -> {RATING_LABELS.get(rating, rating)}",
                 project_id=self.current_asset.project_id,
             )
         except Exception as e:
@@ -1360,9 +1482,9 @@ class AssetInfoView(RefreshOnShowView):
 
     def _apply_thumbnail(self, cache_key, pixmap):
         self.thumbnail_label.setText("")
-        self.thumbnail_label.setPixmap(pixmap.scaled(
-            320, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation
-        ))
+        self.thumbnail_label.setPixmap(
+            pixmap.scaled(320, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        )
 
     def _display_properties(self, asset):
         # 基本信息
@@ -1370,20 +1492,33 @@ class AssetInfoView(RefreshOnShowView):
         self._set_value("basic", "file_path", asset.file_path)
         self._set_value("basic", "asset_type", asset.asset_type)
         self._set_value("basic", "file_type", asset.file_type)
-        self._set_value("basic", "file_size",
-                        f"{format_size(asset.file_size)}（{asset.file_size:,} 字节）")
-        self._set_value("basic", "date_imported",
-                        asset.date_imported.strftime("%Y-%m-%d %H:%M:%S") if asset.date_imported else "")
+        self._set_value(
+            "basic",
+            "file_size",
+            f"{format_size(asset.file_size)}（{asset.file_size:,} 字节）",
+        )
+        self._set_value(
+            "basic",
+            "date_imported",
+            asset.date_imported.strftime("%Y-%m-%d %H:%M:%S")
+            if asset.date_imported
+            else "",
+        )
         self._set_value("basic", "original_path", asset.original_path)
-        self._set_value("basic", "is_working_copy", "是" if asset.is_working_copy else "否")
+        self._set_value(
+            "basic", "is_working_copy", "是" if asset.is_working_copy else "否"
+        )
 
         # 拍摄参数
         self._set_value("camera", "camera_make", asset.camera_make)
         self._set_value("camera", "camera_model", asset.camera_model)
         self._set_value("camera", "lens_model", asset.lens_model)
         self._set_value("camera", "focal_length", asset.focal_length)
-        self._set_value("camera", "date_taken",
-                        asset.date_taken.strftime("%Y-%m-%d %H:%M:%S") if asset.date_taken else "")
+        self._set_value(
+            "camera",
+            "date_taken",
+            asset.date_taken.strftime("%Y-%m-%d %H:%M:%S") if asset.date_taken else "",
+        )
 
         # 图像尺寸
         if asset.width and asset.height:
@@ -1407,13 +1542,26 @@ class AssetInfoView(RefreshOnShowView):
         else:
             self._set_value("video", "duration", "")
         self._set_value("video", "codec", video_info.get("codec", ""))
-        self._set_value("video", "frame_rate",
-                        f"{video_info['frame_rate']:.1f} fps" if video_info.get("frame_rate") else "")
-        self._set_value("video", "bit_rate",
-                        f"{video_info['bit_rate']:,} bps" if video_info.get("bit_rate") else "")
+        self._set_value(
+            "video",
+            "frame_rate",
+            f"{video_info['frame_rate']:.1f} fps"
+            if video_info.get("frame_rate")
+            else "",
+        )
+        self._set_value(
+            "video",
+            "bit_rate",
+            f"{video_info['bit_rate']:,} bps" if video_info.get("bit_rate") else "",
+        )
         self._set_value("video", "audio_codec", video_info.get("audio_codec", ""))
-        self._set_value("video", "audio_sample_rate",
-                        f"{video_info['audio_sample_rate']:,} Hz" if video_info.get("audio_sample_rate") else "")
+        self._set_value(
+            "video",
+            "audio_sample_rate",
+            f"{video_info['audio_sample_rate']:,} Hz"
+            if video_info.get("audio_sample_rate")
+            else "",
+        )
 
         # 项目关联
         self._set_value("project", "scene", asset.scene)
@@ -1432,8 +1580,9 @@ class AssetInfoView(RefreshOnShowView):
                 log_label = "（日志已删除）"
         self._set_value("project", "log_id", log_label, raw=asset.log_id or "")
         backup_locs = asset.backup_locations if asset.backup_locations else []
-        self._set_value("project", "backup_locations",
-                        "\n".join(backup_locs) if backup_locs else "")
+        self._set_value(
+            "project", "backup_locations", "\n".join(backup_locs) if backup_locs else ""
+        )
 
         # 校验信息
         self._set_value("checksum", "checksum_algorithm", asset.checksum_algorithm)
@@ -1471,11 +1620,14 @@ class AssetInfoView(RefreshOnShowView):
         if not ok:
             QMessageBox.warning(self, "保存失败", "更新标签/备注失败，请重试")
             return
-        self.current_asset = self.db_service.get_media_asset(self.current_asset.asset_id)
+        self.current_asset = self.db_service.get_media_asset(
+            self.current_asset.asset_id
+        )
         logger.info(f"已保存素材标签/备注: {self.current_asset.asset_id}")
         try:
             self.db_service.record_operation(
-                "更新标签/备注", self.current_asset.file_name,
+                "更新标签/备注",
+                self.current_asset.file_name,
                 project_id=self.current_asset.project_id,
             )
         except Exception as e:
@@ -1502,6 +1654,7 @@ class AssetInfoView(RefreshOnShowView):
             return
         try:
             from DITWorkstation.Utils import get_metadata_service
+
             svc = get_metadata_service()
             tags = self.current_asset.tags or ""
             ok = svc.write_xmp_sidecar(
@@ -1536,13 +1689,15 @@ class AssetInfoView(RefreshOnShowView):
                 update_fields["height"] = vm.height
             if vm.duration_seconds:
                 update_fields["duration_seconds"] = vm.duration_seconds
-            update_fields["video_metadata"] = json.dumps({
-                "codec": vm.codec,
-                "frame_rate": vm.frame_rate,
-                "bit_rate": vm.bit_rate,
-                "audio_codec": vm.audio_codec,
-                "audio_sample_rate": vm.audio_sample_rate,
-            })
+            update_fields["video_metadata"] = json.dumps(
+                {
+                    "codec": vm.codec,
+                    "frame_rate": vm.frame_rate,
+                    "bit_rate": vm.bit_rate,
+                    "audio_codec": vm.audio_codec,
+                    "audio_sample_rate": vm.audio_sample_rate,
+                }
+            )
         else:
             # 图片/RAW 读取 EXIF
             metadata = self.metadata_service.read_metadata(file_path)
@@ -1580,13 +1735,11 @@ class AssetInfoView(RefreshOnShowView):
             self._display_properties(self.current_asset)
             self._load_assets()
             QMessageBox.information(
-                self, "成功",
-                f"已更新 {len(update_fields)} 项元数据。"
+                self, "成功", f"已更新 {len(update_fields)} 项元数据。"
             )
         else:
             QMessageBox.information(
-                self, "提示",
-                "未读取到元数据信息（该文件可能不含元数据）。"
+                self, "提示", "未读取到元数据信息（该文件可能不含元数据）。"
             )
 
     # ===== 一键批量重新读取全部 EXIF =====
@@ -1594,7 +1747,9 @@ class AssetInfoView(RefreshOnShowView):
     def _batch_refresh_exif(self):
         # 防止重复启动孤儿线程
         if self._batch_worker is not None and self._batch_worker.isRunning():
-            QMessageBox.information(self, "提示", "正在执行批量读取，请等待当前任务完成。")
+            QMessageBox.information(
+                self, "提示", "正在执行批量读取，请等待当前任务完成。"
+            )
             return
 
         project_id = self.selector.get_current_project_id()
@@ -1607,8 +1762,7 @@ class AssetInfoView(RefreshOnShowView):
             return
 
         reply = QMessageBox.question(
-            self, "确认",
-            f"将对项目下 {total} 个素材重新读取 EXIF 信息，是否继续？"
+            self, "确认", f"将对项目下 {total} 个素材重新读取 EXIF 信息，是否继续？"
         )
         if reply != QMessageBox.Yes:
             return
@@ -1645,6 +1799,7 @@ class AssetInfoView(RefreshOnShowView):
         # worker 已连 deleteLater，这里清空引用避免悬挂
         self._batch_worker = None
         from PySide6.QtCore import QTimer
+
         QTimer.singleShot(3000, lambda: self.batch_progress_frame.setVisible(False))
         show_error(
             title="批量读取出错",
@@ -1682,4 +1837,5 @@ class AssetInfoView(RefreshOnShowView):
 
         # 3 秒后隐藏进度条
         from PySide6.QtCore import QTimer
+
         QTimer.singleShot(3000, lambda: self.batch_progress_frame.setVisible(False))

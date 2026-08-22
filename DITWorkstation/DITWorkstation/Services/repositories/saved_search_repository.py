@@ -2,10 +2,13 @@
 
 保存搜索 = 命名 + 检索条件 JSON + 可选的范围（工作区/项目）；
 智能集合 = is_smart=1 的保存搜索（检索时自动套用条件）。
+
 """
+
 import json
 import sqlite3
 import uuid
+from typing import ClassVar
 
 from DITWorkstation.Utils import logger, now_local_iso
 
@@ -16,9 +19,19 @@ class SavedSearchRepository(BaseRepository):
     """Owns saved_search CRUD."""
 
     # 与 Views 检索表单字段保持一致（未知字段静默忽略）
-    FILTER_FIELDS = {
-        "project_id", "scene", "shot", "file_type", "date_from", "date_to",
-        "keyword", "log_id", "rating", "tag", "taken_from", "taken_to",
+    FILTER_FIELDS: ClassVar[set[str]] = {
+        "project_id",
+        "scene",
+        "shot",
+        "file_type",
+        "date_from",
+        "date_to",
+        "keyword",
+        "log_id",
+        "rating",
+        "tag",
+        "taken_from",
+        "taken_to",
     }
 
     def create(
@@ -32,23 +45,36 @@ class SavedSearchRepository(BaseRepository):
     ) -> dict:
         search_id = str(uuid.uuid4())[:12]
         now = now_local_iso()
-        clean_filters = {k: v for k, v in filters.items()
-                         if k in self.FILTER_FIELDS and v not in (None, "", [])}
+        clean_filters = {
+            k: v
+            for k, v in filters.items()
+            if k in self.FILTER_FIELDS and v not in (None, "", [])
+        }
         with self._transaction() as conn:
             conn.execute(
                 "INSERT INTO saved_searches "
                 "(search_id, name, filters_json, workspace_id, project_id, is_smart, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    search_id, name, json.dumps(clean_filters, ensure_ascii=False),
-                    workspace_id, project_id, int(bool(is_smart)), now, now,
+                    search_id,
+                    name,
+                    json.dumps(clean_filters, ensure_ascii=False),
+                    workspace_id,
+                    project_id,
+                    int(bool(is_smart)),
+                    now,
+                    now,
                 ),
             )
         logger.info(f"创建保存搜索: {search_id} - {name}")
         return self.get(search_id)
 
-    def list(self, limit: int = 50, workspace_id: str | None = None,
-             project_id: str | None = None) -> list[dict]:
+    def list(
+        self,
+        limit: int = 50,
+        workspace_id: str | None = None,
+        project_id: str | None = None,
+    ) -> list[dict]:
         sql = "SELECT * FROM saved_searches"
         clauses, params = [], []
         if workspace_id:
@@ -79,8 +105,11 @@ class SavedSearchRepository(BaseRepository):
             params.append(str(kwargs["name"]))
         if "filters" in kwargs:
             updates.append("filters_json = ?")
-            clean = {k: v for k, v in kwargs["filters"].items()
-                     if k in self.FILTER_FIELDS and v not in (None, "", [])}
+            clean = {
+                k: v
+                for k, v in kwargs["filters"].items()
+                if k in self.FILTER_FIELDS and v not in (None, "", [])
+            }
             params.append(json.dumps(clean, ensure_ascii=False))
         if "is_smart" in kwargs:
             updates.append("is_smart = ?")
@@ -110,7 +139,9 @@ class SavedSearchRepository(BaseRepository):
     def delete(self, search_id: str) -> bool:
         try:
             with self._transaction() as conn:
-                conn.execute("DELETE FROM saved_searches WHERE search_id = ?", (search_id,))
+                conn.execute(
+                    "DELETE FROM saved_searches WHERE search_id = ?", (search_id,)
+                )
                 logger.info(f"删除保存搜索: {search_id}")
                 return True
         except sqlite3.Error as exc:

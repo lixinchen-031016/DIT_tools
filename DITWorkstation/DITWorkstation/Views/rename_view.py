@@ -1,4 +1,5 @@
 """文件重命名页面"""
+
 from pathlib import Path
 
 from PySide6.QtCore import Signal, Slot
@@ -95,12 +96,14 @@ class RenameView(RefreshOnShowView):
         rule_layout = QFormLayout(rule_group)
 
         self.pattern_combo = QComboBox()
-        self.pattern_combo.addItems([
-            "{scene}_{shot}_{take}_{number}",
-            "{scene}_{shot}_{take}_{original}",
-            "{prefix}_{scene}_{number}",
-            "{date}_{scene}_{shot}_{number}",
-        ])
+        self.pattern_combo.addItems(
+            [
+                "{scene}_{shot}_{take}_{number}",
+                "{scene}_{shot}_{take}_{original}",
+                "{prefix}_{scene}_{number}",
+                "{date}_{scene}_{shot}_{number}",
+            ]
+        )
         self.pattern_combo.setEditable(True)
         self.pattern_combo.setToolTip(
             "命名模板支持以下变量：\n"
@@ -181,7 +184,9 @@ class RenameView(RefreshOnShowView):
         preview_layout = QVBoxLayout(preview_group)
         self.preview_table = make_table(["原文件名", "新文件名"])
         preview_layout.addWidget(self.preview_table)
-        attach_empty_state(self.preview_table, "📝", "暂无预览", "选择文件夹并设置规则后点击「预览」")
+        attach_empty_state(
+            self.preview_table, "📝", "暂无预览", "选择文件夹并设置规则后点击「预览」"
+        )
         result_layout.addWidget(preview_group)
 
         # 进度条（重命名执行时显示）
@@ -209,7 +214,8 @@ class RenameView(RefreshOnShowView):
         """扫描文件夹并填充待重命名文件列表"""
         folder = Path(path)
         self.selected_files = [
-            str(f) for f in sorted(folder.iterdir())
+            str(f)
+            for f in sorted(folder.iterdir())
             if f.is_file() and not f.name.startswith(".")
         ]
         self.rename_btn.setEnabled(len(self.selected_files) > 0)
@@ -229,7 +235,7 @@ class RenameView(RefreshOnShowView):
             take=self.take_edit.text(),
             prefix=self.prefix_edit.text(),
             start_number=self.start_spin.value(),
-            padding=self.padding_spin.value()
+            padding=self.padding_spin.value(),
         )
 
     @safe_slot("预览失败")
@@ -258,9 +264,10 @@ class RenameView(RefreshOnShowView):
             return
 
         reply = QMessageBox.question(
-            self, "确认重命名",
+            self,
+            "确认重命名",
             f"确定要重命名 {len(self.selected_files)} 个文件吗？\n此操作不可撤销。",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return
@@ -285,7 +292,10 @@ class RenameView(RefreshOnShowView):
             rule,
             progress_callback=lambda c, t, f: self._progress_sig.emit(c, t, f),
             task_name="批量重命名",
-            recovery_info={"folder": self.folder_edit.text(), "file_count": len(self.selected_files)},
+            recovery_info={
+                "folder": self.folder_edit.text(),
+                "file_count": len(self.selected_files),
+            },
         )
 
     @Slot(int, int, str)
@@ -349,16 +359,20 @@ class RenameView(RefreshOnShowView):
         if not self._last_rename_id:
             return
         reply = QMessageBox.question(
-            self, "确认回退",
+            self,
+            "确认回退",
             "将回退上一次重命名。若文件已被后续修改或原路径被占用，操作会安全取消。",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return
         self.undo_btn.setEnabled(False)
         self._task_kind = "undo"
         self.task_vm.start(
-            self.rename_service.rollback_rename, self.db_service, self._last_rename_id,
+            self.rename_service.rollback_rename,
+            self.db_service,
+            self._last_rename_id,
             task_name="回退重命名",
             recovery_info={"rename_id": self._last_rename_id},
         )
@@ -377,7 +391,9 @@ class RenameView(RefreshOnShowView):
             QMessageBox.warning(self, "无法回退", result.message)
             self.undo_btn.setEnabled(True)
             return
-        QMessageBox.information(self, "回退完成", f"已回退 {result.affected_count} 个文件。")
+        QMessageBox.information(
+            self, "回退完成", f"已回退 {result.affected_count} 个文件。"
+        )
         self._last_rename_id = None
         try:
             get_data_bus().emit_data_changed("assets_changed")

@@ -27,7 +27,9 @@ class ProjectFromTemplateDialog(QDialog):
     def __init__(self, parent=None, db_service=None, templates=None):
         super().__init__(parent)
         self._db_service = db_service
-        self._templates = list(templates or (db_service.get_project_templates() if db_service else []))
+        self._templates = list(
+            templates or (db_service.get_project_templates() if db_service else [])
+        )
         self._created_project: Project | None = None
         self.setWindowTitle("从模板新建项目")
         self.setMinimumWidth(440)
@@ -198,9 +200,13 @@ def create_project_from_template(parent=None, db_service=None) -> Project | None
     return None
 
 
-def save_project_as_template(parent=None, db_service=None, project: Project | None = None) -> ProjectTemplate | None:
+def save_project_as_template(
+    parent=None, db_service=None, project: Project | None = None
+) -> ProjectTemplate | None:
     """便捷方法：弹出「保存为模板」对话框，返回新模板（取消返回 None）。"""
-    dlg = SaveProjectAsTemplateDialog(parent=parent, db_service=db_service, project=project)
+    dlg = SaveProjectAsTemplateDialog(
+        parent=parent, db_service=db_service, project=project
+    )
     if dlg.exec() == QDialog.Accepted:
         return dlg.get_saved_template()
     return None

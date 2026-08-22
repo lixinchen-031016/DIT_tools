@@ -4,11 +4,12 @@
 - ScheduledTaskService：轻量定时调度器（复用应用生命周期，单线程 trigger）
 - IntegrityScheduler：把 backup_service.verify_backup 包装为定时任务并写审计日志
 """
+
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from logging import getLogger
-from typing import Callable
 
 logger = getLogger(__name__)
 
@@ -117,7 +118,9 @@ class IntegrityScheduler:
     - backup：仅校验创建过备份作业的项目
     """
 
-    def __init__(self, backup_service, db_service, scheduler: ScheduledTaskService | None = None):
+    def __init__(
+        self, backup_service, db_service, scheduler: ScheduledTaskService | None = None
+    ):
         self.backup_service = backup_service
         self.db_service = db_service
         self.scheduler = scheduler if scheduler is not None else ScheduledTaskService()
@@ -131,10 +134,17 @@ class IntegrityScheduler:
 
     def _projects_for_scope(self) -> list:
         from DITWorkstation.App import config
+
         scope = getattr(config, "integrity_check_scope", "all") or "all"
         if scope == "backup":
-            job_ids = {j.get("project_id") for j in self.db_service.get_backup_jobs() if j.get("project_id")}
-            return [p for p in self.db_service.get_projects() if p.project_id in job_ids]
+            job_ids = {
+                j.get("project_id")
+                for j in self.db_service.get_backup_jobs()
+                if j.get("project_id")
+            }
+            return [
+                p for p in self.db_service.get_projects() if p.project_id in job_ids
+            ]
         return self.db_service.get_projects()
 
     def run_all_projects(self) -> dict:

@@ -1,4 +1,5 @@
 """报告生成服务"""
+
 import os
 import platform
 from collections import Counter
@@ -48,7 +49,9 @@ class ReportService:
         for fp in font_paths:
             if os.path.exists(fp):
                 try:
-                    pdfmetrics.registerFont(TTFont(self._chinese_font_name, fp, subfontIndex=0))
+                    pdfmetrics.registerFont(
+                        TTFont(self._chinese_font_name, fp, subfontIndex=0)
+                    )
                     self._font_registered = True
                     logger.info(f"成功注册中文字体: {fp}")
                     return
@@ -69,26 +72,32 @@ class ReportService:
         font_paths = []
 
         if system == "Darwin":
-            font_paths.extend([
-                "/System/Library/Fonts/PingFang.ttc",
-                "/System/Library/Fonts/STHeiti Light.ttc",
-                "/System/Library/Fonts/Hiragino Sans GB.ttc",
-                "/Library/Fonts/Arial Unicode.ttf",
-                "/System/Library/Fonts/Helvetica.ttc",
-            ])
+            font_paths.extend(
+                [
+                    "/System/Library/Fonts/PingFang.ttc",
+                    "/System/Library/Fonts/STHeiti Light.ttc",
+                    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                    "/Library/Fonts/Arial Unicode.ttf",
+                    "/System/Library/Fonts/Helvetica.ttc",
+                ]
+            )
         elif system == "Windows":
-            font_paths.extend([
-                "C:/Windows/Fonts/msyh.ttc",
-                "C:/Windows/Fonts/simsun.ttc",
-                "C:/Windows/Fonts/arialuni.ttf",
-            ])
+            font_paths.extend(
+                [
+                    "C:/Windows/Fonts/msyh.ttc",
+                    "C:/Windows/Fonts/simsun.ttc",
+                    "C:/Windows/Fonts/arialuni.ttf",
+                ]
+            )
         elif system == "Linux":
-            font_paths.extend([
-                "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.otf",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            ])
+            font_paths.extend(
+                [
+                    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+                    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.otf",
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                ]
+            )
         else:
             font_paths.append("Helvetica")
 
@@ -105,27 +114,43 @@ class ReportService:
                 status = CopyStatus(raw.get("status", CopyStatus.PENDING.value))
             except ValueError:
                 status = CopyStatus.FAILED
-            targets.append(BackupTarget(
-                path=raw.get("path", ""), name=raw.get("name", ""), status=status,
-                total_files=int(raw.get("total_files", 0)), completed_files=int(raw.get("completed_files", 0)),
-                total_bytes=int(raw.get("total_bytes", 0)), copied_bytes=int(raw.get("copied_bytes", 0)),
-                verified=bool(raw.get("verified", False)), error_message=raw.get("error_message", ""),
-                failed_files=list(raw.get("failed_files", [])), pending_files=list(raw.get("pending_files", [])),
-            ))
+            targets.append(
+                BackupTarget(
+                    path=raw.get("path", ""),
+                    name=raw.get("name", ""),
+                    status=status,
+                    total_files=int(raw.get("total_files", 0)),
+                    completed_files=int(raw.get("completed_files", 0)),
+                    total_bytes=int(raw.get("total_bytes", 0)),
+                    copied_bytes=int(raw.get("copied_bytes", 0)),
+                    verified=bool(raw.get("verified", False)),
+                    error_message=raw.get("error_message", ""),
+                    failed_files=list(raw.get("failed_files", [])),
+                    pending_files=list(raw.get("pending_files", [])),
+                )
+            )
         try:
             status = BackupStatus(record.get("status", BackupStatus.IDLE.value))
         except ValueError:
             status = BackupStatus.FAILED
         try:
-            algorithm = ChecksumAlgorithm(record.get("algorithm", ChecksumAlgorithm.XXHASH64.value))
+            algorithm = ChecksumAlgorithm(
+                record.get("algorithm", ChecksumAlgorithm.XXHASH64.value)
+            )
         except ValueError:
             algorithm = ChecksumAlgorithm.XXHASH64
-        created_at = ReportService._safe_datetime(record.get("created_at")) or now_local()
+        created_at = (
+            ReportService._safe_datetime(record.get("created_at")) or now_local()
+        )
         completed_at = ReportService._safe_datetime(record.get("completed_at"))
         return BackupJob(
-            job_id=record.get("job_id", "unknown"), source_path=record.get("source_path", ""),
-            targets=targets, status=status, algorithm=algorithm,
-            total_files=int(record.get("total_files", 0)), total_bytes=int(record.get("total_bytes", 0)),
+            job_id=record.get("job_id", "unknown"),
+            source_path=record.get("source_path", ""),
+            targets=targets,
+            status=status,
+            algorithm=algorithm,
+            total_files=int(record.get("total_files", 0)),
+            total_bytes=int(record.get("total_bytes", 0)),
             created_at=created_at,
             completed_at=completed_at,
         )
@@ -145,7 +170,7 @@ class ReportService:
         self,
         project: Project | None,
         jobs: list[BackupJob | dict],
-        output_path: str | None = None
+        output_path: str | None = None,
     ) -> str:
         """
         生成数据备份报告
@@ -167,21 +192,26 @@ class ReportService:
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-        doc = SimpleDocTemplate(output_path, pagesize=A4,
-                                topMargin=20*mm, bottomMargin=20*mm)
+        doc = SimpleDocTemplate(
+            output_path, pagesize=A4, topMargin=20 * mm, bottomMargin=20 * mm
+        )
         styles = getSampleStyleSheet()
         title_style = ParagraphStyle(
-            'ChineseTitle', parent=styles['Title'],
-            fontName=self._chinese_font_name, fontSize=18
+            "ChineseTitle",
+            parent=styles["Title"],
+            fontName=self._chinese_font_name,
+            fontSize=18,
         )
         heading_style = ParagraphStyle(
-            'ChineseHeading', parent=styles['Heading2'],
-            fontName=self._chinese_font_name, fontSize=14
+            "ChineseHeading",
+            parent=styles["Heading2"],
+            fontName=self._chinese_font_name,
+            fontSize=14,
         )
         elements = []
 
         elements.append(Paragraph("DIT数据管理报告", title_style))
-        elements.append(Spacer(1, 10*mm))
+        elements.append(Spacer(1, 10 * mm))
 
         elements.append(Paragraph("项目信息", heading_style))
         project_info = [
@@ -189,15 +219,19 @@ class ReportService:
             ["报告时间", now_local().strftime("%Y-%m-%d %H:%M:%S")],
             ["备份任务数", str(len(jobs))],
         ]
-        t = Table(project_info, colWidths=[40*mm, 120*mm])
-        t.setStyle(TableStyle([
-            ('FONTNAME', (0, 0), (-1, -1), self._chinese_font_name),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
-        ]))
+        t = Table(project_info, colWidths=[40 * mm, 120 * mm])
+        t.setStyle(
+            TableStyle(
+                [
+                    ("FONTNAME", (0, 0), (-1, -1), self._chinese_font_name),
+                    ("FONTSIZE", (0, 0), (-1, -1), 10),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                    ("BACKGROUND", (0, 0), (0, -1), colors.lightgrey),
+                ]
+            )
+        )
         elements.append(t)
-        elements.append(Spacer(1, 8*mm))
+        elements.append(Spacer(1, 8 * mm))
 
         elements.append(Paragraph("备份任务详情", heading_style))
         for i, job in enumerate(jobs):
@@ -210,45 +244,61 @@ class ReportService:
                 ["校验算法", job.algorithm.value],
                 ["创建时间", job.created_at.strftime("%Y-%m-%d %H:%M:%S")],
             ]
-            t = Table(job_data, colWidths=[40*mm, 120*mm])
-            t.setStyle(TableStyle([
-                ('FONTNAME', (0, 0), (-1, -1), self._chinese_font_name),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
-            ]))
+            t = Table(job_data, colWidths=[40 * mm, 120 * mm])
+            t.setStyle(
+                TableStyle(
+                    [
+                        ("FONTNAME", (0, 0), (-1, -1), self._chinese_font_name),
+                        ("FONTSIZE", (0, 0), (-1, -1), 9),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                        ("BACKGROUND", (0, 0), (0, -1), colors.lightgrey),
+                    ]
+                )
+            )
             elements.append(t)
 
             if job.targets:
                 target_header = [["目标", "状态", "文件数", "已验证"]]
                 target_rows = []
                 for target in job.targets:
-                    target_rows.append([
-                        target.name or target.path,
-                        target.status.value,
-                        f"{target.completed_files}/{target.total_files}",
-                        "是" if target.verified else "否"
-                    ])
-                t2 = Table(target_header + target_rows, colWidths=[50*mm, 35*mm, 35*mm, 30*mm])
-                t2.setStyle(TableStyle([
-                    ('FONTNAME', (0, 0), (-1, -1), self._chinese_font_name),
-                    ('FONTSIZE', (0, 0), (-1, -1), 9),
-                    ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4472C4')),
-                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                ]))
-                elements.append(Spacer(1, 3*mm))
+                    target_rows.append(
+                        [
+                            target.name or target.path,
+                            target.status.value,
+                            f"{target.completed_files}/{target.total_files}",
+                            "是" if target.verified else "否",
+                        ]
+                    )
+                t2 = Table(
+                    target_header + target_rows,
+                    colWidths=[50 * mm, 35 * mm, 35 * mm, 30 * mm],
+                )
+                t2.setStyle(
+                    TableStyle(
+                        [
+                            ("FONTNAME", (0, 0), (-1, -1), self._chinese_font_name),
+                            ("FONTSIZE", (0, 0), (-1, -1), 9),
+                            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4472C4")),
+                            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                        ]
+                    )
+                )
+                elements.append(Spacer(1, 3 * mm))
                 elements.append(t2)
 
-            elements.append(Spacer(1, 6*mm))
+            elements.append(Spacer(1, 6 * mm))
 
         doc.build(elements)
         logger.info(f"备份报告生成成功: {output_path}")
         return output_path
 
     def generate_audit_report(
-        self, operations: Iterable[dict], output_path: str | None = None,
-        *, title: str = "操作审计报表",
+        self,
+        operations: Iterable[dict],
+        output_path: str | None = None,
+        *,
+        title: str = "操作审计报表",
     ) -> str:
         """将筛选后的操作日志生成带汇总的 PDF 交付报表。"""
         self._register_fonts()
@@ -258,33 +308,60 @@ class ReportService:
             output_path = str(config.report_dir / f"审计报表_{timestamp}.pdf")
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-        doc = SimpleDocTemplate(output_path, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm)
+        doc = SimpleDocTemplate(
+            output_path, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm
+        )
         styles = getSampleStyleSheet()
         title_style = ParagraphStyle(
-            "AuditTitle", parent=styles["Title"], fontName=self._chinese_font_name, fontSize=18,
+            "AuditTitle",
+            parent=styles["Title"],
+            fontName=self._chinese_font_name,
+            fontSize=18,
         )
         heading_style = ParagraphStyle(
-            "AuditHeading", parent=styles["Heading2"], fontName=self._chinese_font_name, fontSize=13,
+            "AuditHeading",
+            parent=styles["Heading2"],
+            fontName=self._chinese_font_name,
+            fontSize=13,
         )
         body_style = ParagraphStyle(
-            "AuditBody", parent=styles["BodyText"], fontName=self._chinese_font_name, fontSize=8,
+            "AuditBody",
+            parent=styles["BodyText"],
+            fontName=self._chinese_font_name,
+            fontSize=8,
         )
 
-        status_counts = Counter(str(item.get("status") or "success") for item in records)
+        status_counts = Counter(
+            str(item.get("status") or "success") for item in records
+        )
         event_counts = Counter(str(item.get("event") or "未命名") for item in records)
         day_counts = Counter(
             self._safe_datetime(item.get("created_at")).strftime("%Y-%m-%d")
-            for item in records if self._safe_datetime(item.get("created_at"))
+            for item in records
+            if self._safe_datetime(item.get("created_at"))
         )
         status_labels = {
-            "success": "成功", "not_found": "未找到", "conflict": "冲突",
-            "invalid": "无效", "error": "失败", "cancelled": "已取消",
+            "success": "成功",
+            "not_found": "未找到",
+            "conflict": "冲突",
+            "invalid": "无效",
+            "error": "失败",
+            "cancelled": "已取消",
         }
         elements = [Paragraph(title, title_style), Spacer(1, 6 * mm)]
         summary = [
             ["记录总数", str(len(records))],
             ["成功", str(status_counts.get("success", 0))],
-            ["异常/失败", str(sum(count for key, count in status_counts.items() if key != "success"))],
+            [
+                "异常/失败",
+                str(
+                    sum(
+                        count
+                        for key, count in status_counts.items()
+                        if key != "success"
+                    )
+                ),
+            ],
             ["报表时间", now_local().strftime("%Y-%m-%d %H:%M:%S")],
         ]
         table = Table(summary, colWidths=[42 * mm, 118 * mm])
@@ -298,19 +375,32 @@ class ReportService:
         for heading, rows in (("按日统计", daily_rows), ("按事件统计", event_rows)):
             table = Table(rows or [["无", "0"]], colWidths=[90 * mm, 35 * mm])
             table.setStyle(self._report_table_style(header=True))
-            elements.extend([Paragraph(heading, heading_style), table, Spacer(1, 5 * mm)])
+            elements.extend(
+                [Paragraph(heading, heading_style), table, Spacer(1, 5 * mm)]
+            )
 
         detail_rows = [["时间", "事件", "状态", "对象", "详情"]]
         for item in records:
             created = self._safe_datetime(item.get("created_at"))
-            detail_rows.append([
-                created.strftime("%Y-%m-%d %H:%M:%S") if created else "",
-                Paragraph(str(item.get("event") or ""), body_style),
-                status_labels.get(str(item.get("status") or "success"), str(item.get("status") or "")),
-                f"{item.get('object_type') or ''}/{item.get('object_id') or ''}".strip("/"),
-                Paragraph(str(item.get("detail") or ""), body_style),
-            ])
-        detail = Table(detail_rows or [["", "", "", "", ""]], colWidths=[29 * mm, 31 * mm, 20 * mm, 37 * mm, 43 * mm], repeatRows=1)
+            detail_rows.append(
+                [
+                    created.strftime("%Y-%m-%d %H:%M:%S") if created else "",
+                    Paragraph(str(item.get("event") or ""), body_style),
+                    status_labels.get(
+                        str(item.get("status") or "success"),
+                        str(item.get("status") or ""),
+                    ),
+                    f"{item.get('object_type') or ''}/{item.get('object_id') or ''}".strip(
+                        "/"
+                    ),
+                    Paragraph(str(item.get("detail") or ""), body_style),
+                ]
+            )
+        detail = Table(
+            detail_rows or [["", "", "", "", ""]],
+            colWidths=[29 * mm, 31 * mm, 20 * mm, 37 * mm, 43 * mm],
+            repeatRows=1,
+        )
         detail.setStyle(self._report_table_style(header=True))
         elements.extend([Paragraph("明细", heading_style), detail])
         doc.build(elements)
@@ -325,10 +415,12 @@ class ReportService:
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ]
         if header:
-            commands.extend([
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4472C4")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ])
+            commands.extend(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4472C4")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ]
+            )
         else:
             commands.append(("BACKGROUND", (0, 0), (0, -1), colors.lightgrey))
         return TableStyle(commands)
@@ -364,21 +456,26 @@ class ReportService:
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-        doc = SimpleDocTemplate(output_path, pagesize=A4,
-                                topMargin=20*mm, bottomMargin=20*mm)
+        doc = SimpleDocTemplate(
+            output_path, pagesize=A4, topMargin=20 * mm, bottomMargin=20 * mm
+        )
         styles = getSampleStyleSheet()
         title_style = ParagraphStyle(
-            'ChineseTitle', parent=styles['Title'],
-            fontName=self._chinese_font_name, fontSize=18
+            "ChineseTitle",
+            parent=styles["Title"],
+            fontName=self._chinese_font_name,
+            fontSize=18,
         )
         heading_style = ParagraphStyle(
-            'ChineseHeading', parent=styles['Heading2'],
-            fontName=self._chinese_font_name, fontSize=14
+            "ChineseHeading",
+            parent=styles["Heading2"],
+            fontName=self._chinese_font_name,
+            fontSize=14,
         )
 
         elements = []
         elements.append(Paragraph("素材统计报告", title_style))
-        elements.append(Spacer(1, 10*mm))
+        elements.append(Spacer(1, 10 * mm))
 
         elements.append(Paragraph("统计概览", heading_style))
         total_size = 0
@@ -394,7 +491,7 @@ class ReportService:
             asset_count += 1
             total_size += a.file_size
             raw_count += int(a.file_type in config.raw_extensions)
-            jpg_count += int(a.file_type in ('.jpg', '.jpeg'))
+            jpg_count += int(a.file_type in (".jpg", ".jpeg"))
             rated_count += int(bool(a.rating and a.rating > 0))
             r = a.rating or 0
             rating_dist[r] = rating_dist.get(r, 0) + 1
@@ -413,31 +510,39 @@ class ReportService:
             ["已评级素材", f"{rated_count} / {asset_count}"],
             ["报告时间", now_local().strftime("%Y-%m-%d %H:%M:%S")],
         ]
-        t = Table(stats, colWidths=[40*mm, 120*mm])
-        t.setStyle(TableStyle([
-            ('FONTNAME', (0, 0), (-1, -1), self._chinese_font_name),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
-        ]))
+        t = Table(stats, colWidths=[40 * mm, 120 * mm])
+        t.setStyle(
+            TableStyle(
+                [
+                    ("FONTNAME", (0, 0), (-1, -1), self._chinese_font_name),
+                    ("FONTSIZE", (0, 0), (-1, -1), 10),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                    ("BACKGROUND", (0, 0), (0, -1), colors.lightgrey),
+                ]
+            )
+        )
         elements.append(t)
-        elements.append(Spacer(1, 8*mm))
+        elements.append(Spacer(1, 8 * mm))
 
         elements.append(Paragraph("按场景统计", heading_style))
         if scene_stats:
             scene_data = [["场景", "文件数"]]
             for scene, count in sorted(scene_stats.items()):
                 scene_data.append([scene, str(count)])
-            t = Table(scene_data, colWidths=[80*mm, 40*mm])
-            t.setStyle(TableStyle([
-                ('FONTNAME', (0, 0), (-1, -1), self._chinese_font_name),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4472C4')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ]))
+            t = Table(scene_data, colWidths=[80 * mm, 40 * mm])
+            t.setStyle(
+                TableStyle(
+                    [
+                        ("FONTNAME", (0, 0), (-1, -1), self._chinese_font_name),
+                        ("FONTSIZE", (0, 0), (-1, -1), 9),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4472C4")),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ]
+                )
+            )
             elements.append(t)
-            elements.append(Spacer(1, 8*mm))
+            elements.append(Spacer(1, 8 * mm))
 
         elements.append(Paragraph("按评级统计", heading_style))
         rating_data = [["评级", "文件数", "占比"]]
@@ -446,17 +551,25 @@ class ReportService:
             count = rating_dist.get(r, 0)
             percent = f"{(count / total_assets) * 100:.1f}%"
             rating_data.append([RATING_LABELS[r], str(count), percent])
-        t = Table(rating_data, colWidths=[60*mm, 40*mm, 40*mm])
-        t.setStyle(TableStyle([
-            ('FONTNAME', (0, 0), (-1, -1), self._chinese_font_name),
-            ('FONTSIZE', (0, 0), (-1, -1), 9),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4472C4')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            # 优选行高亮：表头占 index 0，rating=PREFERRED(3) 对应行索引 = 3 + 1 = 4
-            ('BACKGROUND', (0, AssetRating.PREFERRED.value + 1),
-             (-1, AssetRating.PREFERRED.value + 1), colors.HexColor('#FFF4E5')),
-        ]))
+        t = Table(rating_data, colWidths=[60 * mm, 40 * mm, 40 * mm])
+        t.setStyle(
+            TableStyle(
+                [
+                    ("FONTNAME", (0, 0), (-1, -1), self._chinese_font_name),
+                    ("FONTSIZE", (0, 0), (-1, -1), 9),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4472C4")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    # 优选行高亮：表头占 index 0，rating=PREFERRED(3) 对应行索引 = 3 + 1 = 4
+                    (
+                        "BACKGROUND",
+                        (0, AssetRating.PREFERRED.value + 1),
+                        (-1, AssetRating.PREFERRED.value + 1),
+                        colors.HexColor("#FFF4E5"),
+                    ),
+                ]
+            )
+        )
         elements.append(t)
 
         doc.build(elements)
@@ -472,8 +585,13 @@ class ReportService:
         return self.export_assets_csv_iter(assets, output_path)
 
     def export_assets_csv_iter(
-        self, assets, output_path: str, *, total: int = 0,
-        progress_callback=None, cancel_check=None,
+        self,
+        assets,
+        output_path: str,
+        *,
+        total: int = 0,
+        progress_callback=None,
+        cancel_check=None,
     ) -> str:
         """把素材元数据导出为 CSV 表格。
 
@@ -493,11 +611,31 @@ class ReportService:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         headers = [
-            "文件名", "文件路径", "类型", "素材类型", "大小(字节)",
-            "场景", "镜头", "镜次", "评级",
-            "拍摄时间", "相机品牌", "相机型号", "镜头型号", "焦距",
-            "分辨率", "时长(秒)", "校验和算法", "校验和",
-            "备份位置", "原始路径", "关联日志ID", "是否工作副本", "标签", "备注", "导入时间",
+            "文件名",
+            "文件路径",
+            "类型",
+            "素材类型",
+            "大小(字节)",
+            "场景",
+            "镜头",
+            "镜次",
+            "评级",
+            "拍摄时间",
+            "相机品牌",
+            "相机型号",
+            "镜头型号",
+            "焦距",
+            "分辨率",
+            "时长(秒)",
+            "校验和算法",
+            "校验和",
+            "备份位置",
+            "原始路径",
+            "关联日志ID",
+            "是否工作副本",
+            "标签",
+            "备注",
+            "导入时间",
         ]
 
         def _dt(value) -> str:
@@ -510,23 +648,39 @@ class ReportService:
             for a in assets:
                 if cancel_check and cancel_check():
                     raise InterruptedError("CSV 导出已取消")
-                writer.writerow([
-                    a.file_name, a.file_path, a.file_type, a.asset_type,
-                    a.file_size,
-                    a.scene, a.shot, a.take,
-                    RATING_LABELS.get(a.rating, RATING_LABELS[AssetRating.NONE.value]),
-                    _dt(a.date_taken), a.camera_make, a.camera_model, a.lens_model,
-                    a.focal_length,
-                    f"{a.width}x{a.height}" if a.width and a.height else "",
-                    f"{a.duration_seconds:.3f}".rstrip("0").rstrip(".")
-                    if a.duration_seconds else "",
-                    a.checksum_algorithm, a.checksum_value,
-                    " | ".join(a.backup_locations), a.original_path,
-                    a.log_id or "",
-                    "是" if a.is_working_copy else "否",
-                    a.tags, a.notes,
-                    _dt(a.date_imported),
-                ])
+                writer.writerow(
+                    [
+                        a.file_name,
+                        a.file_path,
+                        a.file_type,
+                        a.asset_type,
+                        a.file_size,
+                        a.scene,
+                        a.shot,
+                        a.take,
+                        RATING_LABELS.get(
+                            a.rating, RATING_LABELS[AssetRating.NONE.value]
+                        ),
+                        _dt(a.date_taken),
+                        a.camera_make,
+                        a.camera_model,
+                        a.lens_model,
+                        a.focal_length,
+                        f"{a.width}x{a.height}" if a.width and a.height else "",
+                        f"{a.duration_seconds:.3f}".rstrip("0").rstrip(".")
+                        if a.duration_seconds
+                        else "",
+                        a.checksum_algorithm,
+                        a.checksum_value,
+                        " | ".join(a.backup_locations),
+                        a.original_path,
+                        a.log_id or "",
+                        "是" if a.is_working_copy else "否",
+                        a.tags,
+                        a.notes,
+                        _dt(a.date_imported),
+                    ]
+                )
                 count += 1
                 if progress_callback:
                     progress_callback(count, total, f"导出: {a.file_name}")

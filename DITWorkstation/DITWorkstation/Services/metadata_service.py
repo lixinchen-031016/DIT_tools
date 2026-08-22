@@ -3,6 +3,7 @@
 从 rename_service.py 拆离的 MetadataService，负责读取图片/RAW/视频元数据。
 与 RenameService 零耦合，独立演进。
 """
+
 import os
 import sys
 from datetime import datetime
@@ -30,14 +31,29 @@ class MetadataService:
             file_path=str(path),
             file_name=path.name,
             file_size=path.stat().st_size if path.exists() else 0,
-            file_type=path.suffix.lower()
+            file_type=path.suffix.lower(),
         )
 
         # 尝试读取EXIF信息（JPG/TIFF/RAW）
         ext = path.suffix.lower()
-        if ext in ('.jpg', '.jpeg', '.tiff', '.tif', '.png', '.webp',
-                   '.cr2', '.cr3', '.nef', '.arw', '.dng', '.orf',
-                   '.rw2', '.raf', '.pef', '.srw'):
+        if ext in (
+            ".jpg",
+            ".jpeg",
+            ".tiff",
+            ".tif",
+            ".png",
+            ".webp",
+            ".cr2",
+            ".cr3",
+            ".nef",
+            ".arw",
+            ".dng",
+            ".orf",
+            ".rw2",
+            ".raf",
+            ".pef",
+            ".srw",
+        ):
             self._read_exif(path, metadata)
 
         return metadata
@@ -73,8 +89,12 @@ class MetadataService:
     def _apply_exif_tags(self, tags: dict, metadata: MediaMetadata):
         """把 exifread 标签映射到领域模型。"""
         metadata.camera_make = self._exif_value(tags, "Image Make", "EXIF Make").strip()
-        metadata.camera_model = self._exif_value(tags, "Image Model", "EXIF Model").strip()
-        metadata.lens_model = self._exif_value(tags, "EXIF LensModel", "Image LensModel").strip()
+        metadata.camera_model = self._exif_value(
+            tags, "Image Model", "EXIF Model"
+        ).strip()
+        metadata.lens_model = self._exif_value(
+            tags, "EXIF LensModel", "Image LensModel"
+        ).strip()
 
         iso_value = self._exif_value(tags, "EXIF ISOSpeedRatings")
         if iso_value:
@@ -92,10 +112,14 @@ class MetadataService:
 
         metadata.shutter_speed = self._exif_value(tags, "EXIF ExposureTime").strip()
         metadata.focal_length = self._exif_value(tags, "EXIF FocalLength").strip()
-        date_value = self._exif_value(tags, "EXIF DateTimeOriginal", "Image DateTimeOriginal")
+        date_value = self._exif_value(
+            tags, "EXIF DateTimeOriginal", "Image DateTimeOriginal"
+        )
         if date_value:
             try:
-                metadata.date_taken = datetime.strptime(date_value.strip(), "%Y:%m:%d %H:%M:%S")
+                metadata.date_taken = datetime.strptime(
+                    date_value.strip(), "%Y:%m:%d %H:%M:%S"
+                )
             except (ValueError, TypeError):
                 pass
         self._apply_exif_dimensions(tags, metadata)
@@ -211,19 +235,23 @@ class MetadataService:
             if sys.platform == "win32":
                 paths.append(str(bundle / "MediaInfo.dll"))
             elif sys.platform == "darwin":
-                paths.extend([
-                    str(bundle / "libmediainfo.0.dylib"),
-                    str(bundle / "libmediainfo.dylib"),
-                ])
+                paths.extend(
+                    [
+                        str(bundle / "libmediainfo.0.dylib"),
+                        str(bundle / "libmediainfo.dylib"),
+                    ]
+                )
             else:
                 paths.append(str(bundle / "libmediainfo.so.0"))
         if sys.platform == "darwin":
-            paths.extend([
-                "/opt/homebrew/lib/libmediainfo.0.dylib",   # Apple Silicon Homebrew
-                "/usr/local/lib/libmediainfo.0.dylib",      # Intel Homebrew
-                "/opt/homebrew/lib/libmediainfo.dylib",
-                "/usr/local/lib/libmediainfo.dylib",
-            ])
+            paths.extend(
+                [
+                    "/opt/homebrew/lib/libmediainfo.0.dylib",  # Apple Silicon Homebrew
+                    "/usr/local/lib/libmediainfo.0.dylib",  # Intel Homebrew
+                    "/opt/homebrew/lib/libmediainfo.dylib",
+                    "/usr/local/lib/libmediainfo.dylib",
+                ]
+            )
         elif sys.platform == "win32":
             # 从环境变量读取 Program Files 路径（覆盖非系统盘安装、自定义目录）
             pf64 = os.environ.get("ProgramW6432") or os.environ.get("ProgramFiles")
@@ -234,21 +262,24 @@ class MetadataService:
             if pf32:
                 candidates.append(Path(pf32) / "MediaInfo" / "MediaInfo.dll")
             # 默认安装路径兜底
-            candidates.extend([
-                Path("C:/Program Files/MediaInfo/MediaInfo.dll"),
-                Path("C:/Program Files (x86)/MediaInfo/MediaInfo.dll"),
-            ])
+            candidates.extend(
+                [
+                    Path("C:/Program Files/MediaInfo/MediaInfo.dll"),
+                    Path("C:/Program Files (x86)/MediaInfo/MediaInfo.dll"),
+                ]
+            )
             paths.extend(str(c) for c in candidates)
         else:
             # Linux 及其他类 Unix 系统
-            paths.extend([
-                "/usr/lib/libmediainfo.so.0",
-                "/usr/lib/x86_64-linux-gnu/libmediainfo.so.0",
-                "/usr/local/lib/libmediainfo.so.0",
-                "/usr/lib/libmediainfo.so",
-            ])
+            paths.extend(
+                [
+                    "/usr/lib/libmediainfo.so.0",
+                    "/usr/lib/x86_64-linux-gnu/libmediainfo.so.0",
+                    "/usr/local/lib/libmediainfo.so.0",
+                    "/usr/lib/libmediainfo.so",
+                ]
+            )
         return paths
-
 
     def write_xmp_sidecar(self, file_path, *, rating=None, tags=None, notes=None):
         """为媒体文件写入 XMP sidecar 文件（.xmp 同目录侧挂）。
@@ -270,7 +301,9 @@ class MetadataService:
             xmp_path = path.parent / (path.name + ".xmp")
 
         lines = [
-            '<?xpacket begin="' + _XMP_PACKET_BEGIN + '" id="W5M0MpCehiHzreSzNTczkc9d"?>',
+            '<?xpacket begin="'
+            + _XMP_PACKET_BEGIN
+            + '" id="W5M0MpCehiHzreSzNTczkc9d"?>',
             '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
             ' <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">',
             '  <rdf:Description rdf:about=""',
@@ -288,41 +321,50 @@ class MetadataService:
             lines.append("   </dc:subject>")
 
         if notes:
-            lines.extend([
-                "   <dc:description>",
-                "    <rdf:Alt>",
-                '     <rdf:li xml:lang="x-default">' + _xmp_escape(str(notes)) + '</rdf:li>',
-                "    </rdf:Alt>",
-                "   </dc:description>",
-            ])
+            lines.extend(
+                [
+                    "   <dc:description>",
+                    "    <rdf:Alt>",
+                    '     <rdf:li xml:lang="x-default">'
+                    + _xmp_escape(str(notes))
+                    + "</rdf:li>",
+                    "    </rdf:Alt>",
+                    "   </dc:description>",
+                ]
+            )
 
         if rating is not None and rating >= 0:
             lines.append("   <xmp:Rating>" + str(int(rating)) + "</xmp:Rating>")
 
-        lines.extend([
-            "  </rdf:Description>",
-            " </rdf:RDF>",
-            "</x:xmpmeta>",
-            '<?xpacket end="w"?>',
-        ])
+        lines.extend(
+            [
+                "  </rdf:Description>",
+                " </rdf:RDF>",
+                "</x:xmpmeta>",
+                '<?xpacket end="w"?>',
+            ]
+        )
         xmp_content = "\n".join(lines)
 
         # 原子写入：避免进程中断产生半成品
         import tempfile
+
         try:
-            tmp = tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", suffix=".xmp",
-                dir=str(xmp_path.parent), delete=False,
-            )
-            tmp.write(xmp_content)
-            tmp.close()
-            if xmp_path.exists():
-                existing = xmp_path.read_text(encoding="utf-8", errors="replace")
-                if existing == xmp_content:
-                    Path(tmp.name).unlink(missing_ok=True)
-                    return True
-            Path(tmp.name).replace(str(xmp_path))
-            return True
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                suffix=".xmp",
+                dir=str(xmp_path.parent),
+                delete=False,
+            ) as tmp:
+                tmp.write(xmp_content)
+                if xmp_path.exists():
+                    existing = xmp_path.read_text(encoding="utf-8", errors="replace")
+                    if existing == xmp_content:
+                        Path(tmp.name).unlink(missing_ok=True)
+                        return True
+                Path(tmp.name).replace(str(xmp_path))
+                return True
         except (OSError, PermissionError) as exc:
             logger.warning("XMP 写入失败 %s: %s", xmp_path, exc)
             return False
@@ -333,4 +375,5 @@ _XMP_PACKET_BEGIN = "\ufeff"
 
 def _xmp_escape(text: str) -> str:
     import html
+
     return html.escape(str(text), quote=True)

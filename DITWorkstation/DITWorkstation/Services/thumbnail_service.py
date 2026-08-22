@@ -10,6 +10,7 @@
   → PyAV；全部解码失败时返回 None 显示占位图
 - QThreadPool 限 4 并发，避免大批量时抢占主线程
 """
+
 import io
 import platform
 import shutil
@@ -25,8 +26,8 @@ from DITWorkstation.App import config
 from DITWorkstation.Utils import logger
 
 # 缩略图尺寸档位
-SIZE_SMALL = 64    # 表格列用
-SIZE_LARGE = 320   # 详情面板用
+SIZE_SMALL = 64  # 表格列用
+SIZE_LARGE = 320  # 详情面板用
 
 
 class ThumbnailService(QObject):
@@ -51,8 +52,9 @@ class ThumbnailService(QObject):
                 "未检测到 ffmpeg，视频缩略图将尝试 macOS QuickLook / PyAV 备选方案"
             )
 
-    def get_thumbnail(self, cache_key: str, file_path: str,
-                      asset_type: str, size: int = SIZE_SMALL) -> QPixmap | None:
+    def get_thumbnail(
+        self, cache_key: str, file_path: str, asset_type: str, size: int = SIZE_SMALL
+    ) -> QPixmap | None:
         """同步取缓存；未命中返回 None 并异步生成。
 
         Args:
@@ -72,7 +74,9 @@ class ThumbnailService(QObject):
             if request_key in self._inflight:
                 return None
             self._inflight.add(request_key)
-        worker = _ThumbnailWorker(self, cache_key, file_path, asset_type, size, cache_file)
+        worker = _ThumbnailWorker(
+            self, cache_key, file_path, asset_type, size, cache_file
+        )
         try:
             self._pool.start(worker)
         except Exception:
@@ -247,12 +251,24 @@ class ThumbnailService(QObject):
         if not self._ffmpeg_available:
             return None
         cmd = [
-            "ffmpeg", "-y", "-ss", "1", "-i", file_path,
-            "-frames:v", "1", "-vf", f"scale={size}:-1",
-            "-f", "image2pipe", "-vcodec", "png", "pipe:1",
+            "ffmpeg",
+            "-y",
+            "-ss",
+            "1",
+            "-i",
+            file_path,
+            "-frames:v",
+            "1",
+            "-vf",
+            f"scale={size}:-1",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "png",
+            "pipe:1",
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, timeout=15)
+            result = subprocess.run(cmd, capture_output=True, timeout=15, check=False)
             if result.returncode == 0 and result.stdout:
                 return result.stdout
         except (subprocess.TimeoutExpired, OSError) as e:
@@ -272,7 +288,9 @@ class ThumbnailService(QObject):
         try:
             result = subprocess.run(
                 ["qlmanage", "-t", "-s", str(size), "-o", out_dir, file_path],
-                capture_output=True, timeout=30,
+                capture_output=True,
+                timeout=30,
+                check=False,
             )
             if result.returncode != 0:
                 return None
@@ -280,6 +298,7 @@ class ThumbnailService(QObject):
             if not png.exists():
                 return None
             from PIL import Image
+
             with Image.open(png) as img:
                 return ThumbnailService._to_png(img, size)
         except (subprocess.TimeoutExpired, OSError) as e:
@@ -297,9 +316,7 @@ class ThumbnailService(QObject):
             return None
         try:
             with av.open(file_path) as container:
-                stream = next(
-                    s for s in container.streams if s.type == "video"
-                )
+                stream = next(s for s in container.streams if s.type == "video")
                 for frame in container.decode(stream):
                     img = frame.to_image()
                     break
@@ -309,6 +326,7 @@ class ThumbnailService(QObject):
         except Exception as e:
             logger.debug(f"PyAV 抽帧失败 {file_path}: {e}")
             return None
+
 
 class _ThumbnailWorker(QRunnable):
     """缩略图生成任务：在 QThreadPool 中执行，完成后发信号。"""
@@ -325,7 +343,9 @@ class _ThumbnailWorker(QRunnable):
     @Slot()
     def run(self):
         try:
-            data = self._service._generate(self._file_path, self._asset_type, self._size)
+            data = self._service._generate(
+                self._file_path, self._asset_type, self._size
+            )
             if data is None:
                 return
             # 写缓存（失败仅记日志，不影响功能）

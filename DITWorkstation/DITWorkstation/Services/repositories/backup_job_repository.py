@@ -1,4 +1,5 @@
 """Backup-job persistence and legacy row deserialization."""
+
 import json
 from datetime import datetime
 
@@ -19,28 +20,37 @@ class BackupJobRepository(BaseRepository):
             if exists is None:
                 logger.warning(f"备份作业关联项目不存在，改为未关联: {project_id}")
                 project_id = None
-        targets_json = json.dumps([
-            {
-                "path": target.path,
-                "name": target.name,
-                "status": target.status.value,
-                "total_files": target.total_files,
-                "completed_files": target.completed_files,
-                "total_bytes": target.total_bytes,
-                "copied_bytes": target.copied_bytes,
-                "verified": target.verified,
-                "error_message": target.error_message,
-                "failed_files": list(target.failed_files),
-                "pending_files": list(target.pending_files),
-            }
-            for target in job.targets
-        ], ensure_ascii=False)
-        failed_files_json = json.dumps([
-            {"path": target.path, "files": list(target.failed_files)}
-            for target in job.targets if target.failed_files
-        ], ensure_ascii=False)
+        targets_json = json.dumps(
+            [
+                {
+                    "path": target.path,
+                    "name": target.name,
+                    "status": target.status.value,
+                    "total_files": target.total_files,
+                    "completed_files": target.completed_files,
+                    "total_bytes": target.total_bytes,
+                    "copied_bytes": target.copied_bytes,
+                    "verified": target.verified,
+                    "error_message": target.error_message,
+                    "failed_files": list(target.failed_files),
+                    "pending_files": list(target.pending_files),
+                }
+                for target in job.targets
+            ],
+            ensure_ascii=False,
+        )
+        failed_files_json = json.dumps(
+            [
+                {"path": target.path, "files": list(target.failed_files)}
+                for target in job.targets
+                if target.failed_files
+            ],
+            ensure_ascii=False,
+        )
         snapshots_json = json.dumps(
-            list(getattr(job, "_files_cache", []) or []), ensure_ascii=False, default=str,
+            list(getattr(job, "_files_cache", []) or []),
+            ensure_ascii=False,
+            default=str,
         )
         try:
             with self._transaction() as conn:
@@ -49,10 +59,20 @@ class BackupJobRepository(BaseRepository):
                        (job_id, project_id, source_path, algorithm, total_files, total_bytes,
                         status, targets_json, failed_files_json, snapshot_json, created_at, completed_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (job.job_id, project_id, job.source_path, job.algorithm.value,
-                     job.total_files, job.total_bytes, job.status.value, targets_json,
-                     failed_files_json, snapshots_json, job.created_at.isoformat(),
-                     job.completed_at.isoformat() if job.completed_at else None),
+                    (
+                        job.job_id,
+                        project_id,
+                        job.source_path,
+                        job.algorithm.value,
+                        job.total_files,
+                        job.total_bytes,
+                        job.status.value,
+                        targets_json,
+                        failed_files_json,
+                        snapshots_json,
+                        job.created_at.isoformat(),
+                        job.completed_at.isoformat() if job.completed_at else None,
+                    ),
                 )
                 logger.info(f"持久化备份作业: {job.job_id} (project={project_id})")
             return True
@@ -70,10 +90,13 @@ class BackupJobRepository(BaseRepository):
         with self._connection() as conn:
             if project_id:
                 rows = conn.execute(
-                    "SELECT * FROM backup_jobs WHERE project_id = ? ORDER BY created_at DESC", (project_id,)
+                    "SELECT * FROM backup_jobs WHERE project_id = ? ORDER BY created_at DESC",
+                    (project_id,),
                 ).fetchall()
             else:
-                rows = conn.execute("SELECT * FROM backup_jobs ORDER BY created_at DESC").fetchall()
+                rows = conn.execute(
+                    "SELECT * FROM backup_jobs ORDER BY created_at DESC"
+                ).fetchall()
         results = []
         for row in rows:
             try:
@@ -90,21 +113,35 @@ class BackupJobRepository(BaseRepository):
                 except ValueError:
                     pass
             try:
-                failed = json.loads(row["failed_files_json"]) if row["failed_files_json"] else []
+                failed = (
+                    json.loads(row["failed_files_json"])
+                    if row["failed_files_json"]
+                    else []
+                )
             except (json.JSONDecodeError, TypeError):
                 failed = []
             try:
-                snapshots = json.loads(row["snapshot_json"]) if row["snapshot_json"] else []
+                snapshots = (
+                    json.loads(row["snapshot_json"]) if row["snapshot_json"] else []
+                )
             except (json.JSONDecodeError, TypeError):
                 snapshots = []
-            results.append({
-                "job_id": row["job_id"], "project_id": row["project_id"],
-                "source_path": row["source_path"], "algorithm": row["algorithm"],
-                "total_files": row["total_files"], "total_bytes": row["total_bytes"],
-                "status": row["status"], "targets": targets,
-                "created_at": self._database._parse_datetime(row["created_at"]),
-                "completed_at": completed_at,
-                "failed_files_by_target": {item["path"]: item.get("files", []) for item in failed},
-                "file_snapshots": snapshots,
-            })
+            results.append(
+                {
+                    "job_id": row["job_id"],
+                    "project_id": row["project_id"],
+                    "source_path": row["source_path"],
+                    "algorithm": row["algorithm"],
+                    "total_files": row["total_files"],
+                    "total_bytes": row["total_bytes"],
+                    "status": row["status"],
+                    "targets": targets,
+                    "created_at": self._database._parse_datetime(row["created_at"]),
+                    "completed_at": completed_at,
+                    "failed_files_by_target": {
+                        item["path"]: item.get("files", []) for item in failed
+                    },
+                    "file_snapshots": snapshots,
+                }
+            )
         return results

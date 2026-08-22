@@ -1,4 +1,5 @@
 """设置对话框：数据存储位置重设 / 临时文件清理 / 最近路径管理 / 运行参数"""
+
 import shutil
 import sys
 from pathlib import Path
@@ -82,7 +83,9 @@ class SettingsDialog(QDialog):
         title.setStyleSheet(TITLE_QSS)
         layout.addWidget(title)
 
-        subtitle = QLabel("使用场景、外观主题、数据存储、完整性校验、自动更新、存储卡与运行参数")
+        subtitle = QLabel(
+            "使用场景、外观主题、数据存储、完整性校验、自动更新、存储卡与运行参数"
+        )
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
@@ -92,8 +95,12 @@ class SettingsDialog(QDialog):
         usage_row = QHBoxLayout()
         usage_row.addWidget(QLabel("界面模式:"))
         self.usage_mode_combo = QComboBox()
-        self.usage_mode_combo.addItem("团队模式（完整 DIT 工作流）", UsageMode.TEAM.value)
-        self.usage_mode_combo.addItem("个人模式（独立创作者）", UsageMode.PERSONAL.value)
+        self.usage_mode_combo.addItem(
+            "团队模式（完整 DIT 工作流）", UsageMode.TEAM.value
+        )
+        self.usage_mode_combo.addItem(
+            "个人模式（独立创作者）", UsageMode.PERSONAL.value
+        )
         self.usage_mode_combo.setToolTip(
             "个人模式隐藏拍摄日志、素材评级、报告、模板、归档等团队功能，\n"
             "仅保留项目管理、导入、单目标备份、RAW 提取、重命名与检索。\n"
@@ -104,7 +111,9 @@ class SettingsDialog(QDialog):
         usage_row.addStretch()
         usage_layout.addLayout(usage_row)
         usage_hint = QLabel("模式切换在重启应用后生效")
-        usage_hint.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        usage_hint.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+        )
         usage_layout.addWidget(usage_hint)
         layout.addWidget(usage_group)
 
@@ -119,7 +128,9 @@ class SettingsDialog(QDialog):
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
         theme_layout.addWidget(self.theme_combo)
         theme_hint = QLabel("切换后重启应用生效")
-        theme_hint.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        theme_hint.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+        )
         theme_layout.addWidget(theme_hint)
         theme_layout.addStretch()
         layout.addWidget(theme_group)
@@ -131,31 +142,47 @@ class SettingsDialog(QDialog):
 
         self.db_dir_label = QLabel("")
         self._style_path_label(self.db_dir_label)
-        dir_form.addRow("数据库目录:", self._make_dir_row(
-            self.db_dir_label, self._change_db_dir,
-            lambda: open_in_file_manager(str(config.effective_db_dir)),
-        ))
+        dir_form.addRow(
+            "数据库目录:",
+            self._make_dir_row(
+                self.db_dir_label,
+                self._change_db_dir,
+                lambda: open_in_file_manager(str(config.effective_db_dir)),
+            ),
+        )
 
         self.report_dir_label = QLabel("")
         self._style_path_label(self.report_dir_label)
-        dir_form.addRow("报告输出:", self._make_dir_row(
-            self.report_dir_label, self._change_report_dir,
-            lambda: open_in_file_manager(str(config.report_dir)),
-        ))
+        dir_form.addRow(
+            "报告输出:",
+            self._make_dir_row(
+                self.report_dir_label,
+                self._change_report_dir,
+                lambda: open_in_file_manager(str(config.report_dir)),
+            ),
+        )
 
         self.log_dir_label = QLabel("")
         self._style_path_label(self.log_dir_label)
-        dir_form.addRow("日志目录:", self._make_dir_row(
-            self.log_dir_label, self._change_log_dir,
-            lambda: open_in_file_manager(str(config.log_dir)),
-        ))
+        dir_form.addRow(
+            "日志目录:",
+            self._make_dir_row(
+                self.log_dir_label,
+                self._change_log_dir,
+                lambda: open_in_file_manager(str(config.log_dir)),
+            ),
+        )
 
         self.thumb_dir_label = QLabel("")
         self._style_path_label(self.thumb_dir_label)
-        dir_form.addRow("缩略图缓存:", self._make_dir_row(
-            self.thumb_dir_label, self._change_thumb_dir,
-            lambda: open_in_file_manager(str(self.thumbnail_service.cache_dir)),
-        ))
+        dir_form.addRow(
+            "缩略图缓存:",
+            self._make_dir_row(
+                self.thumb_dir_label,
+                self._change_thumb_dir,
+                lambda: open_in_file_manager(str(self.thumbnail_service.cache_dir)),
+            ),
+        )
         layout.addWidget(dir_group)
 
         # ===== 清理临时文件 =====
@@ -205,9 +232,7 @@ class SettingsDialog(QDialog):
         self.verify_after_copy_check.setToolTip(
             "备份时「拷贝后验证完整性」的默认状态（可在备份视图临时调整）"
         )
-        self.verify_after_copy_check.toggled.connect(
-            self._on_verify_after_copy_toggled
-        )
+        self.verify_after_copy_check.toggled.connect(self._on_verify_after_copy_toggled)
         backup_layout.addWidget(self.verify_after_copy_check)
         layout.addWidget(backup_group)
 
@@ -236,7 +261,9 @@ class SettingsDialog(QDialog):
         self.auto_card_automation_check.setToolTip(
             "按下面选择的项目和备份方案自动导入或备份；未配置完整时只提示，不会启动任务。"
         )
-        self.auto_card_automation_check.toggled.connect(self._on_auto_card_automation_toggled)
+        self.auto_card_automation_check.toggled.connect(
+            self._on_auto_card_automation_toggled
+        )
         volume_layout.addWidget(self.auto_card_automation_check)
 
         self.auto_card_import_check = QCheckBox("自动导入素材")
@@ -248,7 +275,9 @@ class SettingsDialog(QDialog):
         volume_layout.addWidget(self.auto_card_backup_check)
 
         self.auto_card_steps_edit = QLineEdit()
-        self.auto_card_steps_edit.setPlaceholderText("留空使用上面两个开关；或输入 import,backup,report")
+        self.auto_card_steps_edit.setPlaceholderText(
+            "留空使用上面两个开关；或输入 import,backup,report"
+        )
         self.auto_card_steps_edit.setToolTip(
             "可选步骤：import, backup, raw_extract, rename, report；按输入顺序执行。"
         )
@@ -261,12 +290,16 @@ class SettingsDialog(QDialog):
         volume_layout.addWidget(self.auto_card_raw_output_label)
         volume_layout.addWidget(self.auto_card_raw_output_edit)
         self.auto_card_rename_pattern_edit = QLineEdit()
-        self.auto_card_rename_pattern_edit.setPlaceholderText("rename 步骤的命名模板，例如 {scene}_{number}")
+        self.auto_card_rename_pattern_edit.setPlaceholderText(
+            "rename 步骤的命名模板，例如 {scene}_{number}"
+        )
         self.auto_card_rename_pattern_label = QLabel("自动重命名模板:")
         volume_layout.addWidget(self.auto_card_rename_pattern_label)
         volume_layout.addWidget(self.auto_card_rename_pattern_edit)
         self.auto_card_report_path_edit = QLineEdit()
-        self.auto_card_report_path_edit.setPlaceholderText("report 步骤的 PDF 路径，可留空使用默认目录")
+        self.auto_card_report_path_edit.setPlaceholderText(
+            "report 步骤的 PDF 路径，可留空使用默认目录"
+        )
         self.auto_card_report_path_label = QLabel("自动报告路径:")
         volume_layout.addWidget(self.auto_card_report_path_label)
         volume_layout.addWidget(self.auto_card_report_path_edit)
@@ -340,7 +373,9 @@ class SettingsDialog(QDialog):
         integrity_layout.addLayout(integrity_row)
 
         integrity_hint = QLabel("应用闲置时自动校验备份完整性，结果写入操作审计日志")
-        integrity_hint.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        integrity_hint.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+        )
         integrity_layout.addWidget(integrity_hint)
         layout.addWidget(integrity_group)
 
@@ -352,7 +387,7 @@ class SettingsDialog(QDialog):
         self.update_url_edit = QLineEdit()
         self.update_url_edit.setPlaceholderText("https://example.com/dit_latest.json")
         self.update_url_edit.setToolTip(
-            "指向返回 {\"version\":\"alpha.YYYYMMDD\",\"download_url\":\"...\"} 的 JSON 文件"
+            '指向返回 {"version":"alpha.YYYYMMDD","download_url":"..."} 的 JSON 文件'
         )
         self.update_url_edit.editingFinished.connect(self._on_update_url_changed)
         update_row.addWidget(self.update_url_edit, 1)
@@ -562,7 +597,8 @@ class SettingsDialog(QDialog):
         save_app_settings(db_dir=str(new_dir))
         self._refresh_states()
         reply = QMessageBox.question(
-            self, "重启应用",
+            self,
+            "重启应用",
             "数据库已移动到新位置。\n"
             "为避免数据不一致，需要重启应用后生效。\n"
             "是否立即重启？",
@@ -584,7 +620,8 @@ class SettingsDialog(QDialog):
         config.ensure_dirs()
         self._refresh_states()
         QMessageBox.information(
-            self, "已更新",
+            self,
+            "已更新",
             "报告输出目录已更新，后续生成的报告将保存到新位置。\n"
             "历史报告仍保留在旧目录，可手动迁移。",
         )
@@ -602,7 +639,8 @@ class SettingsDialog(QDialog):
         logger.set_log_dir(config.log_dir)
         self._refresh_states()
         QMessageBox.information(
-            self, "已更新",
+            self,
+            "已更新",
             "日志目录已更新，新的日志将写入新位置。\n"
             "旧日志仍保留在旧目录，可在「删除日志文件」后手动清理。",
         )
@@ -610,8 +648,10 @@ class SettingsDialog(QDialog):
     def _change_thumb_dir(self):
         """重设缩略图缓存目录（立即生效，旧缓存保留待清理）。"""
         new_dir = pick_directory(
-            self, "选择新的缩略图缓存目录",
-            str(self.thumbnail_service.cache_dir), category="thumbnail",
+            self,
+            "选择新的缩略图缓存目录",
+            str(self.thumbnail_service.cache_dir),
+            category="thumbnail",
         )
         if not new_dir:
             return
@@ -621,7 +661,8 @@ class SettingsDialog(QDialog):
         self.thumbnail_service.set_cache_dir(config.effective_thumbnail_dir)
         self._refresh_states()
         QMessageBox.information(
-            self, "已更新",
+            self,
+            "已更新",
             "缩略图缓存目录已更新，新缩略图将写入新位置。\n"
             "旧缓存可在「清理缩略图缓存」中删除。",
         )
@@ -640,7 +681,8 @@ class SettingsDialog(QDialog):
             QApplication.quit()
         else:
             QMessageBox.information(
-                None, "请手动重启",
+                None,
+                "请手动重启",
                 "未能自动重启应用，请关闭后重新打开。",
             )
 
@@ -652,7 +694,8 @@ class SettingsDialog(QDialog):
             QMessageBox.information(self, "提示", "当前没有日志文件。")
             return
         reply = QMessageBox.question(
-            self, "确认删除",
+            self,
+            "确认删除",
             f"将删除 {count} 个日志文件（{format_size(size)}），是否继续？",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
@@ -675,28 +718,41 @@ class SettingsDialog(QDialog):
 
     def _export_settings(self):
         default_path = str(Path.home() / "DITWorkstation_settings.json")
-        path, _ = QFileDialog.getSaveFileName(self, "导出设置", default_path, "JSON 文件 (*.json)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出设置", default_path, "JSON 文件 (*.json)"
+        )
         if not path:
             return
         if export_settings(path):
             QMessageBox.information(self, "导出成功", f"设置已导出到：\n{path}")
         else:
-            QMessageBox.warning(self, "导出失败", "无法写入设置文件，请检查目标目录权限。")
+            QMessageBox.warning(
+                self, "导出失败", "无法写入设置文件，请检查目标目录权限。"
+            )
 
     def _import_settings(self):
-        path, _ = QFileDialog.getOpenFileName(self, "导入设置", str(Path.home()), "JSON 文件 (*.json)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "导入设置", str(Path.home()), "JSON 文件 (*.json)"
+        )
         if not path:
             return
         reply = QMessageBox.question(
-            self, "确认导入", "导入将合并同名配置项，重启应用后生效。是否继续？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            self,
+            "确认导入",
+            "导入将合并同名配置项，重启应用后生效。是否继续？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return
         if import_settings(path, merge=True):
-            QMessageBox.information(self, "导入成功", "设置已导入。请重启应用以使更改生效。")
+            QMessageBox.information(
+                self, "导入成功", "设置已导入。请重启应用以使更改生效。"
+            )
         else:
-            QMessageBox.warning(self, "导入失败", "文件不是有效的设置 JSON，或无法保存导入结果。")
+            QMessageBox.warning(
+                self, "导入失败", "文件不是有效的设置 JSON，或无法保存导入结果。"
+            )
 
     # ===== 外观主题 =====
 
@@ -752,17 +808,24 @@ class SettingsDialog(QDialog):
                 text += f"\n\n更新说明：\n{info.notes}"
             if info.download_url:
                 ret = QMessageBox.question(
-                    self, "发现更新", text + "\n\n是否打开下载页面？",
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+                    self,
+                    "发现更新",
+                    text + "\n\n是否打开下载页面？",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes,
                 )
                 if ret == QMessageBox.Yes:
                     import webbrowser
+
                     webbrowser.open(info.download_url)
             else:
                 QMessageBox.information(self, "发现更新", text)
         else:
             from DITWorkstation.App.version import APP_VERSION
-            QMessageBox.information(self, "检查更新", f"当前 {APP_VERSION} 已是最新版本。")
+
+            QMessageBox.information(
+                self, "检查更新", f"当前 {APP_VERSION} 已是最新版本。"
+            )
 
     # ===== 运行参数 =====
 
@@ -789,11 +852,18 @@ class SettingsDialog(QDialog):
     def _save_advanced_card_automation(self):
         """保存高级 SOP 字段；由编辑完成信号调用，空步骤回退兼容开关。"""
         from DITWorkstation.Services.card_automation_service import SOP_STEPS
-        raw_steps = [item.strip() for item in self.auto_card_steps_edit.text().split(",") if item.strip()]
+
+        raw_steps = [
+            item.strip()
+            for item in self.auto_card_steps_edit.text().split(",")
+            if item.strip()
+        ]
         steps = list(dict.fromkeys(item for item in raw_steps if item in SOP_STEPS))
         config.auto_card_steps = steps
         config.auto_card_raw_output_dir = self.auto_card_raw_output_edit.text().strip()
-        config.auto_card_rename_pattern = self.auto_card_rename_pattern_edit.text().strip()
+        config.auto_card_rename_pattern = (
+            self.auto_card_rename_pattern_edit.text().strip()
+        )
         config.auto_card_report_path = self.auto_card_report_path_edit.text().strip()
         save_app_settings(
             auto_card_steps=steps,

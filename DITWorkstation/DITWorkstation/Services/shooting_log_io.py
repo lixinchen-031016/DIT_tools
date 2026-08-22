@@ -9,6 +9,7 @@ CSV 列（英文列头，兼容中文字段别名）：
     scene, shot, take, description, camera, lens, iso, aperture,
     shutter_speed, notes
 """
+
 import csv
 from pathlib import Path
 
@@ -18,14 +19,32 @@ from DITWorkstation.Utils import logger, now_local
 # 业务键：场景+镜头+镜次 唯一
 KEY_FIELDS = ("scene", "shot", "take")
 
-CSV_FIELDS = ("scene", "shot", "take", "description", "camera", "lens",
-              "iso", "aperture", "shutter_speed", "notes")
+CSV_FIELDS = (
+    "scene",
+    "shot",
+    "take",
+    "description",
+    "camera",
+    "lens",
+    "iso",
+    "aperture",
+    "shutter_speed",
+    "notes",
+)
 
 # 中文别名 -> 标准字段
 _ALIASES = {
-    "场景": "scene", "镜头": "shot", "镜次": "take", "描述": "description",
-    "摄影机": "camera", "相机": "camera", "镜头型号": "lens", "ISO": "iso",
-    "光圈": "aperture", "快门": "shutter_speed", "备注": "notes",
+    "场景": "scene",
+    "镜头": "shot",
+    "镜次": "take",
+    "描述": "description",
+    "摄影机": "camera",
+    "相机": "camera",
+    "镜头型号": "lens",
+    "ISO": "iso",
+    "光圈": "aperture",
+    "快门": "shutter_speed",
+    "备注": "notes",
 }
 
 
@@ -95,8 +114,13 @@ def import_logs_csv(
     """
     path = Path(source_path)
     if not path.is_file():
-        return {"created": 0, "updated": 0, "skipped": 0, "rows": 0,
-                "errors": [f"文件不存在: {source_path}"]}
+        return {
+            "created": 0,
+            "updated": 0,
+            "skipped": 0,
+            "rows": 0,
+            "errors": [f"文件不存在: {source_path}"],
+        }
 
     rows, err = _read_csv_rows(path)
     if err is not None:
@@ -110,7 +134,11 @@ def import_logs_csv(
     stats = {"created": 0, "updated": 0, "skipped": 0, "rows": len(rows), "errors": []}
     for idx, raw in enumerate(rows, start=2):
         row = _normalize_row(raw)
-        scene, shot, take = (row.get("scene") or "").strip(), (row.get("shot") or "").strip(), (row.get("take") or "").strip()
+        scene, shot, take = (
+            (row.get("scene") or "").strip(),
+            (row.get("shot") or "").strip(),
+            (row.get("take") or "").strip(),
+        )
         if not (scene and shot and take):
             stats["skipped"] += 1
             stats["errors"].append(f"第 {idx} 行缺少 场景/镜头/镜次，已跳过")
@@ -119,26 +147,34 @@ def import_logs_csv(
             iso = int(row.get("iso") or 0)
         except ValueError:
             iso = 0
-        data = dict(
-            description=row.get("description", ""),
-            camera=row.get("camera", ""),
-            lens=row.get("lens", ""),
-            iso=iso,
-            aperture=row.get("aperture", ""),
-            shutter_speed=row.get("shutter_speed", ""),
-            notes=row.get("notes", ""),
-        )
+        data = {
+            "description": row.get("description", ""),
+            "camera": row.get("camera", ""),
+            "lens": row.get("lens", ""),
+            "iso": iso,
+            "aperture": row.get("aperture", ""),
+            "shutter_speed": row.get("shutter_speed", ""),
+            "notes": row.get("notes", ""),
+        }
         match = existing_by_key.get((scene, shot, take))
         if match is None:
-            db_service.create_shooting_log(ShootingLog(
-                log_id=_new_id(),
-                project_id=project_id,
-                scene=scene, shot=shot, take=take,
-                description=data["description"], camera=data["camera"],
-                lens=data["lens"], iso=data["iso"], aperture=data["aperture"],
-                shutter_speed=data["shutter_speed"], notes=data["notes"],
-                created_at=now_local(),
-            ))
+            db_service.create_shooting_log(
+                ShootingLog(
+                    log_id=_new_id(),
+                    project_id=project_id,
+                    scene=scene,
+                    shot=shot,
+                    take=take,
+                    description=data["description"],
+                    camera=data["camera"],
+                    lens=data["lens"],
+                    iso=data["iso"],
+                    aperture=data["aperture"],
+                    shutter_speed=data["shutter_speed"],
+                    notes=data["notes"],
+                    created_at=now_local(),
+                )
+            )
             stats["created"] += 1
         elif update_existing:
             match.description = data["description"]
@@ -153,10 +189,13 @@ def import_logs_csv(
         else:
             stats["skipped"] += 1
 
-    logger.info(f"拍摄日志导入完成: 新建 {stats['created']}，更新 {stats['updated']}，跳过 {stats['skipped']}")
+    logger.info(
+        f"拍摄日志导入完成: 新建 {stats['created']}，更新 {stats['updated']}，跳过 {stats['skipped']}"
+    )
     return stats
 
 
 def _new_id() -> str:
     import uuid
+
     return str(uuid.uuid4())[:8]

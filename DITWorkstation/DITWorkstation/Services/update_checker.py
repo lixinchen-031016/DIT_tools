@@ -9,6 +9,7 @@
 - 版本比较按 alpha.YYYYMMDD 的日期部分；日期相同视为最新；
 - 有更新时返回清单，由 UI 层决定提示与打开下载地址。
 """
+
 import json
 import re
 import urllib.request
@@ -35,7 +36,6 @@ def _parse_date(version: str) -> int | None:
         return int(m.group(1))
     except ValueError:
         return None
-
 
 
 def is_newer_version(candidate: str, current: str = APP_VERSION) -> bool:
@@ -70,7 +70,9 @@ def check_for_update(
     # 仅允许 http/https，避免 file:// 等本地 scheme 被当作远端清单读取
     scheme = url.split(":", 1)[0].lower() if ":" in url else ""
     if scheme not in ("http", "https"):
-        return UpdateInfo(version="", error=f"不支持的更新清单地址协议: {scheme or '未知'}")
+        return UpdateInfo(
+            version="", error=f"不支持的更新清单地址协议: {scheme or '未知'}"
+        )
 
     try:
         req = urllib.request.Request(

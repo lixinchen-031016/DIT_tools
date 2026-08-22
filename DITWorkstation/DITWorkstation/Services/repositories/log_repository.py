@@ -1,4 +1,5 @@
 """Shooting-log and audit-log persistence operations."""
+
 import sqlite3
 import uuid
 from datetime import datetime
@@ -20,13 +21,25 @@ class LogRepository(BaseRepository):
                 "aperture, shutter_speed, notes, file_paths, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    log.log_id, log.project_id, log.scene, log.shot, log.take,
-                    log.description, log.camera, log.lens, log.iso, log.aperture,
-                    log.shutter_speed, log.notes, "|".join(log.file_paths),
+                    log.log_id,
+                    log.project_id,
+                    log.scene,
+                    log.shot,
+                    log.take,
+                    log.description,
+                    log.camera,
+                    log.lens,
+                    log.iso,
+                    log.aperture,
+                    log.shutter_speed,
+                    log.notes,
+                    "|".join(log.file_paths),
                     log.created_at.isoformat(),
                 ),
             )
-            logger.info(f"创建拍摄日志: {log.log_id} - {log.scene}/{log.shot}/{log.take}")
+            logger.info(
+                f"创建拍摄日志: {log.log_id} - {log.scene}/{log.shot}/{log.take}"
+            )
         return log
 
     def list_shooting(self, project_id: str) -> list[ShootingLog]:
@@ -39,7 +52,9 @@ class LogRepository(BaseRepository):
 
     def get_shooting(self, log_id: str) -> ShootingLog | None:
         with self._connection() as conn:
-            row = conn.execute("SELECT * FROM shooting_logs WHERE log_id = ?", (log_id,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM shooting_logs WHERE log_id = ?", (log_id,)
+            ).fetchone()
         return self._row_to_shooting(row) if row else None
 
     def update_shooting(self, log: ShootingLog) -> None:
@@ -48,9 +63,18 @@ class LogRepository(BaseRepository):
                 "UPDATE shooting_logs SET scene=?, shot=?, take=?, description=?, camera=?, "
                 "lens=?, iso=?, aperture=?, shutter_speed=?, notes=?, file_paths=? WHERE log_id=?",
                 (
-                    log.scene, log.shot, log.take, log.description, log.camera,
-                    log.lens, log.iso, log.aperture, log.shutter_speed, log.notes,
-                    "|".join(log.file_paths), log.log_id,
+                    log.scene,
+                    log.shot,
+                    log.take,
+                    log.description,
+                    log.camera,
+                    log.lens,
+                    log.iso,
+                    log.aperture,
+                    log.shutter_speed,
+                    log.notes,
+                    "|".join(log.file_paths),
+                    log.log_id,
                 ),
             )
             logger.info(f"更新拍摄日志: {log.log_id}")
@@ -63,7 +87,9 @@ class LogRepository(BaseRepository):
                     (log_id,),
                 )
                 conn.execute("DELETE FROM shooting_logs WHERE log_id = ?", (log_id,))
-                logger.info(f"删除拍摄日志: {log_id}（已级联清空关联素材的 scene/shot）")
+                logger.info(
+                    f"删除拍摄日志: {log_id}（已级联清空关联素材的 scene/shot）"
+                )
         except sqlite3.Error as exc:
             logger.error(f"删除拍摄日志失败 {log_id}: {exc}")
             raise
@@ -79,9 +105,19 @@ class LogRepository(BaseRepository):
                     "aperture, shutter_speed, notes, file_paths, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        log.log_id, log.project_id, log.scene, log.shot, log.take,
-                        log.description, log.camera, log.lens, log.iso, log.aperture,
-                        log.shutter_speed, log.notes, "|".join(log.file_paths),
+                        log.log_id,
+                        log.project_id,
+                        log.scene,
+                        log.shot,
+                        log.take,
+                        log.description,
+                        log.camera,
+                        log.lens,
+                        log.iso,
+                        log.aperture,
+                        log.shutter_speed,
+                        log.notes,
+                        "|".join(log.file_paths),
                         log.created_at.isoformat(),
                     ),
                 )
@@ -96,7 +132,9 @@ class LogRepository(BaseRepository):
                             "UPDATE media_assets SET log_id = ? WHERE asset_id = ?",
                             (log.log_id, asset_id),
                         )
-                logger.info(f"创建日志并关联素材: {log.log_id} - {len(asset_ids)} 个素材")
+                logger.info(
+                    f"创建日志并关联素材: {log.log_id} - {len(asset_ids)} 个素材"
+                )
         except sqlite3.Error as exc:
             logger.error(f"create_log_with_assets 失败: {exc}")
             raise
@@ -104,9 +142,14 @@ class LogRepository(BaseRepository):
 
     @staticmethod
     def record_in_transaction(
-        conn, event: str, detail: str = "", project_id: str | None = None,
-        status: str = OperationStatus.SUCCESS.value, object_type: str = "",
-        object_id: str = "", recovery_id: str = "",
+        conn,
+        event: str,
+        detail: str = "",
+        project_id: str | None = None,
+        status: str = OperationStatus.SUCCESS.value,
+        object_type: str = "",
+        object_id: str = "",
+        recovery_id: str = "",
     ) -> str:
         log_id = str(uuid.uuid4())[:8]
         conn.execute(
@@ -114,21 +157,40 @@ class LogRepository(BaseRepository):
             "(log_id, project_id, event, detail, result_status, object_type, object_id, recovery_id, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                log_id, project_id, event, detail, status, object_type, object_id,
-                recovery_id, now_local().isoformat(),
+                log_id,
+                project_id,
+                event,
+                detail,
+                status,
+                object_type,
+                object_id,
+                recovery_id,
+                now_local().isoformat(),
             ),
         )
         return log_id
 
     def record(
-        self, event: str, detail: str = "", project_id: str | None = None,
-        status: str = OperationStatus.SUCCESS.value, object_type: str = "",
-        object_id: str = "", recovery_id: str = "",
+        self,
+        event: str,
+        detail: str = "",
+        project_id: str | None = None,
+        status: str = OperationStatus.SUCCESS.value,
+        object_type: str = "",
+        object_id: str = "",
+        recovery_id: str = "",
     ) -> bool:
         try:
             with self._transaction() as conn:
                 self.record_in_transaction(
-                    conn, event, detail, project_id, status, object_type, object_id, recovery_id,
+                    conn,
+                    event,
+                    detail,
+                    project_id,
+                    status,
+                    object_type,
+                    object_id,
+                    recovery_id,
                 )
             return True
         except sqlite3.Error as exc:
@@ -136,8 +198,13 @@ class LogRepository(BaseRepository):
             return False
 
     def list_recent(
-        self, limit: int = 10, project_id: str | None = None, event: str = "",
-        status: str = "", object_type: str = "", date_from: datetime | None = None,
+        self,
+        limit: int = 10,
+        project_id: str | None = None,
+        event: str = "",
+        status: str = "",
+        object_type: str = "",
+        date_from: datetime | None = None,
         date_to: datetime | None = None,
     ) -> list[dict]:
         limit = max(1, min(int(limit), 5000))
@@ -172,17 +239,25 @@ class LogRepository(BaseRepository):
                 created_at = datetime.fromisoformat(row["created_at"])
             except ValueError:
                 created_at = None
-            results.append({
-                "log_id": row["log_id"],
-                "project_id": row["project_id"],
-                "event": row["event"],
-                "detail": row["detail"],
-                "status": row["result_status"] if "result_status" in row.keys() else "success",
-                "object_type": row["object_type"] if "object_type" in row.keys() else "",
-                "object_id": row["object_id"] if "object_id" in row.keys() else "",
-                "recovery_id": row["recovery_id"] if "recovery_id" in row.keys() else "",
-                "created_at": created_at,
-            })
+            results.append(
+                {
+                    "log_id": row["log_id"],
+                    "project_id": row["project_id"],
+                    "event": row["event"],
+                    "detail": row["detail"],
+                    "status": row["result_status"]
+                    if "result_status" in row.keys()
+                    else "success",
+                    "object_type": row["object_type"]
+                    if "object_type" in row.keys()
+                    else "",
+                    "object_id": row["object_id"] if "object_id" in row.keys() else "",
+                    "recovery_id": row["recovery_id"]
+                    if "recovery_id" in row.keys()
+                    else "",
+                    "created_at": created_at,
+                }
+            )
         return results
 
     def delete_older_than(self, cutoff: datetime) -> int:

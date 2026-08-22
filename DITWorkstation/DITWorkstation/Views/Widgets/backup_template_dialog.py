@@ -52,7 +52,9 @@ class BackupTemplateDialog(QDialog):
         form.addRow("校验和:", self.algorithm_combo)
 
         self.verify_check = QCheckBox("拷贝后验证完整性")
-        self.verify_check.setChecked(self.template.verify_after_copy if self.template else True)
+        self.verify_check.setChecked(
+            self.template.verify_after_copy if self.template else True
+        )
         form.addRow("验证:", self.verify_check)
 
         self.description_edit = QLineEdit()
@@ -70,7 +72,11 @@ class BackupTemplateDialog(QDialog):
 
     def _save(self):
         name = self.name_edit.text().strip()
-        targets = [line.strip() for line in self.targets_edit.toPlainText().splitlines() if line.strip()]
+        targets = [
+            line.strip()
+            for line in self.targets_edit.toPlainText().splitlines()
+            if line.strip()
+        ]
         if not name:
             QMessageBox.warning(self, "提示", "方案名称不能为空")
             return

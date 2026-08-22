@@ -1,4 +1,5 @@
 """Shared repository access to the database service's connection lifecycle."""
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:

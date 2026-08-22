@@ -1,4 +1,5 @@
 """应用配置管理"""
+
 import os
 import platform
 import sys
@@ -56,6 +57,7 @@ def _resolve_personal_workspace_dir() -> Path:
 @dataclass
 class AppConfig:
     """应用全局配置"""
+
     # 数据库路径（开发态：代码库下 data/；冻结态：用户数据目录）
     db_dir: Path = field(default_factory=_resolve_data_dir)
     db_name: str = "dit_workstation.db"
@@ -88,6 +90,7 @@ class AppConfig:
     def _writable_dir_or_fallback(target: Path) -> Path:
         """检查目标目录是否可写，否则依次回退到 ~/.ditworkstation、系统临时目录"""
         import tempfile
+
         candidates = [target, Path.home() / ".ditworkstation"]
         for cand in candidates:
             try:
@@ -150,7 +153,6 @@ class AppConfig:
     # 保存搜索上限
     saved_search_limit: int = 20
 
-
     # 功能模式（设备级配置）：team=团队版（完整 DIT 工作流），personal=个人版
     # （隐藏团队向入口）。修改后重启生效；读取/校验逻辑见 App/feature_flags.py。
     usage_mode: str = "team"
@@ -159,30 +161,62 @@ class AppConfig:
     # 个人模式不显式创建带目录的工作区，default 工作区需要一个合法物理路径，
     # 作为「复制到工作区」的目标根（<path>/<项目名>/）。
     # 可通过环境变量 DIT_PERSONAL_WS_PATH 覆盖，便于自定义默认路径（步骤4）。
-    personal_default_workspace_path: Path = field(default_factory=_resolve_personal_workspace_dir)
+    personal_default_workspace_path: Path = field(
+        default_factory=_resolve_personal_workspace_dir
+    )
 
     # 检索分页
     search_page_size: int = 500  # 素材检索每页显示的条数
 
     # 支持的RAW格式
-    raw_extensions: list[str] = field(default_factory=lambda: [
-        ".cr2", ".cr3", ".nef", ".arw", ".dng", ".orf", ".rw2", ".raf", ".pef", ".srw"
-    ])
+    raw_extensions: list[str] = field(
+        default_factory=lambda: [
+            ".cr2",
+            ".cr3",
+            ".nef",
+            ".arw",
+            ".dng",
+            ".orf",
+            ".rw2",
+            ".raf",
+            ".pef",
+            ".srw",
+        ]
+    )
 
     # 支持的图片格式
-    image_extensions: list[str] = field(default_factory=lambda: [
-        ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".gif", ".webp"
-    ])
+    image_extensions: list[str] = field(
+        default_factory=lambda: [
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".tiff",
+            ".tif",
+            ".bmp",
+            ".gif",
+            ".webp",
+        ]
+    )
 
     # 支持的视频格式
-    video_extensions: list[str] = field(default_factory=lambda: [
-        ".mp4", ".mov", ".mkv", ".avi", ".mxf", ".m4v", ".wmv", ".flv", ".webm"
-    ])
+    video_extensions: list[str] = field(
+        default_factory=lambda: [
+            ".mp4",
+            ".mov",
+            ".mkv",
+            ".avi",
+            ".mxf",
+            ".m4v",
+            ".wmv",
+            ".flv",
+            ".webm",
+        ]
+    )
 
     # 支持的音频格式
-    audio_extensions: list[str] = field(default_factory=lambda: [
-        ".mp3", ".wav", ".aac", ".flac", ".m4a", ".wma"
-    ])
+    audio_extensions: list[str] = field(
+        default_factory=lambda: [".mp3", ".wav", ".aac", ".flac", ".m4a", ".wma"]
+    )
 
     # 报告输出目录（用户文档下，跨平台可写）
     report_dir: Path = field(default_factory=_resolve_report_dir)
@@ -214,7 +248,12 @@ class AppConfig:
     @property
     def all_media_extensions(self) -> list[str]:
         """所有支持的媒体格式（图片+视频+RAW+音频）"""
-        return self.image_extensions + self.video_extensions + self.raw_extensions + self.audio_extensions
+        return (
+            self.image_extensions
+            + self.video_extensions
+            + self.raw_extensions
+            + self.audio_extensions
+        )
 
     def is_media_file(self, filename: str) -> bool:
         """判断是否为媒体文件"""

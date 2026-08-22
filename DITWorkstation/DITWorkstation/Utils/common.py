@@ -1,4 +1,5 @@
 """通用工具模块"""
+
 import functools
 import json
 import logging
@@ -50,12 +51,12 @@ def format_size(size_bytes: int) -> str:
     """格式化文件大小"""
     if size_bytes < 1024:
         return f"{size_bytes} B"
-    elif size_bytes < 1024 ** 2:
+    elif size_bytes < 1024**2:
         return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 ** 3:
-        return f"{size_bytes / (1024 ** 2):.1f} MB"
+    elif size_bytes < 1024**3:
+        return f"{size_bytes / (1024**2):.1f} MB"
     else:
-        return f"{size_bytes / (1024 ** 3):.2f} GB"
+        return f"{size_bytes / (1024**3):.2f} GB"
 
 
 def generate_timestamp() -> str:
@@ -94,12 +95,15 @@ def sanitize_filename(filename: str) -> str:
     """
     illegal_chars = r'[\\/:*?"<>|]'
     name = unicodedata.normalize("NFC", filename)
-    name = re.sub(illegal_chars, '_', name).rstrip(' .')
+    name = re.sub(illegal_chars, "_", name).rstrip(" .")
     if not name:
         return "_"
     stem = name.split(".", 1)[0].upper()
     reserved = {
-        "CON", "PRN", "AUX", "NUL",
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
         *(f"COM{i}" for i in range(1, 10)),
         *(f"LPT{i}" for i in range(1, 10)),
     }
@@ -139,7 +143,7 @@ def is_writable_directory(path, *, create: bool = False) -> bool:
 def get_file_extension(file_path: str, include_dot: bool = True) -> str:
     """获取文件扩展名"""
     ext = Path(file_path).suffix.lower()
-    return ext if include_dot else ext.lstrip('.')
+    return ext if include_dot else ext.lstrip(".")
 
 
 def normalize_path(file_path: str) -> str:
@@ -208,8 +212,12 @@ _MAX_RECENT = 10
 _APP_SETTINGS_KEY = "app_config"
 _PATH_CONFIG_FIELDS = {"db_dir", "report_dir", "log_dir", "thumbnail_cache_dir"}
 _POSITIVE_INT_CONFIG_FIELDS = {
-    "checksum_buffer_size", "checksum_cache_size", "operation_log_retention_days",
-    "task_history_limit_per_project", "max_parallel_copies", "search_page_size",
+    "checksum_buffer_size",
+    "checksum_cache_size",
+    "operation_log_retention_days",
+    "task_history_limit_per_project",
+    "max_parallel_copies",
+    "search_page_size",
     "max_import_workers",
 }
 _settings_load_issue: str | None = None
@@ -259,7 +267,9 @@ def _validate_settings(settings: object) -> dict:
 
     for key, value in list(validated.items()):
         if key.startswith(f"{_RECENT_PATHS_KEY}_"):
-            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            if not isinstance(value, list) or not all(
+                isinstance(item, str) for item in value
+            ):
                 logger.warning(f"settings.json 的最近路径 {key} 格式无效，已忽略")
                 validated.pop(key, None)
             else:
@@ -275,7 +285,9 @@ def _validate_app_config(app_config: dict) -> dict:
             validated[key] = value
             continue
         if key in _PATH_CONFIG_FIELDS:
-            valid = isinstance(value, str) or (key == "thumbnail_cache_dir" and value is None)
+            valid = isinstance(value, str) or (
+                key == "thumbnail_cache_dir" and value is None
+            )
         else:
             default = getattr(config, key)
             if isinstance(default, bool):
@@ -287,13 +299,17 @@ def _validate_app_config(app_config: dict) -> dict:
             elif isinstance(default, str):
                 valid = isinstance(value, str)
             elif isinstance(default, list):
-                valid = isinstance(value, list) and all(isinstance(item, str) for item in value)
+                valid = isinstance(value, list) and all(
+                    isinstance(item, str) for item in value
+                )
             else:
                 valid = True
         if valid:
             validated[key] = value
         else:
-            logger.warning(f"settings.json 的配置字段 {key} 类型或取值无效，已回退默认值")
+            logger.warning(
+                f"settings.json 的配置字段 {key} 类型或取值无效，已回退默认值"
+            )
     return validated
 
 
@@ -304,6 +320,7 @@ def _get_settings_path() -> Path:
     应用在下次启动时才能从原位置读到新的 db_dir 配置并生效。
     """
     return Path(config.effective_settings_dir) / "settings.json"
+
 
 def _load_settings() -> dict:
     """加载并校验 settings.json；损坏文件会隔离后回退默认值。"""
@@ -326,8 +343,12 @@ def _write_settings_file(path: Path, settings: dict) -> bool:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=path.parent,
-            prefix=f".{path.name}.", suffix=".tmp", delete=False,
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
         ) as f:
             temporary_path = Path(f.name)
             json.dump(settings, f, ensure_ascii=False, indent=2)
@@ -389,7 +410,13 @@ def import_settings(source_path: str | Path, *, merge: bool = True) -> bool:
         source = Path(source_path)
         with open(source, encoding="utf-8") as file:
             imported = _validate_settings(json.load(file))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+    ) as exc:
         logger.warning(f"导入设置失败 {source_path}: {exc}")
         return False
     settings = _merge_settings(_load_settings(), imported) if merge else imported
@@ -456,7 +483,8 @@ def count_recent_paths() -> int:
     """统计所有类别最近路径记录的总条数。"""
     settings = _load_settings()
     return sum(
-        len(v) for k, v in settings.items()
+        len(v)
+        for k, v in settings.items()
         if k.startswith(f"{_RECENT_PATHS_KEY}_") and isinstance(v, list)
     )
 
@@ -493,6 +521,7 @@ def apply_saved_config():
     在应用启动（创建主窗口前）调用一次。
     """
     from DITWorkstation.App import config
+
     _PATH_FIELDS = {"db_dir", "report_dir", "log_dir", "thumbnail_cache_dir"}
     for key, value in load_app_settings().items():
         if hasattr(config, key):
@@ -601,9 +630,12 @@ def pick_directory(
     import sys
 
     from PySide6.QtWidgets import QFileDialog
-    if getattr(sys, 'frozen', False):
+
+    if getattr(sys, "frozen", False):
         path = QFileDialog.getExistingDirectory(
-            parent, title, start_path,
+            parent,
+            title,
+            start_path,
             options=QFileDialog.Option.DontUseNativeDialog,
         )
     else:
@@ -634,7 +666,12 @@ def pick_save_file(
     import sys
 
     from PySide6.QtWidgets import QFileDialog
-    options = QFileDialog.Option.DontUseNativeDialog if getattr(sys, 'frozen', False) else QFileDialog.Option(0)
+
+    options = (
+        QFileDialog.Option.DontUseNativeDialog
+        if getattr(sys, "frozen", False)
+        else QFileDialog.Option(0)
+    )
     path, _ = QFileDialog.getSaveFileName(
         parent, title, start_path, filter_str, "", options
     )
@@ -661,7 +698,12 @@ def pick_open_file(
     import sys
 
     from PySide6.QtWidgets import QFileDialog
-    options = QFileDialog.Option.DontUseNativeDialog if getattr(sys, 'frozen', False) else QFileDialog.Option(0)
+
+    options = (
+        QFileDialog.Option.DontUseNativeDialog
+        if getattr(sys, "frozen", False)
+        else QFileDialog.Option(0)
+    )
     path, _ = QFileDialog.getOpenFileName(
         parent, title, start_path, filter_str, "", options
     )
@@ -678,6 +720,7 @@ def open_in_file_manager(path: str) -> bool:
     import subprocess
     import sys
     from pathlib import Path as _Path
+
     try:
         target = _Path(path)
         if target.is_file():
@@ -697,8 +740,8 @@ def open_in_file_manager(path: str) -> bool:
         else:
             subprocess.Popen(["xdg-open", dir_path])
         return True
-    except (OSError, ValueError) as e:
-        logger.error(f"打开文件管理器失败: {e}", exc_info=True)
+    except (OSError, ValueError):
+        logger.exception("打开文件管理器失败")
         return False
 
 
@@ -722,6 +765,7 @@ def find_overwrite_conflicts(
         {目标目录路径: [冲突文件名列表]} 仅包含有冲突的目标目录
     """
     from pathlib import Path as _Path
+
     conflicts: dict = {}
     for target_dir in target_dirs:
         if not target_dir:
@@ -780,9 +824,11 @@ class Logger:
                 backupCount=10,  # 保留最近 10 个轮转文件，避免日志无限膨胀
                 encoding="utf-8",
             )
-            file_handler.setFormatter(logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            ))
+            file_handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+                )
+            )
             self.logger.addHandler(file_handler)
         except (PermissionError, OSError) as e:
             self.logger.warning(f"无法创建日志文件（仅控制台输出）: {e}")
@@ -882,6 +928,7 @@ def get_db_service():
             # double-check：拿到锁后再次确认，避免等待期间已被其他线程初始化
             if _shared_db_service is None:
                 from DITWorkstation.Services.database_service import DatabaseService
+
                 _shared_db_service = DatabaseService()
     return _shared_db_service
 
@@ -912,6 +959,7 @@ def get_checksum_service():
         with _singleton_lock:
             if _shared_checksum_service is None:
                 from DITWorkstation.Services.checksum_service import ChecksumService
+
                 _shared_checksum_service = ChecksumService(db_service=db_service)
     return _shared_checksum_service
 
@@ -923,6 +971,7 @@ def get_metadata_service():
         with _singleton_lock:
             if _shared_metadata_service is None:
                 from DITWorkstation.Services.metadata_service import MetadataService
+
                 _shared_metadata_service = MetadataService()
     return _shared_metadata_service
 
@@ -938,6 +987,7 @@ def get_thumbnail_service():
     with _singleton_lock:
         if _shared_thumbnail_service is None:
             from DITWorkstation.Services.thumbnail_service import ThumbnailService
+
             _shared_thumbnail_service = ThumbnailService()
         if _shared_thumbnail_service.cache_dir != expected_cache_dir:
             _shared_thumbnail_service.set_cache_dir(expected_cache_dir)
@@ -951,6 +1001,7 @@ def get_report_service():
         with _singleton_lock:
             if _shared_report_service is None:
                 from DITWorkstation.Services.report_service import ReportService
+
                 _shared_report_service = ReportService()
     return _shared_report_service
 
@@ -960,6 +1011,7 @@ def get_asset_relink_service(db_service=None, checksum_service=None):
     global _shared_asset_relink_service
     if db_service is not None or checksum_service is not None:
         from DITWorkstation.Services.asset_relink_service import AssetRelinkService
+
         return AssetRelinkService(
             db_service or get_db_service(),
             checksum_service or get_checksum_service(),
@@ -970,6 +1022,7 @@ def get_asset_relink_service(db_service=None, checksum_service=None):
                 from DITWorkstation.Services.asset_relink_service import (
                     AssetRelinkService,
                 )
+
                 _shared_asset_relink_service = AssetRelinkService(
                     get_db_service(), get_checksum_service()
                 )
@@ -983,7 +1036,10 @@ def reset_singletons():
     避免跨测试数据污染。生产代码不应调用此函数。
     """
     global _shared_db_service, _shared_checksum_service, _shared_metadata_service
-    global _shared_thumbnail_service, _shared_report_service, _shared_asset_relink_service
+    global \
+        _shared_thumbnail_service, \
+        _shared_report_service, \
+        _shared_asset_relink_service
     with _singleton_lock:
         # 先停止仍可能持有数据库/服务引用的后台资源，再关闭数据库连接。
         for service in (
@@ -1058,15 +1114,17 @@ def safe_slot(error_title: str = "操作失败"):
         def _delete_project(self):
             ...
     """
+
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def wrapper(self, *args, **kwargs):
             try:
                 return func(self, *args, **kwargs)
             except Exception as e:
-                logger.error(f"{error_title}: {e}", exc_info=True)
+                logger.exception(error_title)
                 try:
                     from PySide6.QtWidgets import QApplication, QMessageBox
+
                     msg = _friendly_message(e, error_title)
                     box = QMessageBox(self)
                     box.setIcon(QMessageBox.Critical)
@@ -1084,5 +1142,7 @@ def safe_slot(error_title: str = "操作失败"):
                             )
                 except Exception as dialog_error:
                     logger.debug(f"错误对话框/剪贴板操作失败: {dialog_error}")
+
         return wrapper
+
     return decorator

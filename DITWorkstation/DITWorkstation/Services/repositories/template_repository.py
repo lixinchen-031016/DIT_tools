@@ -1,4 +1,5 @@
 """Project and backup template persistence operations."""
+
 import json
 import sqlite3
 import uuid
@@ -48,7 +49,9 @@ class TemplateRepository(BaseRepository):
 
     def list_projects(self) -> list[ProjectTemplate]:
         with self._connection() as conn:
-            rows = conn.execute("SELECT * FROM project_templates ORDER BY created_at DESC").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM project_templates ORDER BY created_at DESC"
+            ).fetchall()
         return [self._row_to_project_template(row) for row in rows]
 
     def get_project(self, template_id: str) -> ProjectTemplate | None:
@@ -60,7 +63,11 @@ class TemplateRepository(BaseRepository):
 
     def update_project(self, template_id: str, **kwargs) -> bool:
         sql, params = build_update_clause(
-            PROJECT_TEMPLATE_FIELDS, "project_templates", "template_id", template_id, **kwargs
+            PROJECT_TEMPLATE_FIELDS,
+            "project_templates",
+            "template_id",
+            template_id,
+            **kwargs,
         )
         if not sql:
             return False
@@ -76,7 +83,10 @@ class TemplateRepository(BaseRepository):
     def delete_project(self, template_id: str) -> bool:
         try:
             with self._transaction() as conn:
-                conn.execute("DELETE FROM project_templates WHERE template_id = ?", (template_id,))
+                conn.execute(
+                    "DELETE FROM project_templates WHERE template_id = ?",
+                    (template_id,),
+                )
                 logger.info(f"删除项目模板: {template_id}")
                 return True
         except sqlite3.Error as exc:
@@ -119,7 +129,9 @@ class TemplateRepository(BaseRepository):
 
     def list_backups(self) -> list[BackupTemplate]:
         with self._connection() as conn:
-            rows = conn.execute("SELECT * FROM backup_templates ORDER BY created_at DESC").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM backup_templates ORDER BY created_at DESC"
+            ).fetchall()
         return [self._row_to_backup_template(row) for row in rows]
 
     def get_backup(self, template_id: str) -> BackupTemplate | None:
@@ -131,7 +143,11 @@ class TemplateRepository(BaseRepository):
 
     def update_backup(self, template_id: str, **kwargs) -> bool:
         sql, params = build_update_clause(
-            BACKUP_TEMPLATE_FIELDS, "backup_templates", "template_id", template_id, **kwargs
+            BACKUP_TEMPLATE_FIELDS,
+            "backup_templates",
+            "template_id",
+            template_id,
+            **kwargs,
         )
         if not sql:
             return False
@@ -140,9 +156,12 @@ class TemplateRepository(BaseRepository):
 
     def delete_backup(self, template_id: str) -> bool:
         with self._transaction() as conn:
-            return conn.execute(
-                "DELETE FROM backup_templates WHERE template_id = ?", (template_id,)
-            ).rowcount > 0
+            return (
+                conn.execute(
+                    "DELETE FROM backup_templates WHERE template_id = ?", (template_id,)
+                ).rowcount
+                > 0
+            )
 
     @staticmethod
     def _row_to_project_template(row: sqlite3.Row) -> ProjectTemplate:
@@ -163,7 +182,9 @@ class TemplateRepository(BaseRepository):
         except (TypeError, ValueError):
             paths = []
         try:
-            algorithm = ChecksumAlgorithm(row["algorithm"] or ChecksumAlgorithm.XXHASH64.value)
+            algorithm = ChecksumAlgorithm(
+                row["algorithm"] or ChecksumAlgorithm.XXHASH64.value
+            )
         except ValueError:
             algorithm = ChecksumAlgorithm.XXHASH64
         return BackupTemplate(

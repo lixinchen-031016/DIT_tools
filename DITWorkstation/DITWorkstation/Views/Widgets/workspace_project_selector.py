@@ -58,16 +58,20 @@ class WorkspaceProjectSelector(QWidget):
     workspace_changed = Signal(object)  # workspace_id
     project_changed = Signal(object)  # project_id
 
-    def __init__(self, parent=None, *,
-                 project_widget: str = "list",
-                 show_edit_workspace: bool = False,
-                 show_new_project: bool = True,
-                 show_delete_project: bool = False,
-                 show_workspace: bool | None = None,
-                 none_label: str = "（未选择项目）",
-                 broadcast_none: bool = True,
-                 buttons_below: bool = False,
-                 db_service=None):
+    def __init__(
+        self,
+        parent=None,
+        *,
+        project_widget: str = "list",
+        show_edit_workspace: bool = False,
+        show_new_project: bool = True,
+        show_delete_project: bool = False,
+        show_workspace: bool | None = None,
+        none_label: str = "（未选择项目）",
+        broadcast_none: bool = True,
+        buttons_below: bool = False,
+        db_service=None,
+    ):
         """
         Args:
             project_widget: "list" 垂直布局，"combo" 水平布局（均用 QComboBox）
@@ -92,7 +96,9 @@ class WorkspaceProjectSelector(QWidget):
         self._show_delete_project = show_delete_project
         # 个人模式默认隐藏工作区控件（功能模式开关统一裁决）
         self._show_workspace = (
-            is_enabled("workspace_selector") if show_workspace is None else show_workspace
+            is_enabled("workspace_selector")
+            if show_workspace is None
+            else show_workspace
         )
         self._none_label = none_label
         self._broadcast_none = broadcast_none
@@ -559,10 +565,7 @@ class WorkspaceProjectSelector(QWidget):
         if len(workspaces) == 1:
             return workspaces[0].workspace_id
         if len(workspaces) > 1:
-            labels = [
-                f"{w.name}  [{w.path}]" if w.path else w.name
-                for w in workspaces
-            ]
+            labels = [f"{w.name}  [{w.path}]" if w.path else w.name for w in workspaces]
             choice, ok = QInputDialog.getItem(
                 self, "选择工作区", "请选择新建项目所属的工作区：", labels, 0, False
             )
@@ -582,11 +585,12 @@ class WorkspaceProjectSelector(QWidget):
             return
         project_name = self.project_combo.currentText().split(" (")[0]
         reply = QMessageBox.question(
-            self, "确认",
+            self,
+            "确认",
             f"确定删除项目「{project_name}」及所有关联数据？\n\n"
             "数据库记录将移入回收站保留 30 天，可恢复；源媒体文件不会删除。",
             QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return

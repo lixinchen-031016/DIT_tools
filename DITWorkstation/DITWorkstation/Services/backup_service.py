@@ -1,4 +1,5 @@
 """安全拷贝与多重备份服务"""
+
 import shutil
 import threading
 import time
@@ -29,7 +30,9 @@ from DITWorkstation.Utils import (
 class BackupService:
     """安全拷贝与多重备份服务"""
 
-    def __init__(self, db_service=None, checksum_service: ChecksumService | None = None):
+    def __init__(
+        self, db_service=None, checksum_service: ChecksumService | None = None
+    ):
         """注入 db_service 后，备份完成会持久化 job + 回写 asset.backup_locations。
 
         checksum_service 可注入；不传时取全局单例，与 MediaImportService 复用同一缓存，
@@ -57,36 +60,44 @@ class BackupService:
         files = []
         if source.is_file():
             stat = source.stat()
-            files.append({
-                "path": str(source),
-                "size": stat.st_size,
-                "name": source.name,
-                "relative": source.name,
-                "mtime_ns": stat.st_mtime_ns,
-            })
+            files.append(
+                {
+                    "path": str(source),
+                    "size": stat.st_size,
+                    "name": source.name,
+                    "relative": source.name,
+                    "mtime_ns": stat.st_mtime_ns,
+                }
+            )
         else:
             for item in scan_files(source):
                 stat = item.stat()
-                files.append({
-                    "path": str(item),
-                    "size": stat.st_size,
-                    "name": item.name,
-                    "relative": str(item.relative_to(source)),
-                    "mtime_ns": stat.st_mtime_ns,
-                })
+                files.append(
+                    {
+                        "path": str(item),
+                        "size": stat.st_size,
+                        "name": item.name,
+                        "relative": str(item.relative_to(source)),
+                        "mtime_ns": stat.st_mtime_ns,
+                    }
+                )
         return files
 
     @staticmethod
-    def resolve_template_targets(target_paths: list[str], source_path: str) -> list[str]:
+    def resolve_template_targets(
+        target_paths: list[str], source_path: str
+    ) -> list[str]:
         """展开备份模板目标路径中的安全占位符。"""
         source_name = Path(source_path).name or "source"
-        return [str(path).replace("{source_name}", source_name) for path in target_paths]
+        return [
+            str(path).replace("{source_name}", source_name) for path in target_paths
+        ]
 
     def create_backup_job(
         self,
         source_path: str,
         target_paths: list[str],
-        algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64
+        algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
     ) -> BackupJob:
         """创建备份作业"""
         job_id = str(uuid.uuid4())[:8]
@@ -96,12 +107,14 @@ class BackupService:
         targets = []
         for tp in target_paths:
             target_name = Path(tp).name or tp
-            targets.append(BackupTarget(
-                path=tp,
-                name=target_name,
-                total_files=len(files),
-                total_bytes=total_bytes
-            ))
+            targets.append(
+                BackupTarget(
+                    path=tp,
+                    name=target_name,
+                    total_files=len(files),
+                    total_bytes=total_bytes,
+                )
+            )
 
         job = BackupJob(
             job_id=job_id,
@@ -109,9 +122,9 @@ class BackupService:
             targets=targets,
             algorithm=algorithm,
             total_files=len(files),
-            total_bytes=total_bytes
+            total_bytes=total_bytes,
         )
-        job.__dict__['_files_cache'] = files
+        job.__dict__["_files_cache"] = files
         return job
 
     def create_incremental_backup_job(
@@ -138,21 +151,29 @@ class BackupService:
             if candidate.get("source_path") != source_path:
                 continue
             completed_targets = {
-                target.get("path") for target in candidate.get("targets", [])
+                target.get("path")
+                for target in candidate.get("targets", [])
                 if target.get("status") == CopyStatus.COMPLETED.value
             }
-            if requested.issubset(completed_targets) and candidate.get("file_snapshots"):
+            if requested.issubset(completed_targets) and candidate.get(
+                "file_snapshots"
+            ):
                 previous = candidate
                 break
 
         previous_by_relative = {
-            item.get("relative"): item for item in (previous or {}).get("file_snapshots", [])
+            item.get("relative"): item
+            for item in (previous or {}).get("file_snapshots", [])
             if item.get("relative")
         }
         unchanged = 0
         for item in job.__dict__["_files_cache"]:
             old = previous_by_relative.get(item["relative"])
-            if old and old.get("size") == item["size"] and old.get("mtime_ns") == item["mtime_ns"]:
+            if (
+                old
+                and old.get("size") == item["size"]
+                and old.get("mtime_ns") == item["mtime_ns"]
+            ):
                 item["unchanged"] = True
                 item["checksum"] = old.get("checksum", "")
                 unchanged += 1
@@ -162,9 +183,7 @@ class BackupService:
         return job
 
     def check_target_space(
-        self,
-        target_paths: list[str],
-        total_bytes: int
+        self, target_paths: list[str], total_bytes: int
     ) -> list[dict]:
         """备份前检查各目标磁盘剩余空间是否足够。
 
@@ -182,22 +201,32 @@ class BackupService:
             try:
                 usage = shutil.disk_usage(tp)
             except (OSError, ValueError) as e:
-                results.append({
-                    "path": tp, "free": 0, "needed": total_bytes,
-                    "sufficient": False, "error": str(e),
-                })
+                results.append(
+                    {
+                        "path": tp,
+                        "free": 0,
+                        "needed": total_bytes,
+                        "sufficient": False,
+                        "error": str(e),
+                    }
+                )
                 continue
-            results.append({
-                "path": tp, "free": usage.free, "needed": total_bytes,
-                "sufficient": usage.free >= total_bytes, "error": "",
-            })
+            results.append(
+                {
+                    "path": tp,
+                    "free": usage.free,
+                    "needed": total_bytes,
+                    "sufficient": usage.free >= total_bytes,
+                    "error": "",
+                }
+            )
         return results
 
     def verify_backup(
         self,
         project_id: str,
         progress_callback: Callable[[int, int, str], None] | None = None,
-        cancel_check: Callable[[], bool] | None = None
+        cancel_check: Callable[[], bool] | None = None,
     ) -> dict:
         """独立校验项目已有备份的完整性。
 
@@ -220,7 +249,8 @@ class BackupService:
         self._set_cancelled(False)
 
         assets = (
-            asset for asset in self.db_service.iter_project_assets(project_id)
+            asset
+            for asset in self.db_service.iter_project_assets(project_id)
             if asset.backup_locations
         )
         jobs = self.db_service.get_backup_jobs(project_id)
@@ -240,10 +270,18 @@ class BackupService:
                         snapshot_index[source_path] = relative
 
         stats = {
-            "checked": 0, "matched": 0, "missing": 0,
-            "mismatch": 0, "unhashable": 0, "errors": [],
+            "checked": 0,
+            "matched": 0,
+            "missing": 0,
+            "mismatch": 0,
+            "unhashable": 0,
+            "errors": [],
         }
-        total = sum(1 for asset in self.db_service.iter_project_assets(project_id) if asset.backup_locations)
+        total = sum(
+            1
+            for asset in self.db_service.iter_project_assets(project_id)
+            if asset.backup_locations
+        )
         for i, asset in enumerate(assets):
             if cancel_check and cancel_check():
                 break
@@ -293,7 +331,9 @@ class BackupService:
             f"检查 {stats['checked']}，一致 {stats['matched']}，"
             f"缺失 {stats['missing']}，不一致 {stats['mismatch']}",
             project_id=project_id,
-            status="success" if not (stats["missing"] or stats["mismatch"] or stats["errors"]) else "error",
+            status="success"
+            if not (stats["missing"] or stats["mismatch"] or stats["errors"])
+            else "error",
             object_type="project",
             object_id=project_id,
         )
@@ -352,7 +392,7 @@ class BackupService:
         progress_callback: Callable[[str, float, str], None] | None = None,
         file_completed_callback: Callable[[str, CopyTask], None] | None = None,
         project_id: str | None = None,
-        verify: bool | None = None
+        verify: bool | None = None,
     ) -> BackupJob:
         """
         执行备份作业（并行多目标）
@@ -374,7 +414,7 @@ class BackupService:
         job.completed_at = None
         source = Path(job.source_path)
 
-        files = getattr(job, '_files_cache', None)
+        files = getattr(job, "_files_cache", None)
         if files is None:
             logger.warning("文件缓存未找到，重新扫描源目录")
             files = self.scan_source(job.source_path)
@@ -403,9 +443,14 @@ class BackupService:
         for target in job.targets:
             future = self._executor.submit(
                 self._copy_to_target,
-                source, files, target, job.algorithm,
-                progress_callback, file_completed_callback, verify,
-                lambda: self._persist_snapshot(job, project_id)
+                source,
+                files,
+                target,
+                job.algorithm,
+                progress_callback,
+                file_completed_callback,
+                verify,
+                lambda: self._persist_snapshot(job, project_id),
             )
             futures[future] = target
 
@@ -457,21 +502,23 @@ class BackupService:
                 status = CopyStatus(t["status"])
             except ValueError:
                 status = CopyStatus.FAILED
-            job.targets.append(BackupTarget(
-                path=t["path"],
-                name=t.get("name", ""),
-                status=status,
-                total_files=t.get("total_files", raw["total_files"]),
-                completed_files=t.get("completed_files", 0),
-                total_bytes=t.get("total_bytes", raw["total_bytes"]),
-                copied_bytes=t.get("copied_bytes", 0),
-                verified=t.get("verified", False),
-                error_message=t.get("error_message", ""),
-                failed_files=list(
-                    failed_by_target.get(t["path"], t.get("failed_files", []))
-                ),
-                pending_files=list(t.get("pending_files", [])),
-            ))
+            job.targets.append(
+                BackupTarget(
+                    path=t["path"],
+                    name=t.get("name", ""),
+                    status=status,
+                    total_files=t.get("total_files", raw["total_files"]),
+                    completed_files=t.get("completed_files", 0),
+                    total_bytes=t.get("total_bytes", raw["total_bytes"]),
+                    copied_bytes=t.get("copied_bytes", 0),
+                    verified=t.get("verified", False),
+                    error_message=t.get("error_message", ""),
+                    failed_files=list(
+                        failed_by_target.get(t["path"], t.get("failed_files", []))
+                    ),
+                    pending_files=list(t.get("pending_files", [])),
+                )
+            )
         job.__dict__["_files_cache"] = list(raw.get("file_snapshots", []))
         return job
 
@@ -481,7 +528,7 @@ class BackupService:
         project_id: str | None = None,
         progress_callback: Callable[[str, float, str], None] | None = None,
         file_completed_callback: Callable[[str, CopyTask], None] | None = None,
-        verify: bool | None = None
+        verify: bool | None = None,
     ) -> BackupJob | None:
         """重试备份作业中失败的文件（断点续传语义）。
 
@@ -538,7 +585,8 @@ class BackupService:
                 try:
                     stat = Path(item["path"]).stat()
                     if stat.st_size != item.get("size") or (
-                        item.get("mtime_ns") is not None and stat.st_mtime_ns != item["mtime_ns"]
+                        item.get("mtime_ns") is not None
+                        and stat.st_mtime_ns != item["mtime_ns"]
                     ):
                         missing.append(relative)
                         continue
@@ -553,7 +601,8 @@ class BackupService:
             target.error_message = ""
             if missing:
                 target.error_message = (
-                    f"源文件不可用或已变化 {len(missing)} 个: " + "、".join(missing[:10])
+                    f"源文件不可用或已变化 {len(missing)} 个: "
+                    + "、".join(missing[:10])
                 )
             if not failed_files:
                 # 失败文件在源目录中全部缺失，无法重试
@@ -562,9 +611,14 @@ class BackupService:
                 continue
             future = self._executor.submit(
                 self._copy_to_target,
-                Path(job.source_path), failed_files, target, job.algorithm,
-                progress_callback, file_completed_callback, verify,
-                lambda: self._persist_snapshot(job, project_id)
+                Path(job.source_path),
+                failed_files,
+                target,
+                job.algorithm,
+                progress_callback,
+                file_completed_callback,
+                verify,
+                lambda: self._persist_snapshot(job, project_id),
             )
             futures[future] = target
 
@@ -582,7 +636,9 @@ class BackupService:
                 self._executor.shutdown(wait=False)
                 self._executor = None
 
-        return self._finalize_and_persist(job, files, project_id, operation_event="备份重试")
+        return self._finalize_and_persist(
+            job, files, project_id, operation_event="备份重试"
+        )
 
     def _persist_snapshot(self, job: BackupJob, project_id: str | None):
         """持久化运行中任务快照；失败不阻断文件拷贝。"""
@@ -599,15 +655,17 @@ class BackupService:
         job: BackupJob,
         files: list[dict],
         project_id: str | None,
-        operation_event: str = "数据备份"
+        operation_event: str = "数据备份",
     ) -> BackupJob:
         """汇总作业状态、持久化并回写 asset.backup_locations（execute/retry 共用）。"""
         # 取消/进程中断留下的 pending 文件必须进入重试列表，不能被静默丢弃。
         for target in job.targets:
             if target.pending_files:
-                target.failed_files = list(dict.fromkeys(
-                    list(target.failed_files) + list(target.pending_files)
-                ))
+                target.failed_files = list(
+                    dict.fromkeys(
+                        list(target.failed_files) + list(target.pending_files)
+                    )
+                )
                 target.pending_files = []
                 if target.status == CopyStatus.CANCELLED:
                     target.status = CopyStatus.FAILED
@@ -644,7 +702,9 @@ class BackupService:
                     project_id=project_id,
                 )
             except Exception as e:
-                logger.error(f"备份结果回写 DB 失败（不影响文件备份）: {e}", exc_info=True)
+                logger.error(
+                    f"备份结果回写 DB 失败（不影响文件备份）: {e}", exc_info=True
+                )
 
         return job
 
@@ -677,8 +737,8 @@ class BackupService:
         target.status = CopyStatus.COPYING
 
         file_count = len(files)
-        failed_files = []     # 失败文件的相对路径（完整列表，供重试）
-        failed_errors = {}    # relative -> error message
+        failed_files = []  # 失败文件的相对路径（完整列表，供重试）
+        failed_errors = {}  # relative -> error message
         for i, file_info in enumerate(files):
             if self._is_cancelled():
                 target.status = CopyStatus.CANCELLED
@@ -718,20 +778,29 @@ class BackupService:
                         if persist_callback:
                             persist_callback()
                         if file_completed_callback:
-                            file_completed_callback(target.path, CopyTask(
-                                source_path=str(src_file), dest_path=str(dest_file),
-                                file_size=file_info["size"], status=CopyStatus.COMPLETED,
-                                progress=1.0, source_checksum=file_info.get("checksum", ""),
-                                speed_mbps=0.0,
-                            ))
+                            file_completed_callback(
+                                target.path,
+                                CopyTask(
+                                    source_path=str(src_file),
+                                    dest_path=str(dest_file),
+                                    file_size=file_info["size"],
+                                    status=CopyStatus.COMPLETED,
+                                    progress=1.0,
+                                    source_checksum=file_info.get("checksum", ""),
+                                    speed_mbps=0.0,
+                                ),
+                            )
                         continue
                     try:
                         src_hash = self.checksum_service.compute_file_checksum(
-                            str(src_file), algorithm,
+                            str(src_file),
+                            algorithm,
                             cancel_check=self._is_cancelled,
                         )
                         if self.checksum_service.verify_file(
-                            str(dest_file), src_hash.hash_value, algorithm,
+                            str(dest_file),
+                            src_hash.hash_value,
+                            algorithm,
                             cancel_check=self._is_cancelled,
                         ):
                             target.completed_files += 1
@@ -761,10 +830,14 @@ class BackupService:
                 start_time = time.time()
                 # 边拷贝边计算源校验和：单次读盘，替代「先哈希再拷贝」的两次读盘
                 source_checksum = self.checksum_service.copy_file_with_checksum(
-                    str(src_file), str(dest_file), algorithm,
-                    lambda p: self._report_progress(
-                        progress_callback, target.path,
-                        (i + p) / file_count, f"拷贝: {src_file.name}"
+                    str(src_file),
+                    str(dest_file),
+                    algorithm,
+                    lambda p, i=i, src_file=src_file: self._report_progress(
+                        progress_callback,
+                        target.path,
+                        (i + p) / file_count,
+                        f"拷贝: {src_file.name}",
                     ),
                     cancel_check=self._is_cancelled,
                 )
@@ -774,11 +847,15 @@ class BackupService:
 
                 if verify:
                     self._report_progress(
-                        progress_callback, target.path,
-                        (i + 0.9) / file_count, f"验证: {src_file.name}"
+                        progress_callback,
+                        target.path,
+                        (i + 0.9) / file_count,
+                        f"验证: {src_file.name}",
                     )
                     verified = self.checksum_service.verify_file(
-                        str(dest_file), source_checksum.hash_value, algorithm,
+                        str(dest_file),
+                        source_checksum.hash_value,
+                        algorithm,
                         cancel_check=self._is_cancelled,
                     )
                     if not verified:
@@ -802,7 +879,7 @@ class BackupService:
                         status=CopyStatus.COMPLETED,
                         progress=1.0,
                         source_checksum=source_checksum.hash_value,
-                        speed_mbps=speed
+                        speed_mbps=speed,
                     )
                     file_completed_callback(target.path, task)
 
@@ -839,20 +916,14 @@ class BackupService:
             if len(failed_files) > 20:
                 shown += f"…（共 {len(failed_files)} 个文件失败）"
             target.error_message = shown
-            logger.error(
-                f"备份目标部分失败 {target.path}: {len(failed_files)} 个文件"
-            )
+            logger.error(f"备份目标部分失败 {target.path}: {len(failed_files)} 个文件")
             return
         target.status = CopyStatus.COMPLETED
         target.verified = True
         self._report_progress(progress_callback, target.path, 1.0, "完成")
 
     def _report_progress(
-        self,
-        callback: Callable | None,
-        target_path: str,
-        progress: float,
-        message: str
+        self, callback: Callable | None, target_path: str, progress: float, message: str
     ):
         """报告进度"""
         if callback:
@@ -885,13 +956,13 @@ class BackupService:
         lines = [
             '<?xml version="1.0" encoding="UTF-8"?>',
             '<hashlist version="2.0">',
-            '  <creatorinfo>',
-            '    <tool>DIT工作站 v1.0</tool>',
-            f'    <creationdate>{now_local().isoformat()}</creationdate>',
-            '  </creatorinfo>',
+            "  <creatorinfo>",
+            "    <tool>DIT工作站 v1.0</tool>",
+            f"    <creationdate>{now_local().isoformat()}</creationdate>",
+            "  </creatorinfo>",
         ]
 
-        files = getattr(job, '_files_cache', None)
+        files = getattr(job, "_files_cache", None)
         if files is None:
             files = self.scan_source(job.source_path)
 
@@ -901,12 +972,12 @@ class BackupService:
             checksum = self.checksum_service.compute_file_checksum(
                 str(src_file), job.algorithm
             )
-            lines.append('  <hash>')
-            lines.append(f'    <path>{relative}</path>')
-            lines.append(f'    <size>{file_info["size"]}</size>')
-            lines.append(f'    <hashformat>{job.algorithm.value}</hashformat>')
-            lines.append(f'    <hashvalue>{checksum.hash_value}</hashvalue>')
-            lines.append('  </hash>')
+            lines.append("  <hash>")
+            lines.append(f"    <path>{relative}</path>")
+            lines.append(f"    <size>{file_info['size']}</size>")
+            lines.append(f"    <hashformat>{job.algorithm.value}</hashformat>")
+            lines.append(f"    <hashvalue>{checksum.hash_value}</hashvalue>")
+            lines.append("  </hash>")
 
-        lines.append('</hashlist>')
+        lines.append("</hashlist>")
         return "\n".join(lines)

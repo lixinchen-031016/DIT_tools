@@ -3,6 +3,7 @@
 MetadataService 已拆离到 metadata_service.py（两者零耦合）。
 向后兼容：MetadataService 已拆离，请直接导入 metadata_service。
 """
+
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -14,7 +15,9 @@ from DITWorkstation.Utils import now_local
 class RenameService:
     """文件重命名服务"""
 
-    def preview_rename(self, files: list[str], rule: RenameRule) -> list[tuple[str, str]]:
+    def preview_rename(
+        self, files: list[str], rule: RenameRule
+    ) -> list[tuple[str, str]]:
         """
         预览重命名结果
 
@@ -101,14 +104,12 @@ class RenameService:
         name = name.replace("{date}", now_local().strftime("%Y%m%d"))
 
         # 清理多余分隔符
-        name = re.sub(r'[_\-\s]+', '_', name).strip('_')
+        name = re.sub(r"[_\-\s]+", "_", name).strip("_")
 
         return f"{name}{suffix}"
 
     def batch_rename_with_association(
-        self,
-        file_groups: list[list[str]],
-        rule: RenameRule
+        self, file_groups: list[list[str]], rule: RenameRule
     ) -> list[tuple[str, str]]:
         """
         批量重命名并保持文件关联（如JPG+RAW对）
@@ -130,7 +131,7 @@ class RenameService:
                 prefix=rule.prefix,
                 suffix=rule.suffix,
                 start_number=rule.start_number + i,
-                padding=rule.padding
+                padding=rule.padding,
             )
             results = self.execute_rename(group, group_rule)
             all_results.extend(results)
@@ -154,9 +155,13 @@ class RenameService:
         for old_path, new_path in mappings:
             old, new = Path(old_path), Path(new_path)
             if not new.is_file():
-                return OperationResult(OperationStatus.CONFLICT, f"无法回退，重命名后的文件已变化: {new}")
+                return OperationResult(
+                    OperationStatus.CONFLICT, f"无法回退，重命名后的文件已变化: {new}"
+                )
             if old.exists():
-                return OperationResult(OperationStatus.CONFLICT, f"无法回退，原路径已被占用: {old}")
+                return OperationResult(
+                    OperationStatus.CONFLICT, f"无法回退，原路径已被占用: {old}"
+                )
 
         reverted = []
         try:
@@ -175,11 +180,15 @@ class RenameService:
             return OperationResult(OperationStatus.ERROR, f"文件回退失败: {exc}")
 
         for old_path, new_path in mappings:
-            db_service.update_asset_path_by_old_path(new_path, old_path, Path(old_path).name)
+            db_service.update_asset_path_by_old_path(
+                new_path, old_path, Path(old_path).name
+            )
         marked = db_service.mark_rename_history_reverted(rename_id)
         if not marked:
             return marked
-        return OperationResult(OperationStatus.SUCCESS, affected_count=len(mappings), recovery_id=rename_id)
+        return OperationResult(
+            OperationStatus.SUCCESS, affected_count=len(mappings), recovery_id=rename_id
+        )
 
 
 # 向后兼容：MetadataService 已拆离到 metadata_service.py

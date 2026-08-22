@@ -2,6 +2,7 @@
 DIT工作站 - 应用入口
 专业摄影数据管理应用，支持安全备份、校验和验证、JPG筛选RAW提取等功能
 """
+
 import os
 import platform
 import sys
@@ -124,8 +125,9 @@ def _create_app_icon() -> QIcon:
     # 白色描边圆角方块（在深色背景下形成轮廓）
     painter.setBrush(QColor("#0a84ff"))
     painter.setPen(QColor("#ffffff"))
-    painter.drawRoundedRect(border, border, size - 2 * border, size - 2 * border,
-                            size * 0.22, size * 0.22)
+    painter.drawRoundedRect(
+        border, border, size - 2 * border, size - 2 * border, size * 0.22, size * 0.22
+    )
     # 白色 "D" 字母
     font = QFont("Helvetica", int(size * 0.6), QFont.Bold)
     painter.setFont(font)

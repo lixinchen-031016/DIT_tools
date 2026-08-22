@@ -1,4 +1,5 @@
 """按需展示素材分页数据的 Qt 表格模型。"""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -30,7 +31,11 @@ class AssetTableModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(self._headers)
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if orientation == Qt.Horizontal and role == Qt.DisplayRole and 0 <= section < len(self._headers):
+        if (
+            orientation == Qt.Horizontal
+            and role == Qt.DisplayRole
+            and 0 <= section < len(self._headers)
+        ):
             return self._headers[section]
         return None
 
@@ -72,7 +77,10 @@ class AssetTableModel(QAbstractTableModel):
         reverse = order == Qt.DescendingOrder
         self.layoutAboutToBeChanged.emit()
         self._assets.sort(
-            key=lambda asset: (self._cell_factory(asset, column)[0], getattr(asset, "asset_id", "")),
+            key=lambda asset: (
+                self._cell_factory(asset, column)[0],
+                getattr(asset, "asset_id", ""),
+            ),
             reverse=reverse,
         )
         self.layoutChanged.emit()

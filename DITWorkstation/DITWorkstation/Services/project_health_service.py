@@ -1,4 +1,5 @@
 """项目健康汇总服务。"""
+
 import math
 import shutil
 from datetime import datetime
@@ -18,52 +19,80 @@ class ProjectHealthService:
         tasks = self.db_service.get_task_history(project_id, limit=100)
         recycle_items = self.db_service.get_recycle_bin_items(project_id)
 
-        failed_tasks = [task for task in tasks if task.get("state") in {"failed", "recoverable", "cancelled"}]
+        failed_tasks = [
+            task
+            for task in tasks
+            if task.get("state") in {"failed", "recoverable", "cancelled"}
+        ]
         retry_files = sum(
             len(target.get("failed_files", []))
-            for job in jobs for target in job.get("targets", [])
+            for job in jobs
+            for target in job.get("targets", [])
         )
-        target_paths = sorted({
-            target.get("path", "") for job in jobs for target in job.get("targets", [])
-            if target.get("path")
-        })
+        target_paths = sorted(
+            {
+                target.get("path", "")
+                for job in jobs
+                for target in job.get("targets", [])
+                if target.get("path")
+            }
+        )
         capacities = []
         for target_path in target_paths:
             try:
                 usage = shutil.disk_usage(Path(target_path))
                 entry = {
-                    "path": target_path, "total_bytes": usage.total, "free_bytes": usage.free,
-                    "used_percent": round((usage.used / usage.total * 100) if usage.total else 0, 1),
+                    "path": target_path,
+                    "total_bytes": usage.total,
+                    "free_bytes": usage.free,
+                    "used_percent": round(
+                        (usage.used / usage.total * 100) if usage.total else 0, 1
+                    ),
                     "available": True,
                 }
                 capacities.append(entry)
                 if capture_capacity:
                     self.db_service.record_storage_health_snapshot(
-                        project_id, target_path, usage.total, usage.free,
+                        project_id,
+                        target_path,
+                        usage.total,
+                        usage.free,
                     )
             except OSError as exc:
-                capacities.append({
-                    "path": target_path, "total_bytes": 0, "free_bytes": 0,
-                    "used_percent": None, "available": False, "error": str(exc),
-                })
+                capacities.append(
+                    {
+                        "path": target_path,
+                        "total_bytes": 0,
+                        "free_bytes": 0,
+                        "used_percent": None,
+                        "available": False,
+                        "error": str(exc),
+                    }
+                )
 
         capacity_history = self.db_service.get_storage_health_snapshots(project_id)
         capacity_forecast = self.estimate_capacity_forecast(capacity_history)
 
         recent_checks = self.db_service.get_recent_operations(
-            limit=1, project_id=project_id, event="备份校验",
+            limit=1,
+            project_id=project_id,
+            event="备份校验",
         )
         issues = {
             "unbacked_assets": max(0, stats["asset_count"] - stats["backed_up_count"]),
             "missing_assets": len(missing_asset_ids),
             "failed_tasks": len(failed_tasks),
             "retry_files": retry_files,
-            "unavailable_targets": sum(1 for item in capacities if not item["available"]),
+            "unavailable_targets": sum(
+                1 for item in capacities if not item["available"]
+            ),
             "capacity_warning": bool(capacity_forecast["warning"]),
         }
         severity = "healthy" if not any(issues.values()) else "attention"
         if (
-            issues["missing_assets"] or issues["retry_files"] or issues["failed_tasks"]
+            issues["missing_assets"]
+            or issues["retry_files"]
+            or issues["failed_tasks"]
             or issues["capacity_warning"]
         ):
             severity = "warning"
@@ -82,7 +111,9 @@ class ProjectHealthService:
 
     @staticmethod
     def estimate_capacity_forecast(
-        snapshots: list[dict], *, warning_ratio: float = 0.15,
+        snapshots: list[dict],
+        *,
+        warning_ratio: float = 0.15,
     ) -> dict:
         """根据容量快照估算最先耗尽的目标，供 UI 和自动策略复用。
 
@@ -98,7 +129,9 @@ class ProjectHealthService:
 
         forecasts = []
         for path, entries in by_target.items():
-            entries = sorted(entries, key=lambda item: item.get("captured_at") or datetime.min)
+            entries = sorted(
+                entries, key=lambda item: item.get("captured_at") or datetime.min
+            )
             latest = entries[-1]
             total = max(0, int(latest.get("total_bytes") or 0))
             free = max(0, int(latest.get("free_bytes") or 0))
@@ -108,28 +141,39 @@ class ProjectHealthService:
                 first_free = int(first.get("free_bytes") or 0)
                 first_time = first.get("captured_at")
                 latest_time = latest.get("captured_at")
-                if isinstance(first_time, datetime) and isinstance(latest_time, datetime):
+                if isinstance(first_time, datetime) and isinstance(
+                    latest_time, datetime
+                ):
                     elapsed_days = (latest_time - first_time).total_seconds() / 86400
-                    daily_loss = (first_free - free) / elapsed_days if elapsed_days > 0 else 0
+                    daily_loss = (
+                        (first_free - free) / elapsed_days if elapsed_days > 0 else 0
+                    )
                     if daily_loss > 0:
                         days_remaining = max(0, math.ceil(free / daily_loss))
-            forecasts.append({
-                "path": path,
-                "free_bytes": free,
-                "total_bytes": total,
-                "free_ratio": (free / total) if total else None,
-                "days_remaining": days_remaining,
-            })
+            forecasts.append(
+                {
+                    "path": path,
+                    "free_bytes": free,
+                    "total_bytes": total,
+                    "free_ratio": (free / total) if total else None,
+                    "days_remaining": days_remaining,
+                }
+            )
 
-        forecasts.sort(key=lambda item: (
-            item["days_remaining"] is None,
-            item["days_remaining"] if item["days_remaining"] is not None else float("inf"),
-        ))
-        urgent = [item for item in forecasts if (
-            item["free_ratio"] is not None and item["free_ratio"] <= warning_ratio
-        ) or (
-            item["days_remaining"] is not None and item["days_remaining"] <= 7
-        )]
+        forecasts.sort(
+            key=lambda item: (
+                item["days_remaining"] is None,
+                item["days_remaining"]
+                if item["days_remaining"] is not None
+                else float("inf"),
+            )
+        )
+        urgent = [
+            item
+            for item in forecasts
+            if (item["free_ratio"] is not None and item["free_ratio"] <= warning_ratio)
+            or (item["days_remaining"] is not None and item["days_remaining"] <= 7)
+        ]
         return {
             "targets": forecasts,
             "warning": bool(urgent),

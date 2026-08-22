@@ -29,6 +29,7 @@ def get_nav_index(key: str) -> int | None:
     模块顶层循环导入（feature_flags 依赖本模块的 NAV_ITEMS）。
     """
     from DITWorkstation.App.feature_flags import get_active_nav_items
+
     for i, (k, _, _) in enumerate(get_active_nav_items()):
         if k == key:
             return i

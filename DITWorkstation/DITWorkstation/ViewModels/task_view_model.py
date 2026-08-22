@@ -2,6 +2,7 @@
 
 把 QThread 的创建、状态、错误、取消和清理集中起来，视图只处理展示与用户操作。
 """
+
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -27,6 +28,7 @@ def _history_value(value):
 @dataclass
 class TaskRecord:
     """任务观测基线；后续可直接映射至持久化任务历史。"""
+
     task_name: str
     task_id: str | None = None
     project_id: str | None = None
@@ -92,7 +94,8 @@ class TaskViewModel(QObject):
         if self.task_store is not None:
             try:
                 self.current_record.task_id = self.task_store.create_task_history(
-                    self.current_record.task_name, project_id,
+                    self.current_record.task_name,
+                    project_id,
                     parameters={
                         "args_count": len(args),
                         "kwargs": {
@@ -180,7 +183,9 @@ class TaskViewModel(QObject):
             return
         try:
             self.task_store.update_task_history(
-                record.task_id, record.state.value, output=output,
+                record.task_id,
+                record.state.value,
+                output=output,
                 error_summary=error_summary or record.error_summary,
                 recovery_info=record.recovery_info,
             )

@@ -1,4 +1,5 @@
 """媒体导入服务"""
+
 import json
 import os
 import shutil
@@ -30,7 +31,7 @@ class MediaImportService:
     def __init__(
         self,
         db_service: DatabaseService | None = None,
-        checksum_service: ChecksumService | None = None
+        checksum_service: ChecksumService | None = None,
     ):
         # 优先使用注入的 checksum_service，否则取全局单例（避免重复计算缓存）
         self.checksum_service = checksum_service or get_checksum_service()
@@ -68,7 +69,7 @@ class MediaImportService:
         include_images: bool = True,
         include_videos: bool = True,
         include_raw: bool = True,
-        include_audio: bool = False
+        include_audio: bool = False,
     ) -> list[Path]:
         """
         扫描文件夹中的媒体文件
@@ -107,10 +108,7 @@ class MediaImportService:
         return sorted(media_files)
 
     def scan_multiple_folders(
-        self,
-        folders: list[str],
-        recursive: bool = True,
-        **kwargs
+        self, folders: list[str], recursive: bool = True, **kwargs
     ) -> list[Path]:
         """
         扫描多个文件夹
@@ -168,7 +166,7 @@ class MediaImportService:
         scene: str = "",
         shot: str = "",
         progress_callback: Callable[[str, float, str], None] | None = None,
-        cancel_check: Callable[[], bool] | None = None
+        cancel_check: Callable[[], bool] | None = None,
     ) -> dict:
         """
         导入素材到项目
@@ -196,8 +194,14 @@ class MediaImportService:
         """
         total = len(file_paths)
         if total == 0:
-            return {"total": 0, "imported": 0, "skipped": 0, "failed": 0,
-                    "cancelled": False, "details": []}
+            return {
+                "total": 0,
+                "imported": 0,
+                "skipped": 0,
+                "failed": 0,
+                "cancelled": False,
+                "details": [],
+            }
 
         # 批量查重：一次查询拿回全部已存在路径（N+1 优化）
         existing_paths = self.db_service.existing_asset_paths(project_id, file_paths)
@@ -216,13 +220,27 @@ class MediaImportService:
             try:
                 path = Path(file_path)
                 if not path.exists():
-                    return "skipped", {"path": file_path, "status": "skipped",
-                                       "reason": "文件不存在"}, None
+                    return (
+                        "skipped",
+                        {
+                            "path": file_path,
+                            "status": "skipped",
+                            "reason": "文件不存在",
+                        },
+                        None,
+                    )
                 fp_key = normalize_path(str(path))
                 with dedup_lock:
                     if fp_key in existing_paths:
-                        return "skipped", {"path": file_path, "status": "skipped",
-                                           "reason": "已存在"}, None
+                        return (
+                            "skipped",
+                            {
+                                "path": file_path,
+                                "status": "skipped",
+                                "reason": "已存在",
+                            },
+                            None,
+                        )
                     # 先占位，防止同批重复路径并发重复导入；失败时回退
                     existing_paths.add(fp_key)
                 try:
@@ -251,8 +269,15 @@ class MediaImportService:
                         shot=shot,
                         cancel_check=cancel_check,
                     )
-                    return "imported", {"path": file_path, "status": "imported",
-                                        "asset_id": asset.asset_id}, asset
+                    return (
+                        "imported",
+                        {
+                            "path": file_path,
+                            "status": "imported",
+                            "asset_id": asset.asset_id,
+                        },
+                        asset,
+                    )
                 except Exception:
                     with dedup_lock:
                         existing_paths.discard(fp_key)
@@ -261,15 +286,17 @@ class MediaImportService:
                 if isinstance(e, InterruptedError) and cancel_check and cancel_check():
                     return "cancelled", {"path": file_path, "status": "cancelled"}, None
                 logger.error(f"导入失败 {file_path}: {e}")
-                return "failed", {"path": file_path, "status": "failed", "error": str(e)}, None
+                return (
+                    "failed",
+                    {"path": file_path, "status": "failed", "error": str(e)},
+                    None,
+                )
 
         pool = ThreadPoolExecutor(max_workers=max(1, config.max_import_workers))
         try:
             futures = {pool.submit(_import_one, fp): fp for fp in file_paths}
-            processed = 0
-            for future in as_completed(futures):
+            for processed, future in enumerate(as_completed(futures), start=1):
                 status, detail, asset = future.result()
-                processed += 1
                 details.append(detail)
                 if status == "imported":
                     imported += 1
@@ -283,8 +310,9 @@ class MediaImportService:
 
                 if progress_callback and total > 0:
                     progress_callback(
-                        "import", processed / total,
-                        f"处理: {Path(detail['path']).name}"
+                        "import",
+                        processed / total,
+                        f"处理: {Path(detail['path']).name}",
                     )
 
                 # 用户取消：停止收集剩余结果，已提交未执行的任务由 shutdown 取消
@@ -306,7 +334,7 @@ class MediaImportService:
             "skipped": skipped,
             "failed": failed,
             "cancelled": cancelled,
-            "details": details
+            "details": details,
         }
 
         # 操作审计：记录本次导入结果（失败不影响导入本身）
@@ -320,7 +348,9 @@ class MediaImportService:
         except Exception as e:
             logger.warning(f"记录导入操作日志失败: {e}")
 
-        logger.info(f"导入完成: 共 {total} 个, 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个, 取消: {cancelled}")
+        logger.info(
+            f"导入完成: 共 {total} 个, 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个, 取消: {cancelled}"
+        )
         return result
 
     def _create_asset(
@@ -334,7 +364,7 @@ class MediaImportService:
         log_id: str | None = None,
         scene: str = "",
         shot: str = "",
-        cancel_check: Callable[[], bool] | None = None
+        cancel_check: Callable[[], bool] | None = None,
     ) -> MediaAsset:
         """
         创建素材资产对象
@@ -397,13 +427,15 @@ class MediaImportService:
                 width = vm.width or 0
                 height = vm.height or 0
                 duration_seconds = vm.duration_seconds or 0.0
-                video_metadata = json.dumps({
-                    "codec": vm.codec,
-                    "frame_rate": vm.frame_rate,
-                    "bit_rate": vm.bit_rate,
-                    "audio_codec": vm.audio_codec,
-                    "audio_sample_rate": vm.audio_sample_rate,
-                })
+                video_metadata = json.dumps(
+                    {
+                        "codec": vm.codec,
+                        "frame_rate": vm.frame_rate,
+                        "bit_rate": vm.bit_rate,
+                        "audio_codec": vm.audio_codec,
+                        "audio_sample_rate": vm.audio_sample_rate,
+                    }
+                )
             except Exception as e:
                 logger.debug(f"读取视频元数据失败 {file_path}: {e}")
 
@@ -482,9 +514,7 @@ class MediaImportService:
         return dest
 
     def copy_asset_to_workspace(
-        self,
-        asset_id: str,
-        workspace_dir: str
+        self, asset_id: str, workspace_dir: str
     ) -> MediaAsset | None:
         """
         将现有素材复制为工作副本
@@ -514,7 +544,7 @@ class MediaImportService:
                 file_path=str(dest_path),
                 file_name=dest_path.name,
                 is_working_copy=True,
-                original_path=asset.file_path
+                original_path=asset.file_path,
             )
 
             return self.db_service.get_media_asset(asset_id)

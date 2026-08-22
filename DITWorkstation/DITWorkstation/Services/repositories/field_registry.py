@@ -1,4 +1,5 @@
 """Declarative allowlists for database update operations."""
+
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -20,8 +21,9 @@ class FieldSpec:
 def field_registry(*specs: FieldSpec | str) -> dict[str, FieldSpec]:
     """Build a field-name to specification mapping."""
     return {
-        spec if isinstance(spec, str) else spec.name:
-        FieldSpec(spec) if isinstance(spec, str) else spec
+        spec if isinstance(spec, str) else spec.name: FieldSpec(spec)
+        if isinstance(spec, str)
+        else spec
         for spec in specs
     }
 
@@ -103,14 +105,32 @@ BACKUP_TEMPLATE_FIELDS = field_registry(
     "description",
 )
 MEDIA_ASSET_FIELDS = field_registry(
-    "file_path", "file_name", "file_size", "file_type", "asset_type",
-    "checksum_algorithm", "checksum_value", "scene", "shot", "take",
+    "file_path",
+    "file_name",
+    "file_size",
+    "file_type",
+    "asset_type",
+    "checksum_algorithm",
+    "checksum_value",
+    "scene",
+    "shot",
+    "take",
     FieldSpec("date_taken", serializer=_isoformat),
-    "camera_make", "camera_model",
+    "camera_make",
+    "camera_model",
     FieldSpec("backup_locations", serializer=_pipe_join),
-    "log_id", FieldSpec("is_working_copy", serializer=_bool_as_int),
-    "original_path", "width", "height", "duration_seconds", "lens_model",
-    "focal_length", "video_metadata", "rating", "tags", "notes",
+    "log_id",
+    FieldSpec("is_working_copy", serializer=_bool_as_int),
+    "original_path",
+    "width",
+    "height",
+    "duration_seconds",
+    "lens_model",
+    "focal_length",
+    "video_metadata",
+    "rating",
+    "tags",
+    "notes",
 )
 
 # Dynamic identifiers must come from these allowlists. Values remain SQL parameters.

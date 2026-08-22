@@ -9,6 +9,7 @@
 
 main_window.py 仍 re-export 这些符号，现有视图无需改动。
 """
+
 import threading
 
 from PySide6.QtCore import QObject, Signal
@@ -30,6 +31,7 @@ class EventBus(QObject):
         - "workspaces_changed": 工作区增删
         - "all": 全部刷新
     """
+
     data_changed = Signal(str)
     # 全局当前项目切换信号：参数为 project_id（None 表示清除选择）
     project_focus_changed = Signal(object)

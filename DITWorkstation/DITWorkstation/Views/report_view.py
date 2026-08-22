@@ -1,4 +1,5 @@
 """报告生成页面"""
+
 from PySide6.QtCore import Slot
 from PySide6.QtWidgets import (
     QComboBox,
@@ -80,10 +81,12 @@ class ReportView(RefreshOnShowView):
         form_layout.addRow("选择项目:", self.selector)
 
         self.report_type_combo = QComboBox()
-        self.report_type_combo.addItems([
-            "数据备份报告",
-            "素材统计报告",
-        ])
+        self.report_type_combo.addItems(
+            [
+                "数据备份报告",
+                "素材统计报告",
+            ]
+        )
         form_layout.addRow("报告类型:", self.report_type_combo)
 
         # 输出路径（用 QLineEdit 避免多行输入混入换行符）
@@ -125,7 +128,9 @@ class ReportView(RefreshOnShowView):
 
         # 状态
         self.status_label = QLabel("就绪")
-        self.status_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.BASE}px;")
+        self.status_label.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.BASE}px;"
+        )
         config_layout.addWidget(self.status_label)
 
         config_layout.addStretch()
@@ -134,7 +139,9 @@ class ReportView(RefreshOnShowView):
         # 报告预览/日志
         log_group = QGroupBox("生成日志")
         log_layout = QVBoxLayout(log_group)
-        self.status_panel = StatusPanel(show_progress=False, show_status=False, log_min_height=None)
+        self.status_panel = StatusPanel(
+            show_progress=False, show_status=False, log_min_height=None
+        )
         # 保留别名以减少方法体内 self.log_text 的改动
         self.log_text = self.status_panel.log_text
         log_layout.addWidget(self.status_panel)
@@ -174,12 +181,16 @@ class ReportView(RefreshOnShowView):
         self._log(f"开始生成报告: {project.name}")
 
         if report_type == 0:
+
             def generate_backup_report_task(cancel_check):
                 if cancel_check():
                     raise InterruptedError("报告生成已取消")
                 return self.report_service.generate_backup_report(
-                    project, self.db_service.get_backup_jobs(project_id), output_path,
+                    project,
+                    self.db_service.get_backup_jobs(project_id),
+                    output_path,
                 )
+
             task = generate_backup_report_task
             task_name = "backup_report"
         else:
@@ -194,11 +205,18 @@ class ReportView(RefreshOnShowView):
                     total=self.db_service.count_project_assets(project_id),
                     cancel_check=cancel_check,
                 )
+
             task = generate_asset_report_task
             task_name = "asset_report"
         self.task_vm.start(
-            task, inject_cancel_check=True, task_name=task_name, project_id=project_id,
-            recovery_info={"output_path": output_path or "", "report_type": report_type},
+            task,
+            inject_cancel_check=True,
+            task_name=task_name,
+            project_id=project_id,
+            recovery_info={
+                "output_path": output_path or "",
+                "report_type": report_type,
+            },
         )
 
     @Slot(object)

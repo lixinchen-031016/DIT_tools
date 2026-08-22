@@ -1,4 +1,5 @@
 """日志查看器对话框：同时支持查看系统日志文件与应用操作审计日志。"""
+
 import csv
 from datetime import datetime
 from pathlib import Path
@@ -85,7 +86,9 @@ def _read_log_files(log_dir: Path, max_chars: int = 3 * 1024 * 1024) -> str:
             logger.warning(f"读取日志文件失败 {path}: {e}")
             continue
         if total + len(content) > max_chars:
-            chunks.append(f"\n...（日志过大，已截断，仅显示前 {format_size(max_chars)}）...\n")
+            chunks.append(
+                f"\n...（日志过大，已截断，仅显示前 {format_size(max_chars)}）...\n"
+            )
             break
         chunks.append(content)
         total += len(content)
@@ -138,8 +141,14 @@ class LogViewerDialog(QDialog):
         self.date_from_filter.setPlaceholderText("起始日期 YYYY-MM-DD")
         self.date_to_filter = QLineEdit()
         self.date_to_filter.setPlaceholderText("结束日期 YYYY-MM-DD")
-        for widget in (self.project_filter, self.event_filter, self.status_filter,
-                       self.object_filter, self.date_from_filter, self.date_to_filter):
+        for widget in (
+            self.project_filter,
+            self.event_filter,
+            self.status_filter,
+            self.object_filter,
+            self.date_from_filter,
+            self.date_to_filter,
+        ):
             filters.addWidget(widget)
         apply_filters_btn = QPushButton("筛选")
         apply_filters_btn.clicked.connect(self._reload_operation_logs)
@@ -166,14 +175,18 @@ class LogViewerDialog(QDialog):
         operation_actions = QHBoxLayout()
         operation_actions.addStretch()
         self.open_object_btn = QPushButton("打开关联对象")
-        self.open_object_btn.setToolTip("跳转到关联对象所在的工作区；对象 ID 会复制到剪贴板供定位")
+        self.open_object_btn.setToolTip(
+            "跳转到关联对象所在的工作区；对象 ID 会复制到剪贴板供定位"
+        )
         self.open_object_btn.clicked.connect(self._request_selected_object)
         operation_actions.addWidget(self.open_object_btn)
         self.export_operations_btn = QPushButton("导出 CSV")
         self.export_operations_btn.clicked.connect(self._export_operations)
         operation_actions.addWidget(self.export_operations_btn)
         self.export_operations_pdf_btn = QPushButton("导出 PDF")
-        self.export_operations_pdf_btn.setToolTip("将筛选结果及按日/事件/结果汇总导出为审计报表")
+        self.export_operations_pdf_btn.setToolTip(
+            "将筛选结果及按日/事件/结果汇总导出为审计报表"
+        )
         self.export_operations_pdf_btn.clicked.connect(self._export_operations_pdf)
         operation_actions.addWidget(self.export_operations_pdf_btn)
         operation_layout.addLayout(operation_actions)
@@ -184,7 +197,9 @@ class LogViewerDialog(QDialog):
         # ===== 底部信息栏 + 按钮 =====
         self.info_label = QLabel("")
         self.info_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.info_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        self.info_label.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+        )
         layout.addWidget(self.info_label)
 
         buttons = QHBoxLayout()
@@ -264,7 +279,9 @@ class LogViewerDialog(QDialog):
             status = op.get("status") or "success"
             status_label = _STATUS_LABELS.get(status, status)
             object_text = "/".join(
-                part for part in (op.get("object_type") or "", op.get("object_id") or "") if part
+                part
+                for part in (op.get("object_type") or "", op.get("object_id") or "")
+                if part
             )
             values = [
                 time_text,
@@ -302,6 +319,7 @@ class LogViewerDialog(QDialog):
             return None
         try:
             from DITWorkstation.Utils import parse_iso_datetime
+
             parsed = parse_iso_datetime(value)
             if len(value) == 10 and end:
                 return parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
@@ -321,8 +339,12 @@ class LogViewerDialog(QDialog):
         if not operation or not operation.get("object_id"):
             self.info_label.setText("此记录没有关联对象。")
             return
-        object_type, object_id = operation.get("object_type", ""), operation["object_id"]
+        object_type, object_id = (
+            operation.get("object_type", ""),
+            operation["object_id"],
+        )
         from PySide6.QtWidgets import QApplication
+
         QApplication.clipboard().setText(object_id)
         self.object_requested.emit(object_type, object_id)
         self.info_label.setText(f"关联 {object_type or '对象'} ID 已复制：{object_id}")
@@ -336,16 +358,35 @@ class LogViewerDialog(QDialog):
         try:
             with open(path, "w", encoding="utf-8-sig", newline="") as handle:
                 writer = csv.writer(handle)
-                writer.writerow(["时间", "项目", "事件", "详情", "状态", "对象类型", "对象 ID", "恢复 ID"])
+                writer.writerow(
+                    [
+                        "时间",
+                        "项目",
+                        "事件",
+                        "详情",
+                        "状态",
+                        "对象类型",
+                        "对象 ID",
+                        "恢复 ID",
+                    ]
+                )
                 for row in range(self.operation_table.rowCount()):
                     op = self.operation_table.item(row, 0).data(Qt.UserRole)
-                    writer.writerow([
-                        self.operation_table.item(row, 0).text(),
-                        self.operation_table.item(row, 1).text(), op.get("event", ""),
-                        op.get("detail", ""), op.get("status", ""),
-                        op.get("object_type", ""), op.get("object_id", ""), op.get("recovery_id", ""),
-                    ])
-            self.info_label.setText(f"已导出 {self.operation_table.rowCount()} 条操作审计日志：{path}")
+                    writer.writerow(
+                        [
+                            self.operation_table.item(row, 0).text(),
+                            self.operation_table.item(row, 1).text(),
+                            op.get("event", ""),
+                            op.get("detail", ""),
+                            op.get("status", ""),
+                            op.get("object_type", ""),
+                            op.get("object_id", ""),
+                            op.get("recovery_id", ""),
+                        ]
+                    )
+            self.info_label.setText(
+                f"已导出 {self.operation_table.rowCount()} 条操作审计日志：{path}"
+            )
         except OSError as exc:
             self.info_label.setText(f"导出操作审计日志失败：{exc}")
 
@@ -357,7 +398,8 @@ class LogViewerDialog(QDialog):
             return
         try:
             output = get_report_service().generate_audit_report(
-                getattr(self, "_operation_records", []), path,
+                getattr(self, "_operation_records", []),
+                path,
             )
             self.info_label.setText(f"已导出审计报表：{output}")
         except (OSError, ValueError, RuntimeError) as exc:

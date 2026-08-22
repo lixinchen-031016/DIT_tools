@@ -1,4 +1,5 @@
 """Capture-date timeline for search results."""
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
@@ -28,7 +29,9 @@ class CaptureTimelineWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
         self.summary_label = QLabel("")
-        self.summary_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        self.summary_label.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+        )
         layout.addWidget(self.summary_label)
 
         self.scroll = QScrollArea()
@@ -52,7 +55,9 @@ class CaptureTimelineWidget(QWidget):
                 item.widget().deleteLater()
         entries = list(entries or [])
         self.summary_label.setText(
-            f"按拍摄日期聚合：{len(entries)} 天" if entries else "没有包含拍摄日期的素材"
+            f"按拍摄日期聚合：{len(entries)} 天"
+            if entries
+            else "没有包含拍摄日期的素材"
         )
         for entry in entries:
             period = str(entry.get("period") or "未知日期")
@@ -70,10 +75,19 @@ class CaptureTimelineWidget(QWidget):
                 f"{int(entry.get('asset_count') or 0)} 个素材\n"
                 f"{format_size(int(entry.get('total_size') or 0))}"
             )
-            start = period if len(period) == 10 else str(entry.get("first_taken") or period)[:10]
-            end = period if len(period) == 10 else str(entry.get("last_taken") or period)[:10]
+            start = (
+                period
+                if len(period) == 10
+                else str(entry.get("first_taken") or period)[:10]
+            )
+            end = (
+                period
+                if len(period) == 10
+                else str(entry.get("last_taken") or period)[:10]
+            )
             card.clicked.connect(
-                lambda _checked=False, start=start, end=end: self.period_selected.emit(start, end)
+                lambda _checked=False, start=start, end=end: self.period_selected.emit(
+                    start, end
+                )
             )
             self.cards_layout.insertWidget(self.cards_layout.count() - 1, card)
-

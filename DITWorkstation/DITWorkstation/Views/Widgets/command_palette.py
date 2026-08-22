@@ -9,7 +9,9 @@
 - 个人模式自动隐藏 log/report 导航项
 - 不需要额外依赖，纯 Qt 实现
 """
+
 from pathlib import Path
+from typing import ClassVar
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
@@ -35,7 +37,7 @@ from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS
 class CommandPalette(QDialog):
     """全局命令面板（Ctrl+K）。"""
 
-    NAVIGATION_ACTIONS = [
+    NAVIGATION_ACTIONS: ClassVar[list[tuple[str, str]]] = [
         ("🏠 项目概览", "dashboard"),
         ("📁 媒体导入", "import"),
         ("📦 数据备份", "backup"),
@@ -48,7 +50,7 @@ class CommandPalette(QDialog):
     ]
 
     # 执行命令：直接「运行」常用入口
-    RUN_ACTIONS = [
+    RUN_ACTIONS: ClassVar[list[tuple[str, str]]] = [
         ("🖥 打开文件管理器…", "open_file_manager"),
         ("📂 打开日志目录…", "open_log_dir"),
         ("⚙️ 打开设置…", "open_settings"),
@@ -242,18 +244,26 @@ class CommandPalette(QDialog):
             self._all_items.append({"type": "run", "label": label, "key": key})
         try:
             for ws in self.db_service.get_workspaces():
-                self._all_items.append({
-                    "type": "workspace", "label": f"📁 {ws.name}",
-                    "meta": ws.path, "id": ws.workspace_id,
-                })
+                self._all_items.append(
+                    {
+                        "type": "workspace",
+                        "label": f"📁 {ws.name}",
+                        "meta": ws.path,
+                        "id": ws.workspace_id,
+                    }
+                )
         except Exception as exc:
             logger.debug("命令面板加载工作区失败: %s", exc)
         try:
             for proj in self.db_service.get_projects():
-                self._all_items.append({
-                    "type": "project", "label": f"📂 {proj.name}",
-                    "meta": proj.project_id, "id": proj.project_id,
-                })
+                self._all_items.append(
+                    {
+                        "type": "project",
+                        "label": f"📂 {proj.name}",
+                        "meta": proj.project_id,
+                        "id": proj.project_id,
+                    }
+                )
         except Exception as exc:
             logger.debug("命令面板加载项目失败: %s", exc)
         for item in self._all_items:
@@ -290,9 +300,11 @@ class CommandPalette(QDialog):
             open_in_file_manager(str(Path.home()))
         elif key == "open_log_dir":
             from DITWorkstation.App import config
+
             open_in_file_manager(str(config.log_dir))
         elif key == "open_settings":
             from DITWorkstation.Views.Widgets.settings_dialog import SettingsDialog
+
             parent = self.parent()
             SettingsDialog(parent).exec()
         self.close()
@@ -319,6 +331,7 @@ class CommandPalette(QDialog):
             self.close()
             if nav_key:
                 from DITWorkstation.App.navigation import get_nav_index
+
                 idx = get_nav_index(nav_key)
                 if idx is not None:
                     parent = self.parent()

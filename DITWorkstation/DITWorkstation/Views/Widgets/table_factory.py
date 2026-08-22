@@ -43,7 +43,9 @@ def make_table(
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
     if resize_to_contents_cols:
         for col in resize_to_contents_cols:
-            table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeToContents)
+            table.horizontalHeader().setSectionResizeMode(
+                col, QHeaderView.ResizeToContents
+            )
     table.setSelectionBehavior(selection_behavior)
     table.setSelectionMode(selection_mode)
     table.setAlternatingRowColors(alternating)

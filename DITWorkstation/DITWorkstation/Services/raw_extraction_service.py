@@ -1,4 +1,5 @@
 """JPG筛选后RAW文件提取服务"""
+
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -33,7 +34,7 @@ class RawExtractionService:
             raise FileNotFoundError(f"文件夹不存在: {jpg_folder}")
 
         jpg_files = []
-        extensions = ('.jpg', '.jpeg')
+        extensions = (".jpg", ".jpeg")
         for ext in extensions:
             jpg_files.extend(folder.rglob(f"*{ext}"))
             jpg_files.extend(folder.rglob(f"*{ext.upper()}"))
@@ -62,13 +63,13 @@ class RawExtractionService:
             for f in folder.rglob(f"*{ext.upper()}"):
                 raw_index[normalize_name_key(f.stem)] = f
 
-        logger.info(f"扫描RAW文件夹完成: {raw_folder}, 建立索引 {len(raw_index)} 个文件")
+        logger.info(
+            f"扫描RAW文件夹完成: {raw_folder}, 建立索引 {len(raw_index)} 个文件"
+        )
         return raw_index
 
     def match_raw_files(
-        self,
-        jpg_files: list[Path],
-        raw_index: dict[str, Path]
+        self, jpg_files: list[Path], raw_index: dict[str, Path]
     ) -> list[tuple[Path, Path | None]]:
         """
         根据JPG文件名匹配对应RAW文件
@@ -97,7 +98,7 @@ class RawExtractionService:
         output_folder: str,
         verify: bool = True,
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
-        progress_callback: Callable[[int, int, str], None] | None = None
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> dict:
         """
         提取JPG对应的RAW文件到指定位置
@@ -130,7 +131,7 @@ class RawExtractionService:
             "extracted": 0,
             "not_found": 0,
             "failed": 0,
-            "details": []
+            "details": [],
         }
 
         for i, (jpg_path, raw_path) in enumerate(matches):
@@ -143,11 +144,9 @@ class RawExtractionService:
 
             if raw_path is None:
                 not_found += 1
-                results["details"].append({
-                    "jpg": str(jpg_path),
-                    "raw": None,
-                    "status": "not_found"
-                })
+                results["details"].append(
+                    {"jpg": str(jpg_path), "raw": None, "status": "not_found"}
+                )
                 continue
 
             try:
@@ -155,25 +154,31 @@ class RawExtractionService:
 
                 # 边拷贝边计算源校验和：单次读盘，替代「先哈希再拷贝」的两次读盘
                 src_checksum = self.checksum_service.copy_file_with_checksum(
-                    str(raw_path), str(dest), algorithm,
+                    str(raw_path),
+                    str(dest),
+                    algorithm,
                     cancel_check=self._is_cancelled,
                 )
 
                 if verify:
                     verified = self.checksum_service.verify_file(
-                        str(dest), src_checksum.hash_value, algorithm,
+                        str(dest),
+                        src_checksum.hash_value,
+                        algorithm,
                         cancel_check=self._is_cancelled,
                     )
                     if not verified:
                         raise OSError(f"校验和验证失败: {raw_path.name}")
 
                 extracted += 1
-                results["details"].append({
-                    "jpg": str(jpg_path),
-                    "raw": str(raw_path),
-                    "output": str(dest),
-                    "status": "success"
-                })
+                results["details"].append(
+                    {
+                        "jpg": str(jpg_path),
+                        "raw": str(raw_path),
+                        "output": str(dest),
+                        "status": "success",
+                    }
+                )
 
             except Exception as e:
                 failed += 1
@@ -183,12 +188,14 @@ class RawExtractionService:
                     dest.unlink(missing_ok=True)
                 except (OSError, UnboundLocalError):
                     pass
-                results["details"].append({
-                    "jpg": str(jpg_path),
-                    "raw": str(raw_path),
-                    "status": "failed",
-                    "error": str(e)
-                })
+                results["details"].append(
+                    {
+                        "jpg": str(jpg_path),
+                        "raw": str(raw_path),
+                        "status": "failed",
+                        "error": str(e),
+                    }
+                )
 
         results["extracted"] = extracted
         results["not_found"] = not_found
@@ -197,7 +204,9 @@ class RawExtractionService:
         if progress_callback:
             progress_callback(total, total, "完成")
 
-        logger.info(f"RAW提取完成: 成功 {extracted} 个, 未找到 {not_found} 个, 失败 {failed} 个")
+        logger.info(
+            f"RAW提取完成: 成功 {extracted} 个, 未找到 {not_found} 个, 失败 {failed} 个"
+        )
         return results
 
     def extract_raw_files_streaming(
@@ -206,7 +215,7 @@ class RawExtractionService:
         output_folder: str,
         verify: bool = True,
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
-        progress_callback: Callable[[int, int, str], None] | None = None
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> dict:
         """
         流式提取RAW文件（适合大量文件场景）
@@ -234,7 +243,7 @@ class RawExtractionService:
             "extracted": 0,
             "not_found": 0,
             "failed": 0,
-            "details": []
+            "details": [],
         }
 
         for i, (jpg_path, raw_path) in enumerate(matches):
@@ -253,34 +262,42 @@ class RawExtractionService:
 
                 # 边拷贝边计算源校验和：单次读盘，替代「先哈希再拷贝」的两次读盘
                 src_checksum = self.checksum_service.copy_file_with_checksum(
-                    str(raw_path), str(dest), algorithm,
+                    str(raw_path),
+                    str(dest),
+                    algorithm,
                     cancel_check=self._is_cancelled,
                 )
 
                 if verify:
                     verified = self.checksum_service.verify_file(
-                        str(dest), src_checksum.hash_value, algorithm,
+                        str(dest),
+                        src_checksum.hash_value,
+                        algorithm,
                         cancel_check=self._is_cancelled,
                     )
                     if not verified:
                         raise OSError(f"校验和验证失败: {raw_path.name}")
 
                 extracted += 1
-                results["details"].append({
-                    "jpg": str(jpg_path),
-                    "raw": str(raw_path),
-                    "output": str(dest),
-                    "status": "success"
-                })
+                results["details"].append(
+                    {
+                        "jpg": str(jpg_path),
+                        "raw": str(raw_path),
+                        "output": str(dest),
+                        "status": "success",
+                    }
+                )
 
             except Exception as e:
                 failed += 1
-                results["details"].append({
-                    "jpg": str(jpg_path),
-                    "raw": str(raw_path),
-                    "status": "failed",
-                    "error": str(e)
-                })
+                results["details"].append(
+                    {
+                        "jpg": str(jpg_path),
+                        "raw": str(raw_path),
+                        "status": "failed",
+                        "error": str(e),
+                    }
+                )
                 try:
                     dest.unlink(missing_ok=True)
                 except (OSError, UnboundLocalError):

@@ -1,4 +1,5 @@
 """后台工作线程工具"""
+
 import threading
 from collections.abc import Callable
 from enum import Enum
@@ -17,6 +18,7 @@ _running_workers = set()
 
 class TaskState(str, Enum):
     """统一后台任务生命周期。"""
+
     IDLE = "idle"
     RUNNING = "running"
     CANCELLING = "cancelling"
@@ -68,6 +70,7 @@ class _WorkerStateMixin:
 
 class WorkerSignals(QObject):
     """工作线程信号"""
+
     progress = Signal(str, float, str)  # target, progress, message
     finished = Signal(object)  # result
     error = Signal(str)  # error message
@@ -88,6 +91,7 @@ class WorkerThread(_WorkerStateMixin, QThread):
     （如 rename_view 用 lambda 桥接到自定义信号），只需保持两个开关为
     False（默认），传入的回调会原样透传，不会被覆盖。
     """
+
     progress = Signal(str, float, str)
     finished = Signal(object)
     # Keep the native QThread lifecycle signal accessible after ``finished``
@@ -136,11 +140,11 @@ class WorkerThread(_WorkerStateMixin, QThread):
         try:
             kwargs = dict(self._kwargs)
             if self._inject_cancel_check:
-                kwargs['cancel_check'] = self.is_cancelled
+                kwargs["cancel_check"] = self.is_cancelled
             if self._inject_progress:
-                kwargs['progress_callback'] = self._on_progress
+                kwargs["progress_callback"] = self._on_progress
             if self._inject_file_completed:
-                kwargs['file_completed_callback'] = self._on_file_completed
+                kwargs["file_completed_callback"] = self._on_file_completed
             self._result = self._func(*self._args, **kwargs)
             if self.is_cancelled():
                 self._set_state(TaskState.CANCELLED)
@@ -163,12 +167,15 @@ class WorkerThread(_WorkerStateMixin, QThread):
 
 class SimpleWorkerThread(_WorkerStateMixin, QThread):
     """简单后台工作线程（支持进度回调）"""
+
     finished = Signal(object)
     thread_finished = QThread.finished
     error = Signal(str)
     state_changed = Signal(str)
 
-    def __init__(self, func: Callable, *args, inject_cancel_check: bool = False, **kwargs):
+    def __init__(
+        self, func: Callable, *args, inject_cancel_check: bool = False, **kwargs
+    ):
         super().__init__()
         self.func = func
         self.args = args
@@ -194,9 +201,11 @@ class SimpleWorkerThread(_WorkerStateMixin, QThread):
         try:
             kwargs = dict(self.kwargs)
             if self._inject_cancel_check:
-                kwargs['cancel_check'] = self.is_cancelled
+                kwargs["cancel_check"] = self.is_cancelled
             result = self.func(*self.args, **kwargs)
-            self._set_state(TaskState.CANCELLED if self.is_cancelled() else TaskState.COMPLETED)
+            self._set_state(
+                TaskState.CANCELLED if self.is_cancelled() else TaskState.COMPLETED
+            )
             self.finished.emit(result)
         except Exception as e:
             self._set_state(

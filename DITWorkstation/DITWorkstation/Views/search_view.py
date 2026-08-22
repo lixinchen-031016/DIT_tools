@@ -1,4 +1,5 @@
 """素材检索页面"""
+
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from DITWorkstation.App import config
 from DITWorkstation.App.feature_flags import is_enabled
 from DITWorkstation.App.session_context import get_current_workspace_id, get_data_bus
 from DITWorkstation.Models import RATING_LABELS, AssetRating
@@ -103,16 +105,21 @@ class DuplicateResultsDialog(QDialog):
                 self.table.insertRow(row)
                 name_item = QTableWidgetItem(a.file_name)
                 name_item.setData(Qt.UserRole, a.asset_id)
-                self.table.setItem(row, 0, QTableWidgetItem(project_cache[a.project_id]))
+                self.table.setItem(
+                    row, 0, QTableWidgetItem(project_cache[a.project_id])
+                )
                 self.table.setItem(row, 1, name_item)
                 self.table.setItem(row, 2, QTableWidgetItem(a.file_type))
                 self.table.setItem(row, 3, QTableWidgetItem(format_size(a.file_size)))
                 self.table.setItem(row, 4, QTableWidgetItem(a.scene))
                 self.table.setItem(row, 5, QTableWidgetItem(a.shot))
                 self.table.setItem(
-                    row, 6,
+                    row,
+                    6,
                     QTableWidgetItem(
-                        RATING_LABELS.get(a.rating, RATING_LABELS[AssetRating.NONE.value])
+                        RATING_LABELS.get(
+                            a.rating, RATING_LABELS[AssetRating.NONE.value]
+                        )
                     ),
                 )
                 self.table.setItem(row, 7, QTableWidgetItem(a.checksum_value))
@@ -129,8 +136,9 @@ class DuplicateResultsDialog(QDialog):
             return
         if not asset.file_path or not open_in_file_manager(asset.file_path):
             QMessageBox.warning(
-                self, "打开失败",
-                f"无法打开文件所在目录：\n{asset.file_path or '（路径为空）'}"
+                self,
+                "打开失败",
+                f"无法打开文件所在目录：\n{asset.file_path or '（路径为空）'}",
             )
 
 
@@ -216,7 +224,9 @@ class SearchView(RefreshOnShowView):
         self.shot_edit = QLineEdit()
         self.shot_edit.setPlaceholderText("镜头号")
         self.type_combo = QComboBox()
-        self.type_combo.addItems(["全部", ".cr2", ".cr3", ".nef", ".arw", ".dng", ".jpg", ".jpeg"])
+        self.type_combo.addItems(
+            ["全部", ".cr2", ".cr3", ".nef", ".arw", ".dng", ".jpg", ".jpeg"]
+        )
         row2.addWidget(QLabel("场景:"))
         row2.addWidget(self.scene_edit)
         row2.addWidget(QLabel("镜头:"))
@@ -238,9 +248,17 @@ class SearchView(RefreshOnShowView):
         self.rating_combo = QComboBox()
         self.rating_combo.addItem("全部评级", None)
         # 评级档位标签来自 Models.RATING_LABELS 单一事实源
-        self.rating_combo.addItem(f"{RATING_LABELS[AssetRating.USABLE.value]} 及以上", AssetRating.USABLE.value)
-        self.rating_combo.addItem(f"{RATING_LABELS[AssetRating.BACKUP.value]} 及以上", AssetRating.BACKUP.value)
-        self.rating_combo.addItem(RATING_LABELS[AssetRating.PREFERRED.value], AssetRating.PREFERRED.value)
+        self.rating_combo.addItem(
+            f"{RATING_LABELS[AssetRating.USABLE.value]} 及以上",
+            AssetRating.USABLE.value,
+        )
+        self.rating_combo.addItem(
+            f"{RATING_LABELS[AssetRating.BACKUP.value]} 及以上",
+            AssetRating.BACKUP.value,
+        )
+        self.rating_combo.addItem(
+            RATING_LABELS[AssetRating.PREFERRED.value], AssetRating.PREFERRED.value
+        )
         self.rating_filter_label = QLabel("评级:")
         row3.addWidget(self.rating_filter_label)
         row3.addWidget(self.rating_combo)
@@ -331,7 +349,17 @@ class SearchView(RefreshOnShowView):
 
         # 结果表格
         self.result_table = make_table(
-            ["文件名", "类型", "大小", "场景", "镜头", "关联日志", "评级", "校验和", "导入时间"],
+            [
+                "文件名",
+                "类型",
+                "大小",
+                "场景",
+                "镜头",
+                "关联日志",
+                "评级",
+                "校验和",
+                "导入时间",
+            ],
             sortable=True,
         )
         # 个人模式：隐藏「关联日志」「评级」列（数据字段保留，仅不展示）
@@ -342,9 +370,13 @@ class SearchView(RefreshOnShowView):
         # 双击打开所在目录
         self.result_table.doubleClicked.connect(self._on_result_double_clicked)
         self.result_table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.result_table.customContextMenuRequested.connect(self._on_result_context_menu)
+        self.result_table.customContextMenuRequested.connect(
+            self._on_result_context_menu
+        )
         result_layout.addWidget(self.result_table)
-        attach_empty_state(self.result_table, "🔍", "暂无搜索结果", "设置搜索条件后点击「搜索」按钮")
+        attach_empty_state(
+            self.result_table, "🔍", "暂无搜索结果", "设置搜索条件后点击「搜索」按钮"
+        )
 
         self.timeline = CaptureTimelineWidget()
         self.timeline.setVisible(False)
@@ -358,7 +390,9 @@ class SearchView(RefreshOnShowView):
         self.next_page_btn = QPushButton("下一页 ▶")
         self.next_page_btn.clicked.connect(self._next_page)
         self.page_label = QLabel("")
-        self.page_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        self.page_label.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+        )
         page_layout.addWidget(self.prev_page_btn)
         page_layout.addWidget(self.page_label)
         page_layout.addWidget(self.next_page_btn)
@@ -400,7 +434,9 @@ class SearchView(RefreshOnShowView):
         timeline_mode = index == 1
         self.result_table.setVisible(not timeline_mode)
         self.timeline.setVisible(timeline_mode)
-        self.page_bar.setVisible(False if timeline_mode else self._total and self._total > 0)
+        self.page_bar.setVisible(
+            False if timeline_mode else self._total and self._total > 0
+        )
         if timeline_mode:
             self._timeline_period = (None, None)
         if self._current_filters or self._results:
@@ -550,7 +586,11 @@ class SearchView(RefreshOnShowView):
         keyword = self.keyword_edit.text() or None
         # 个人模式显式传入 log_id=None / rating=None，
         # 不假定已隐藏的界面控件存在有效值
-        log_id = (self.log_combo.currentData() or None) if is_enabled("shooting_log") else None
+        log_id = (
+            (self.log_combo.currentData() or None)
+            if is_enabled("shooting_log")
+            else None
+        )
         rating = self.rating_combo.currentData() if is_enabled("ratings") else None
         tag = self.tag_edit.text().strip() or None
 
@@ -576,7 +616,9 @@ class SearchView(RefreshOnShowView):
             "rating": rating,
             "tag": tag,
             "taken_from": self._timeline_period[0],
-            "taken_to": (self._timeline_period[1] + " 23:59:59") if self._timeline_period[1] else None,
+            "taken_to": (self._timeline_period[1] + " 23:59:59")
+            if self._timeline_period[1]
+            else None,
         }
 
     def _save_current_search(self):
@@ -585,7 +627,8 @@ class SearchView(RefreshOnShowView):
 
         filters = self._collect_filters()
         name, ok = QInputDialog.getText(
-            self, "保存搜索",
+            self,
+            "保存搜索",
             "搜索名称（可勾选智能集合以自动刷新）：",
             text=f"{filters.get('scene') or ''}{filters.get('shot') or ''}",
         )
@@ -611,7 +654,8 @@ class SearchView(RefreshOnShowView):
         from DITWorkstation.Views.Widgets.saved_search_dialog import SavedSearchDialog
 
         dialog = SavedSearchDialog(
-            self, db_service=self.db_service,
+            self,
+            db_service=self.db_service,
             on_apply=self._apply_saved_filters,
         )
         dialog.exec()
@@ -672,16 +716,21 @@ class SearchView(RefreshOnShowView):
         total = self._total
 
         if self.view_mode_combo.currentIndex() == 1:
+
             def load_timeline(cancel_check):
                 if cancel_check():
                     raise InterruptedError("时间线查询已取消")
-                entries = self.db_service.get_capture_timeline(filters.get("project_id"))
+                entries = self.db_service.get_capture_timeline(
+                    filters.get("project_id")
+                )
                 if cancel_check():
                     raise InterruptedError("时间线查询已取消")
                 return {"generation": generation, "timeline": entries}
 
             self._page_vm.start(
-                load_timeline, inject_cancel_check=True, task_name="capture_timeline",
+                load_timeline,
+                inject_cancel_check=True,
+                task_name="capture_timeline",
                 project_id=filters.get("project_id"),
             )
             return
@@ -689,21 +738,31 @@ class SearchView(RefreshOnShowView):
         def load_page(cancel_check):
             if cancel_check():
                 raise InterruptedError("搜索已取消")
-            resolved_total = self.db_service.count_assets(**filters) if total is None else total
+            resolved_total = (
+                self.db_service.count_assets(**filters) if total is None else total
+            )
             if cancel_check():
                 raise InterruptedError("搜索已取消")
             results, next_cursor = self.db_service.get_search_asset_page(
-                **filters, page_size=page_size, cursor=cursor,
+                **filters,
+                page_size=page_size,
+                cursor=cursor,
             )
             return {
-                "generation": generation, "page": page, "total": resolved_total,
-                "page_size": page_size, "results": results, "next_cursor": next_cursor,
+                "generation": generation,
+                "page": page,
+                "total": resolved_total,
+                "page_size": page_size,
+                "results": results,
+                "next_cursor": next_cursor,
             }
 
         self.prev_page_btn.setEnabled(False)
         self.next_page_btn.setEnabled(False)
         self._page_vm.start(
-            load_page, inject_cancel_check=True, task_name="search_asset_page",
+            load_page,
+            inject_cancel_check=True,
+            task_name="search_asset_page",
             project_id=filters.get("project_id"),
         )
 
@@ -727,7 +786,9 @@ class SearchView(RefreshOnShowView):
                 self._page_cursors[self._page] = self._next_cursor
             self._load_page()
             return
-        total_pages = max(1, (self._total + result["page_size"] - 1) // result["page_size"])
+        total_pages = max(
+            1, (self._total + result["page_size"] - 1) // result["page_size"]
+        )
         self._display_results(result["results"], self._total, self._page, total_pages)
         self._start_pending_search()
 
@@ -761,7 +822,9 @@ class SearchView(RefreshOnShowView):
         self._page -= 1
         self._load_page()
 
-    def _display_results(self, results, total: int = 0, page: int = 0, total_pages: int = 1):
+    def _display_results(
+        self, results, total: int = 0, page: int = 0, total_pages: int = 1
+    ):
         self._results = results
         # QTableWidget 在逐格插入时若保持排序开启，会为每个单元格重排一次；
         # 500 条结果会放大成数千次排序。仅在填充期间关闭，结束后恢复用户排序。
@@ -792,7 +855,9 @@ class SearchView(RefreshOnShowView):
                 name_item.setData(Qt.UserRole, asset.asset_id)
                 self.result_table.setItem(i, 0, name_item)
                 self.result_table.setItem(i, 1, QTableWidgetItem(asset.file_type))
-                self.result_table.setItem(i, 2, QTableWidgetItem(format_size(asset.file_size)))
+                self.result_table.setItem(
+                    i, 2, QTableWidgetItem(format_size(asset.file_size))
+                )
                 self.result_table.setItem(i, 3, QTableWidgetItem(asset.scene))
                 self.result_table.setItem(i, 4, QTableWidgetItem(asset.shot))
 
@@ -801,16 +866,26 @@ class SearchView(RefreshOnShowView):
                     # 跨项目时补齐缓存，避免显示裸 UUID
                     self._ensure_log_cached(asset.log_id)
                     log = self._log_cache.get(asset.log_id)
-                    log_label = f"{log.scene}/{log.shot}/{log.take}" if log else "（日志已删除）"
+                    log_label = (
+                        f"{log.scene}/{log.shot}/{log.take}"
+                        if log
+                        else "（日志已删除）"
+                    )
                 self.result_table.setItem(i, 5, QTableWidgetItem(log_label))
 
-                rating_label = RATING_LABELS.get(asset.rating, RATING_LABELS[AssetRating.NONE.value])
+                rating_label = RATING_LABELS.get(
+                    asset.rating, RATING_LABELS[AssetRating.NONE.value]
+                )
                 self.result_table.setItem(i, 6, QTableWidgetItem(rating_label))
-                checksum_short = asset.checksum_value[:12] + "..." if asset.checksum_value else ""
+                checksum_short = (
+                    asset.checksum_value[:12] + "..." if asset.checksum_value else ""
+                )
                 self.result_table.setItem(i, 7, QTableWidgetItem(checksum_short))
-                self.result_table.setItem(i, 8, QTableWidgetItem(
-                    asset.date_imported.strftime("%Y-%m-%d %H:%M")
-                ))
+                self.result_table.setItem(
+                    i,
+                    8,
+                    QTableWidgetItem(asset.date_imported.strftime("%Y-%m-%d %H:%M")),
+                )
         finally:
             self.result_table.setSortingEnabled(sorting_enabled)
 
@@ -826,7 +901,9 @@ class SearchView(RefreshOnShowView):
         )
         if not path:
             return
-        self._export_progress_dialog = QProgressDialog("正在导出素材清单…", "取消", 0, 100, self)
+        self._export_progress_dialog = QProgressDialog(
+            "正在导出素材清单…", "取消", 0, 100, self
+        )
         self._export_progress_dialog.setWindowTitle("导出 CSV")
         self._export_progress_dialog.setWindowModality(Qt.WindowModal)
         self._export_progress_dialog.canceled.connect(self._export_vm.cancel)
@@ -835,16 +912,24 @@ class SearchView(RefreshOnShowView):
         def export_task(progress_callback, cancel_check):
             assets = self.db_service.iter_search_assets(**self._current_filters)
             get_report_service().export_assets_csv_iter(
-                assets, path, total=self._total, cancel_check=cancel_check,
+                assets,
+                path,
+                total=self._total,
+                cancel_check=cancel_check,
                 progress_callback=lambda current, total, message: progress_callback(
-                    "export", current / total if total else 0.0, message,
+                    "export",
+                    current / total if total else 0.0,
+                    message,
                 ),
             )
             return {"path": path, "count": self._total}
 
         self._export_vm.start(
-            export_task, inject_progress=True, inject_cancel_check=True,
-            task_name="csv_export", project_id=self._current_filters.get("project_id"),
+            export_task,
+            inject_progress=True,
+            inject_cancel_check=True,
+            task_name="csv_export",
+            project_id=self._current_filters.get("project_id"),
             recovery_info={"output_path": path},
         )
 
@@ -857,13 +942,17 @@ class SearchView(RefreshOnShowView):
         if self._export_progress_dialog is not None:
             self._export_progress_dialog.close()
             self._export_progress_dialog = None
-        QMessageBox.information(self, "导出完成", f"已导出 {result['count']} 条素材记录：\n{result['path']}")
+        QMessageBox.information(
+            self, "导出完成", f"已导出 {result['count']} 条素材记录：\n{result['path']}"
+        )
 
     def _on_export_error(self, message):
         if self._export_progress_dialog is not None:
             self._export_progress_dialog.close()
             self._export_progress_dialog = None
-        QMessageBox.information(self, "导出已取消" if "取消" in message else "导出失败", message)
+        QMessageBox.information(
+            self, "导出已取消" if "取消" in message else "导出失败", message
+        )
 
     def _refresh_tag_completer(self):
         """从数据库加载全部标签用于输入自动补全。"""
@@ -922,6 +1011,7 @@ class SearchView(RefreshOnShowView):
     def _on_result_context_menu(self, pos):
         """检索结果表右键菜单：打开所在目录 / 复制路径"""
         from PySide6.QtWidgets import QMenu
+
         item = self.result_table.itemAt(pos)
         if not item:
             return
@@ -947,16 +1037,20 @@ class SearchView(RefreshOnShowView):
         import os
 
         from PySide6.QtWidgets import QMessageBox
+
         path = asset.file_path
         if not path or not os.path.exists(path):
             QMessageBox.warning(self, "路径不存在", f"文件不存在：\n{path}")
             return
         if not open_in_file_manager(path):
-            QMessageBox.warning(self, "打开失败", "无法打开文件管理器，请检查路径权限。")
+            QMessageBox.warning(
+                self, "打开失败", "无法打开文件管理器，请检查路径权限。"
+            )
 
     def _copy_result_path(self, asset):
         """复制文件路径到剪贴板"""
         from PySide6.QtWidgets import QApplication
+
         clipboard = QApplication.clipboard()
         clipboard.setText(asset.file_path or "")
         logger.info(f"已复制路径到剪贴板: {asset.file_path}")

@@ -14,6 +14,7 @@
     btn.setStyleSheet(COLOR.PRIMARY_BUTTON_QSS)
     app.setStyleSheet(GLOBAL_QSS)
 """
+
 from __future__ import annotations
 
 import os
@@ -23,9 +24,11 @@ from dataclasses import dataclass
 
 # ============ 主题调色板 ============
 
+
 @dataclass
 class ThemePalette:
     """单个主题的调色板。"""
+
     # 主色
     PRIMARY: str = "#0a84ff"
     PRIMARY_HOVER: str = "#0070e0"
@@ -167,6 +170,7 @@ MONO_FONT_QSS = (
 
 
 # ============ 构建 QSS ============
+
 
 def _build_qss() -> str:
     """从当前激活调色板构建全局 QSS 字符串。"""
@@ -388,11 +392,14 @@ QPushButton:hover {{ background-color: {COLOR.DANGER_HOVER}; }}
 QPushButton:disabled {{ background-color: {COLOR.DISABLED}; }}
 """
 
-TITLE_QSS = f"font-size: {FONT_SIZE.XL}px; font-weight: bold; color: {COLOR.TEXT_PRIMARY};"
+TITLE_QSS = (
+    f"font-size: {FONT_SIZE.XL}px; font-weight: bold; color: {COLOR.TEXT_PRIMARY};"
+)
 SUBTITLE_QSS = f"font-size: {FONT_SIZE.BASE}px; color: {COLOR.TEXT_SECONDARY};"
 
 
 # ============ 主题切换 API ============
+
 
 def set_theme_mode(mode: str) -> None:
     """设置当前主题并重建模块级 QSS 常量。
@@ -444,7 +451,9 @@ QPushButton:disabled {{ color: {COLOR.DISABLED}; border-color: {COLOR.DISABLED};
 }}
 QPushButton:hover {{ background-color: {COLOR.DANGER_HOVER}; }}
 QPushButton:disabled {{ background-color: {COLOR.DISABLED}; }}"""
-    TITLE_QSS = f"font-size: {FONT_SIZE.XL}px; font-weight: bold; color: {COLOR.TEXT_PRIMARY};"
+    TITLE_QSS = (
+        f"font-size: {FONT_SIZE.XL}px; font-weight: bold; color: {COLOR.TEXT_PRIMARY};"
+    )
     SUBTITLE_QSS = f"font-size: {FONT_SIZE.BASE}px; color: {COLOR.TEXT_SECONDARY};"
 
 
@@ -456,6 +465,7 @@ def get_theme_mode() -> str:
 
 
 # ============ 对勾 SVG ============
+
 
 def _ensure_checkmark_svg() -> str:
     """生成复选框对勾 SVG 临时文件并返回其路径。"""

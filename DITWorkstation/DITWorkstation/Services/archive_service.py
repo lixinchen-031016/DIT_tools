@@ -3,6 +3,7 @@
 归档：把项目（信息 + 日志 + 素材元数据，可选附带素材文件）打包为 zip。
 恢复：从归档 zip 重建项目、日志与素材记录，可选还原素材文件。
 """
+
 import json
 import os
 import shutil
@@ -35,7 +36,9 @@ _MAX_ARCHIVE_TOTAL_BYTES = 200 * 1024 * 1024 * 1024  # 200 GiB
 class ArchiveService:
     """项目归档/恢复服务"""
 
-    def __init__(self, db_service=None, checksum_service: ChecksumService | None = None):
+    def __init__(
+        self, db_service=None, checksum_service: ChecksumService | None = None
+    ):
         self.db_service = db_service
         self.checksum_service = checksum_service or get_checksum_service()
 
@@ -47,7 +50,7 @@ class ArchiveService:
         output_path: str,
         include_files: bool = False,
         progress_callback: Callable[[int, int, str], None] | None = None,
-        cancel_check: Callable[[], bool] | None = None
+        cancel_check: Callable[[], bool] | None = None,
     ) -> str:
         """把项目归档为 zip 包。
 
@@ -85,23 +88,34 @@ class ArchiveService:
         archive_temp_path = None
         try:
             with tempfile.NamedTemporaryFile(
-                mode="wb", suffix=".assets.json", dir=path.parent, delete=False,
+                mode="wb",
+                suffix=".assets.json",
+                dir=path.parent,
+                delete=False,
             ) as asset_stream:
                 metadata_path = Path(asset_stream.name)
                 asset_stream.write(b"[")
-                for index, asset in enumerate(self.db_service.iter_project_assets(project_id)):
+                for index, asset in enumerate(
+                    self.db_service.iter_project_assets(project_id)
+                ):
                     if cancel_check and cancel_check():
                         raise InterruptedError("归档已取消")
                     data = self._asset_to_dict(asset)
                     if include_files:
-                        data["archive_file"] = f"{_FILES_DIR}/{self._file_rel_path(asset, index)}"
+                        data["archive_file"] = (
+                            f"{_FILES_DIR}/{self._file_rel_path(asset, index)}"
+                        )
                     if index:
                         asset_stream.write(b",")
-                    asset_stream.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+                    asset_stream.write(
+                        json.dumps(data, ensure_ascii=False).encode("utf-8")
+                    )
                 asset_stream.write(b"]")
 
             with tempfile.NamedTemporaryFile(
-                suffix=".zip", dir=path.parent, delete=False,
+                suffix=".zip",
+                dir=path.parent,
+                delete=False,
             ) as archive_stream:
                 archive_temp_path = Path(archive_stream.name)
 
@@ -119,17 +133,26 @@ class ArchiveService:
                     },
                     "stats": {"assets": total, "logs": len(logs)},
                 }
-                zf.writestr(_LOGS_JSON, json.dumps(
-                    [self._log_to_dict(log) for log in logs], ensure_ascii=False, indent=2,
-                ))
+                zf.writestr(
+                    _LOGS_JSON,
+                    json.dumps(
+                        [self._log_to_dict(log) for log in logs],
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                )
                 zf.write(metadata_path, _ASSETS_JSON)
                 if include_files:
-                    for index, asset in enumerate(self.db_service.iter_project_assets(project_id)):
+                    for index, asset in enumerate(
+                        self.db_service.iter_project_assets(project_id)
+                    ):
                         if cancel_check and cancel_check():
                             raise InterruptedError("归档已取消")
                         if progress_callback:
                             progress_callback(index, total, f"归档: {asset.file_name}")
-                        archive_file = f"{_FILES_DIR}/{self._file_rel_path(asset, index)}"
+                        archive_file = (
+                            f"{_FILES_DIR}/{self._file_rel_path(asset, index)}"
+                        )
                         src = Path(asset.file_path)
                         try:
                             if src.is_file():
@@ -150,7 +173,9 @@ class ArchiveService:
                     zf.writestr(_CHECKSUMS_TXT, "\n".join(checksum_lines) + "\n")
                 manifest["stats"]["files_copied"] = copied
                 manifest["stats"]["files_missing"] = missing
-                zf.writestr(_MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=2))
+                zf.writestr(
+                    _MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=2)
+                )
             # 成功完成后才替换目标，取消或异常不会产生看似完整的归档包。
             archive_temp_path.replace(path)
             archive_temp_path = None
@@ -236,7 +261,7 @@ class ArchiveService:
         files_dest: str | None = None,
         verify: bool = True,
         progress_callback: Callable[[int, int, str], None] | None = None,
-        cancel_check: Callable[[], bool] | None = None
+        cancel_check: Callable[[], bool] | None = None,
     ) -> dict:
         """从归档 zip 恢复项目。
 
@@ -274,7 +299,9 @@ class ArchiveService:
                 manifest = json.loads(zf.read(_MANIFEST))
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 raise ValueError("无效的归档包：manifest.json 不是有效 JSON") from exc
-            if not isinstance(manifest, dict) or not isinstance(manifest.get("project"), dict):
+            if not isinstance(manifest, dict) or not isinstance(
+                manifest.get("project"), dict
+            ):
                 raise ValueError("无效的归档包：manifest.json 结构错误")
             if manifest.get("version") != _ARCHIVE_VERSION:
                 raise ValueError(
@@ -294,32 +321,44 @@ class ArchiveService:
                 dest_root = Path(files_dest)
                 dest_root.mkdir(parents=True, exist_ok=True)
                 # 先写入目标目录内的临时目录，避免校验失败时留下可见半成品。
-                with tempfile.TemporaryDirectory(prefix=".dit-restore-", dir=str(dest_root)) as temp_dir:
+                with tempfile.TemporaryDirectory(
+                    prefix=".dit-restore-", dir=str(dest_root)
+                ) as temp_dir:
                     staged = {}
                     for member in zf.infolist():
-                        if member.is_dir() or not member.filename.startswith(f"{_FILES_DIR}/"):
+                        if member.is_dir() or not member.filename.startswith(
+                            f"{_FILES_DIR}/"
+                        ):
                             continue
                         rel = self._safe_archive_relative_path(member.filename)
                         stage_target = Path(temp_dir) / rel
                         stage_target.parent.mkdir(parents=True, exist_ok=True)
                         try:
-                            with zf.open(member) as src, open(stage_target, "xb") as out:
+                            with (
+                                zf.open(member) as src,
+                                open(stage_target, "xb") as out,
+                            ):
                                 shutil.copyfileobj(src, out)
                             staged[member.filename] = (rel, stage_target)
                         except OSError as e:
-                            raise ValueError(f"归档文件还原失败 {member.filename}: {e}") from e
+                            raise ValueError(
+                                f"归档文件还原失败 {member.filename}: {e}"
+                            ) from e
 
                     # 所有文件写入临时目录后再校验 manifest 中的校验和。
                     checksums = {
                         d.get("archive_file"): d
-                        for d in asset_dicts if isinstance(d, dict) and d.get("archive_file")
+                        for d in asset_dicts
+                        if isinstance(d, dict) and d.get("archive_file")
                     }
                     for member_name, (rel, stage_target) in staged.items():
                         asset_info = checksums.get(member_name)
                         if verify and asset_info and asset_info.get("checksum_value"):
                             cached = self.checksum_service.compute_file_checksum(
                                 str(stage_target),
-                                self._checksum_algorithm(asset_info.get("checksum_algorithm")),
+                                self._checksum_algorithm(
+                                    asset_info.get("checksum_algorithm")
+                                ),
                                 cancel_check=cancel_check,
                             )
                             if cached.hash_value != asset_info["checksum_value"]:
@@ -449,7 +488,7 @@ class ArchiveService:
         prefix = f"{_FILES_DIR}/"
         if not member_name.startswith(prefix) or "\x00" in member_name:
             raise ValueError(f"非法归档成员路径: {member_name!r}")
-        rel_name = member_name[len(prefix):].replace("\\", "/")
+        rel_name = member_name[len(prefix) :].replace("\\", "/")
         posix_rel = PurePosixPath(rel_name)
         windows_rel = PureWindowsPath(rel_name)
         if (
@@ -493,9 +532,11 @@ class ArchiveService:
     def _checksum_algorithm(value: str | None):
         try:
             from DITWorkstation.Models import ChecksumAlgorithm
+
             return ChecksumAlgorithm(value or ChecksumAlgorithm.XXHASH64.value)
         except ValueError:
             from DITWorkstation.Models import ChecksumAlgorithm
+
             return ChecksumAlgorithm.XXHASH64
 
     def _create_restored_project(
@@ -504,12 +545,13 @@ class ArchiveService:
         """创建恢复后的项目；重名时自动追加时间戳后缀避免混淆。"""
         ws_id = workspace_id
         if ws_id is None:
-            ws_id = self.db_service.get_workspace("default").workspace_id \
-                if self.db_service.get_workspace("default") else None
+            ws_id = (
+                self.db_service.get_workspace("default").workspace_id
+                if self.db_service.get_workspace("default")
+                else None
+            )
         name = old_name
-        existing = {
-            p.name for p in self.db_service.get_projects(workspace_id=ws_id)
-        }
+        existing = {p.name for p in self.db_service.get_projects(workspace_id=ws_id)}
         if name in existing:
             name = f"{old_name} (恢复 {now_local().strftime('%Y%m%d%H%M%S')})"
         desc = project_info.get("description", "")

@@ -11,6 +11,7 @@
 - 不可见时跳过：视图被隐藏时 showEvent 不会触发，无需额外判断
 - 子类只需实现 _on_show_refresh，无需关心 timer 创建与 showEvent 样板
 """
+
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QWidget
 

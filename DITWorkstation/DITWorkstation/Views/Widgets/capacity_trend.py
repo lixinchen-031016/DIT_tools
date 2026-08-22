@@ -1,5 +1,7 @@
 """Project storage capacity trend widget."""
+
 from collections import defaultdict
+from itertools import pairwise
 
 from PySide6.QtCore import QPointF, QSize, Qt
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
@@ -66,7 +68,9 @@ class CapacityTrendWidget(QWidget):
         palette = [COLOR.PRIMARY, COLOR.SUCCESS, COLOR.INFO, COLOR.WARNING]
         legend_x = left
         for index, (path, entries) in enumerate(sorted(grouped.items())):
-            entries = sorted(entries, key=lambda item: item.get("captured_at") or "")[-60:]
+            entries = sorted(entries, key=lambda item: item.get("captured_at") or "")[
+                -60:
+            ]
             color = QColor(palette[index % len(palette)])
             painter.setPen(QPen(color, 2))
             points = []
@@ -80,16 +84,19 @@ class CapacityTrendWidget(QWidget):
             if len(points) == 1:
                 painter.drawEllipse(points[0], 3, 3)
             else:
-                for first, second in zip(points, points[1:]):
+                for first, second in pairwise(points):
                     painter.drawLine(first, second)
                 painter.setBrush(color)
                 for point in points[-1:]:
                     painter.drawEllipse(point, 3, 3)
 
             label = path.rsplit("/", 1)[-1] or path
-            label = QFontMetrics(self.font()).elidedText(label, Qt.TextElideMode.ElideRight, 140)
-            painter.drawLine(legend_x, rect.bottom() - 17, legend_x + 14, rect.bottom() - 17)
+            label = QFontMetrics(self.font()).elidedText(
+                label, Qt.TextElideMode.ElideRight, 140
+            )
+            painter.drawLine(
+                legend_x, rect.bottom() - 17, legend_x + 14, rect.bottom() - 17
+            )
             painter.setPen(QColor(COLOR.TEXT_SECONDARY))
             painter.drawText(legend_x + 18, rect.bottom() - 10, label)
             legend_x += 170
-

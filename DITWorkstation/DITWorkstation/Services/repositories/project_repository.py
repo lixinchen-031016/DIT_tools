@@ -1,4 +1,5 @@
 """Project persistence operations, including recoverable deletion."""
+
 import sqlite3
 import uuid
 from datetime import datetime
@@ -44,7 +45,9 @@ class ProjectRepository(BaseRepository):
                     project.updated_at.isoformat(),
                 ),
             )
-            logger.info(f"创建项目: {project.project_id} - {project.name} (workspace={workspace_id})")
+            logger.info(
+                f"创建项目: {project.project_id} - {project.name} (workspace={workspace_id})"
+            )
         return project
 
     def list_all(self, workspace_id: str | None = None) -> list[Project]:
@@ -55,12 +58,16 @@ class ProjectRepository(BaseRepository):
                     (workspace_id,),
                 ).fetchall()
             else:
-                rows = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
+                rows = conn.execute(
+                    "SELECT * FROM projects ORDER BY created_at DESC"
+                ).fetchall()
         return [self._row_to_project(row) for row in rows]
 
     def get(self, project_id: str) -> Project | None:
         with self._connection() as conn:
-            row = conn.execute("SELECT * FROM projects WHERE project_id = ?", (project_id,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM projects WHERE project_id = ?", (project_id,)
+            ).fetchone()
         return self._row_to_project(row) if row else None
 
     def update_result(self, project_id: str, **kwargs) -> OperationResult:
@@ -71,21 +78,31 @@ class ProjectRepository(BaseRepository):
             return OperationResult(OperationStatus.INVALID, "没有可更新的项目字段")
         try:
             with self._transaction() as conn:
-                if conn.execute(
-                    "SELECT 1 FROM projects WHERE project_id = ?", (project_id,)
-                ).fetchone() is None:
-                    return OperationResult(OperationStatus.NOT_FOUND, f"项目不存在: {project_id}")
+                if (
+                    conn.execute(
+                        "SELECT 1 FROM projects WHERE project_id = ?", (project_id,)
+                    ).fetchone()
+                    is None
+                ):
+                    return OperationResult(
+                        OperationStatus.NOT_FOUND, f"项目不存在: {project_id}"
+                    )
                 conn.execute(sql, params)
                 self._database._record_operation_in_transaction(
-                    conn, "更新项目", project_id=project_id,
-                    object_type="project", object_id=project_id,
+                    conn,
+                    "更新项目",
+                    project_id=project_id,
+                    object_type="project",
+                    object_id=project_id,
                 )
             return OperationResult(OperationStatus.SUCCESS, affected_count=1)
         except sqlite3.Error as exc:
             logger.error(f"更新项目失败 {project_id}: {exc}")
             return OperationResult(OperationStatus.ERROR, str(exc))
 
-    def delete_result(self, project_id: str, retention_days: int = 30) -> OperationResult:
+    def delete_result(
+        self, project_id: str, retention_days: int = 30
+    ) -> OperationResult:
         """Soft-delete a project and all associated metadata in one transaction."""
         try:
             with self._transaction() as conn:
@@ -93,32 +110,63 @@ class ProjectRepository(BaseRepository):
                     "SELECT * FROM projects WHERE project_id = ?", (project_id,)
                 ).fetchone()
                 if project is None:
-                    return OperationResult(OperationStatus.NOT_FOUND, f"项目不存在: {project_id}")
+                    return OperationResult(
+                        OperationStatus.NOT_FOUND, f"项目不存在: {project_id}"
+                    )
                 asset_rows = conn.execute(
                     "SELECT * FROM media_assets WHERE project_id = ?", (project_id,)
                 ).fetchall()
                 snapshot = {
                     "project": dict(project),
-                    "assets": [self._database._asset_snapshot(conn, row) for row in asset_rows],
-                    "shooting_logs": [dict(row) for row in conn.execute(
-                        "SELECT * FROM shooting_logs WHERE project_id = ?", (project_id,)
-                    )],
-                    "backup_job_ids": [row["job_id"] for row in conn.execute(
-                        "SELECT job_id FROM backup_jobs WHERE project_id = ?", (project_id,)
-                    )],
+                    "assets": [
+                        self._database._asset_snapshot(conn, row) for row in asset_rows
+                    ],
+                    "shooting_logs": [
+                        dict(row)
+                        for row in conn.execute(
+                            "SELECT * FROM shooting_logs WHERE project_id = ?",
+                            (project_id,),
+                        )
+                    ],
+                    "backup_job_ids": [
+                        row["job_id"]
+                        for row in conn.execute(
+                            "SELECT job_id FROM backup_jobs WHERE project_id = ?",
+                            (project_id,),
+                        )
+                    ],
                 }
                 recovery_id = self._database._store_recycle_snapshot(
-                    conn, "project", project_id, project_id, snapshot, retention_days,
+                    conn,
+                    "project",
+                    project_id,
+                    project_id,
+                    snapshot,
+                    retention_days,
                 )
-                conn.execute("UPDATE backup_jobs SET project_id = NULL WHERE project_id = ?", (project_id,))
-                self._database._delete_asset_rows(conn, [row["asset_id"] for row in asset_rows])
-                conn.execute("DELETE FROM shooting_logs WHERE project_id = ?", (project_id,))
+                conn.execute(
+                    "UPDATE backup_jobs SET project_id = NULL WHERE project_id = ?",
+                    (project_id,),
+                )
+                self._database._delete_asset_rows(
+                    conn, [row["asset_id"] for row in asset_rows]
+                )
+                conn.execute(
+                    "DELETE FROM shooting_logs WHERE project_id = ?", (project_id,)
+                )
                 conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
                 self._database._record_operation_in_transaction(
-                    conn, "删除项目", "项目记录已移入回收站", project_id,
-                    object_type="project", object_id=project_id, recovery_id=recovery_id,
+                    conn,
+                    "删除项目",
+                    "项目记录已移入回收站",
+                    project_id,
+                    object_type="project",
+                    object_id=project_id,
+                    recovery_id=recovery_id,
                 )
-            return OperationResult(OperationStatus.SUCCESS, affected_count=1, recovery_id=recovery_id)
+            return OperationResult(
+                OperationStatus.SUCCESS, affected_count=1, recovery_id=recovery_id
+            )
         except sqlite3.Error as exc:
             logger.error(f"软删除项目失败 {project_id}: {exc}")
             return OperationResult(OperationStatus.ERROR, str(exc))
@@ -126,14 +174,19 @@ class ProjectRepository(BaseRepository):
     def delete_legacy(self, project_id: str) -> None:
         """Compatibility path for historical permanent project deletion."""
         with self._transaction() as conn:
-            conn.execute("UPDATE backup_jobs SET project_id = NULL WHERE project_id = ?", (project_id,))
+            conn.execute(
+                "UPDATE backup_jobs SET project_id = NULL WHERE project_id = ?",
+                (project_id,),
+            )
             conn.execute(
                 "DELETE FROM asset_tags WHERE asset_id IN "
                 "(SELECT asset_id FROM media_assets WHERE project_id = ?)",
                 (project_id,),
             )
             conn.execute("DELETE FROM media_assets WHERE project_id = ?", (project_id,))
-            conn.execute("DELETE FROM shooting_logs WHERE project_id = ?", (project_id,))
+            conn.execute(
+                "DELETE FROM shooting_logs WHERE project_id = ?", (project_id,)
+            )
             conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
             logger.info(f"删除项目: {project_id}")
 

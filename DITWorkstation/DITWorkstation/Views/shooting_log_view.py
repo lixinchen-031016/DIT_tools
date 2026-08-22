@@ -1,4 +1,5 @@
 """拍摄日志管理页面"""
+
 import uuid
 from pathlib import Path
 
@@ -143,10 +144,14 @@ class ShootingLogView(RefreshOnShowView):
         self.scene_edit.setToolTip("场景编号，如 S001、S002。同一场景下包含多个镜头。")
         self.shot_edit = QLineEdit()
         self.shot_edit.setPlaceholderText("镜头号 如: 001A")
-        self.shot_edit.setToolTip("镜头编号，如 001A（A 表示该镜头的第一种机位/取景）。同一镜头可能有多次拍摄。")
+        self.shot_edit.setToolTip(
+            "镜头编号，如 001A（A 表示该镜头的第一种机位/取景）。同一镜头可能有多次拍摄。"
+        )
         self.take_edit = QLineEdit()
         self.take_edit.setPlaceholderText("镜次 如: 01")
-        self.take_edit.setToolTip("镜次（拍摄次数），如 01、02。同一镜头重拍多次时用镜次区分。")
+        self.take_edit.setToolTip(
+            "镜次（拍摄次数），如 01、02。同一镜头重拍多次时用镜次区分。"
+        )
         info_row1.addWidget(QLabel("场景:"))
         info_row1.addWidget(self.scene_edit)
         info_row1.addWidget(QLabel("镜头:"))
@@ -169,10 +174,14 @@ class ShootingLogView(RefreshOnShowView):
         info_row3 = QHBoxLayout()
         self.iso_edit = QLineEdit()
         self.iso_edit.setPlaceholderText("ISO")
-        self.iso_edit.setToolTip("感光度。数值越高感光越强但噪点越多，如 100/400/800/1600。")
+        self.iso_edit.setToolTip(
+            "感光度。数值越高感光越强但噪点越多，如 100/400/800/1600。"
+        )
         self.aperture_edit = QLineEdit()
         self.aperture_edit.setPlaceholderText("光圈 如: f/2.8")
-        self.aperture_edit.setToolTip("光圈值，如 f/2.8、f/4、f/5.6。数值越小光圈越大，进光量越多。")
+        self.aperture_edit.setToolTip(
+            "光圈值，如 f/2.8、f/4、f/5.6。数值越小光圈越大，进光量越多。"
+        )
         self.shutter_edit = QLineEdit()
         self.shutter_edit.setPlaceholderText("快门 如: 1/48s")
         self.shutter_edit.setToolTip("快门速度，如 1/50、1/100。表示感光元件曝光时间。")
@@ -197,7 +206,9 @@ class ShootingLogView(RefreshOnShowView):
         # 从代表素材填充 EXIF：选择项目内一个素材，自动带出相机/镜头/ISO/光圈/快门
         exif_row = QHBoxLayout()
         self.fill_exif_btn = QPushButton("📷 从代表素材填充 EXIF")
-        self.fill_exif_btn.setToolTip("选择项目内一个素材，自动带出相机/镜头/ISO/光圈/快门")
+        self.fill_exif_btn.setToolTip(
+            "选择项目内一个素材，自动带出相机/镜头/ISO/光圈/快门"
+        )
         self.fill_exif_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLOR.BORDER_LIGHT};
@@ -243,7 +254,12 @@ class ShootingLogView(RefreshOnShowView):
         self.log_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.log_table.customContextMenuRequested.connect(self._on_log_context_menu)
         log_layout.addWidget(self.log_table)
-        attach_empty_state(self.log_table, "📋", "暂无拍摄日志", "在上方填写场景/镜头/镜次后点击「添加日志」")
+        attach_empty_state(
+            self.log_table,
+            "📋",
+            "暂无拍摄日志",
+            "在上方填写场景/镜头/镜次后点击「添加日志」",
+        )
 
         ctrl_row = QHBoxLayout()
         del_log_btn = QPushButton("删除选中日志")
@@ -252,12 +268,16 @@ class ShootingLogView(RefreshOnShowView):
         ctrl_row.addWidget(del_log_btn)
 
         export_csv_btn = QPushButton("📤 导出 CSV")
-        export_csv_btn.setToolTip("把当前项目的拍摄日志导出为 CSV 镜头清单（Excel 可直接打开）")
+        export_csv_btn.setToolTip(
+            "把当前项目的拍摄日志导出为 CSV 镜头清单（Excel 可直接打开）"
+        )
         export_csv_btn.clicked.connect(self._export_logs_csv)
         ctrl_row.addWidget(export_csv_btn)
 
         import_csv_btn = QPushButton("📥 导入 CSV")
-        import_csv_btn.setToolTip("从 CSV 场记单导入拍摄日志（按 场景/镜头/镜次 自动去重更新）")
+        import_csv_btn.setToolTip(
+            "从 CSV 场记单导入拍摄日志（按 场景/镜头/镜次 自动去重更新）"
+        )
         import_csv_btn.clicked.connect(self._import_logs_csv)
         ctrl_row.addWidget(import_csv_btn)
 
@@ -306,7 +326,9 @@ class ShootingLogView(RefreshOnShowView):
         # 双击打开所在目录
         self.asset_table.doubleClicked.connect(self._on_linked_asset_double_clicked)
         linked_layout.addWidget(self.asset_table, 1)
-        attach_empty_state(self.asset_table, "🔗", "暂无关联素材", "选择日志后点击「+ 关联素材」")
+        attach_empty_state(
+            self.asset_table, "🔗", "暂无关联素材", "选择日志后点击「+ 关联素材」"
+        )
 
         return linked_tab
 
@@ -335,9 +357,13 @@ class ShootingLogView(RefreshOnShowView):
         )
         # 双击打开所在目录
         self.proj_asset_table.doubleClicked.connect(self._on_proj_asset_double_clicked)
-        self.proj_asset_table.itemSelectionChanged.connect(self._on_proj_asset_selection_changed)
+        self.proj_asset_table.itemSelectionChanged.connect(
+            self._on_proj_asset_selection_changed
+        )
         proj_layout.addWidget(self.proj_asset_table, 1)
-        attach_empty_state(self.proj_asset_table, "📂", "暂无项目素材", "请先在「媒体导入」中导入素材")
+        attach_empty_state(
+            self.proj_asset_table, "📂", "暂无项目素材", "请先在「媒体导入」中导入素材"
+        )
 
         return proj_tab
 
@@ -399,9 +425,9 @@ class ShootingLogView(RefreshOnShowView):
             self.log_table.setItem(i, 2, QTableWidgetItem(log.take))
             self.log_table.setItem(i, 3, QTableWidgetItem(log.description))
             self.log_table.setItem(i, 4, QTableWidgetItem(log.camera))
-            self.log_table.setItem(i, 5, QTableWidgetItem(
-                log.created_at.strftime("%m-%d %H:%M")
-            ))
+            self.log_table.setItem(
+                i, 5, QTableWidgetItem(log.created_at.strftime("%m-%d %H:%M"))
+            )
             # 存储log_id
             self.log_table.item(i, 0).setData(Qt.UserRole, log.log_id)
 
@@ -428,7 +454,9 @@ class ShootingLogView(RefreshOnShowView):
                 if iso_value < 0:
                     raise ValueError
             except ValueError:
-                QMessageBox.warning(self, "输入错误", "ISO 必须为非负整数，请检查输入。")
+                QMessageBox.warning(
+                    self, "输入错误", "ISO 必须为非负整数，请检查输入。"
+                )
                 self.iso_edit.setFocus()
                 return
 
@@ -444,7 +472,7 @@ class ShootingLogView(RefreshOnShowView):
             iso=iso_value,
             aperture=self.aperture_edit.text(),
             shutter_speed=self.shutter_edit.text(),
-            notes=self.notes_edit.toPlainText()
+            notes=self.notes_edit.toPlainText(),
         )
 
         pending = list(self._pending_asset_ids)
@@ -474,7 +502,9 @@ class ShootingLogView(RefreshOnShowView):
                 break
 
         if pending:
-            QMessageBox.information(self, "成功", f"已创建日志并关联 {len(pending)} 个素材")
+            QMessageBox.information(
+                self, "成功", f"已创建日志并关联 {len(pending)} 个素材"
+            )
 
     @safe_slot("删除日志失败")
     def _delete_log(self):
@@ -519,7 +549,8 @@ class ShootingLogView(RefreshOnShowView):
             return
         default_name = f"shooting_logs_{self.current_project.name if self.current_project else ''}.csv"
         path = pick_save_file(
-            self, "导出拍摄日志 CSV",
+            self,
+            "导出拍摄日志 CSV",
             start_path=str(Path.home() / default_name),
             filter_str="CSV 文件 (*.csv)",
             default_suffix="csv",
@@ -527,9 +558,13 @@ class ShootingLogView(RefreshOnShowView):
         if not path:
             return
         if export_logs_csv(self._logs, path):
-            QMessageBox.information(self, "导出成功", f"已导出 {len(self._logs)} 条日志到：\n{path}")
+            QMessageBox.information(
+                self, "导出成功", f"已导出 {len(self._logs)} 条日志到：\n{path}"
+            )
         else:
-            QMessageBox.warning(self, "导出失败", "无法写入 CSV 文件，请检查目标目录权限。")
+            QMessageBox.warning(
+                self, "导出失败", "无法写入 CSV 文件，请检查目标目录权限。"
+            )
 
     def _import_logs_csv(self):
         """从 CSV 场记单导入拍摄日志（按场景/镜头/镜次去重更新）。"""
@@ -540,7 +575,8 @@ class ShootingLogView(RefreshOnShowView):
             QMessageBox.warning(self, "未选择项目", "请先选择项目。")
             return
         path = pick_open_file(
-            self, "导入拍摄日志 CSV",
+            self,
+            "导入拍摄日志 CSV",
             str(Path.home()),
             "CSV 文件 (*.csv);;所有文件 (*)",
         )
@@ -550,12 +586,14 @@ class ShootingLogView(RefreshOnShowView):
         created, updated = stats["created"], stats["updated"]
         if stats["errors"] and not created and not updated:
             QMessageBox.warning(
-                self, "导入失败",
+                self,
+                "导入失败",
                 "未导入任何日志。\n" + "\n".join(stats["errors"][:5]),
             )
             return
         QMessageBox.information(
-            self, "导入完成",
+            self,
+            "导入完成",
             f"新建 {created} 条，更新 {updated} 条，跳过 {stats['skipped']} 条。",
         )
         get_data_bus().emit_data_changed("logs_changed")
@@ -564,6 +602,7 @@ class ShootingLogView(RefreshOnShowView):
     def _on_log_context_menu(self, pos):
         """日志表右键菜单：删除此日志 / 复制场景信息"""
         from PySide6.QtWidgets import QApplication, QMenu
+
         item = self.log_table.itemAt(pos)
         if not item:
             return
@@ -609,7 +648,9 @@ class ShootingLogView(RefreshOnShowView):
             self.asset_table.setItem(i, 0, QTableWidgetItem(asset.file_name))
             self.asset_table.item(i, 0).setData(Qt.UserRole, asset.asset_id)
             self.asset_table.setItem(i, 1, QTableWidgetItem(asset.file_type))
-            self.asset_table.setItem(i, 2, QTableWidgetItem(format_size(asset.file_size)))
+            self.asset_table.setItem(
+                i, 2, QTableWidgetItem(format_size(asset.file_size))
+            )
             self.asset_table.setItem(i, 3, QTableWidgetItem(asset.scene))
             self.asset_table.setItem(i, 4, QTableWidgetItem(asset.shot))
 
@@ -636,12 +677,19 @@ class ShootingLogView(RefreshOnShowView):
         if not self.current_project or not self.current_log_id:
             return
 
-        all_assets = list(self.db_service.iter_project_assets(self.current_project.project_id))
-        linked_ids = {a.asset_id for a in self.db_service.get_assets_by_log_id(self.current_log_id)}
+        all_assets = list(
+            self.db_service.iter_project_assets(self.current_project.project_id)
+        )
+        linked_ids = {
+            a.asset_id
+            for a in self.db_service.get_assets_by_log_id(self.current_log_id)
+        }
         unlinked = [a for a in all_assets if a.asset_id not in linked_ids]
 
         if not unlinked:
-            QMessageBox.information(self, "提示", "该项目下没有可关联的素材，请先导入素材。")
+            QMessageBox.information(
+                self, "提示", "该项目下没有可关联的素材，请先导入素材。"
+            )
             return
 
         dialog = _AssetLinkDialog(unlinked, self)
@@ -653,7 +701,9 @@ class ShootingLogView(RefreshOnShowView):
                 self._load_assets_for_log(self.current_log_id)
                 # 广播素材关联变更
                 get_data_bus().emit_data_changed("assets_changed")
-                QMessageBox.information(self, "成功", f"已关联 {len(selected_ids)} 个素材")
+                QMessageBox.information(
+                    self, "成功", f"已关联 {len(selected_ids)} 个素材"
+                )
 
     @safe_slot("解除关联失败")
     def _unlink_selected_assets(self):
@@ -665,7 +715,9 @@ class ShootingLogView(RefreshOnShowView):
         if not rows:
             return
 
-        reply = QMessageBox.question(self, "确认", f"确定解除 {len(rows)} 个素材的关联？")
+        reply = QMessageBox.question(
+            self, "确认", f"确定解除 {len(rows)} 个素材的关联？"
+        )
         if reply != QMessageBox.Yes:
             return
 
@@ -684,16 +736,22 @@ class ShootingLogView(RefreshOnShowView):
             QMessageBox.warning(self, "提示", "请先选择项目")
             return
 
-        all_assets = list(self.db_service.iter_project_assets(self.current_project.project_id))
+        all_assets = list(
+            self.db_service.iter_project_assets(self.current_project.project_id)
+        )
         if not all_assets:
-            QMessageBox.information(self, "提示", "该项目下还没有导入素材，请先在媒体导入界面导入素材。")
+            QMessageBox.information(
+                self, "提示", "该项目下还没有导入素材，请先在媒体导入界面导入素材。"
+            )
             return
 
         dialog = _AssetLinkDialog(all_assets, self)
         if dialog.exec() == QDialog.Accepted:
             self._pending_asset_ids = dialog.get_selected_asset_ids()
             if self._pending_asset_ids:
-                self.selected_assets_label.setText(f"已选 {len(self._pending_asset_ids)} 个素材")
+                self.selected_assets_label.setText(
+                    f"已选 {len(self._pending_asset_ids)} 个素材"
+                )
             else:
                 self.selected_assets_label.setText("未选择")
 
@@ -713,15 +771,17 @@ class ShootingLogView(RefreshOnShowView):
 
         if filled:
             QMessageBox.information(
-                self, "已填充 EXIF",
-                f"从 {asset.file_name} 读取并填充：{ '、'.join(filled) }"
+                self,
+                "已填充 EXIF",
+                f"从 {asset.file_name} 读取并填充：{'、'.join(filled)}",
             )
         else:
             QMessageBox.information(
-                self, "提示",
+                self,
+                "提示",
                 "未填充任何字段。\n可能原因：\n"
                 "  • 该素材没有 EXIF 信息\n"
-                "  • 表单中相关字段已被填写（不会覆盖）"
+                "  • 表单中相关字段已被填写（不会覆盖）",
             )
 
     def _pick_representative_asset(self) -> MediaAsset | None:
@@ -730,9 +790,13 @@ class ShootingLogView(RefreshOnShowView):
             QMessageBox.warning(self, "提示", "请先选择项目")
             return None
 
-        all_assets = list(self.db_service.iter_project_assets(self.current_project.project_id))
+        all_assets = list(
+            self.db_service.iter_project_assets(self.current_project.project_id)
+        )
         if not all_assets:
-            QMessageBox.information(self, "提示", "该项目下还没有导入素材，无法填充 EXIF。")
+            QMessageBox.information(
+                self, "提示", "该项目下还没有导入素材，无法填充 EXIF。"
+            )
             return None
 
         # 单选对话框：用 QListWidget 让用户挑一个代表素材
@@ -740,6 +804,7 @@ class ShootingLogView(RefreshOnShowView):
         from PySide6.QtWidgets import QDialogButtonBox as _QBB
         from PySide6.QtWidgets import QListWidget as _QListWidget
         from PySide6.QtWidgets import QVBoxLayout as _QVL
+
         dlg = _QDialog(self)
         dlg.setWindowTitle("选择代表素材以填充 EXIF")
         dlg.resize(520, 400)
@@ -748,7 +813,9 @@ class ShootingLogView(RefreshOnShowView):
         pick_list.setSelectionMode(_QListWidget.SingleSelection)
         # 文件名 (asset_id) 格式，便于用户识别
         for a in all_assets:
-            pick_list.addItem(f"{a.file_name}  [{a.file_type}]  {format_size(a.file_size)}")
+            pick_list.addItem(
+                f"{a.file_name}  [{a.file_type}]  {format_size(a.file_size)}"
+            )
         if all_assets:
             pick_list.setCurrentRow(0)
         dl.addWidget(pick_list)
@@ -772,6 +839,7 @@ class ShootingLogView(RefreshOnShowView):
         file_path = asset.file_path
 
         from pathlib import Path
+
         if not file_path or not Path(file_path).exists():
             QMessageBox.warning(self, "提示", f"素材文件不存在：\n{file_path}")
             return None
@@ -831,7 +899,9 @@ class ShootingLogView(RefreshOnShowView):
             self.proj_asset_count_label.setText("")
             return
 
-        assets = list(self.db_service.iter_project_assets(self.current_project.project_id))
+        assets = list(
+            self.db_service.iter_project_assets(self.current_project.project_id)
+        )
         linked_count = sum(1 for a in assets if a.log_id)
         self.proj_asset_table.setRowCount(len(assets))
         sync_empty_state(self.proj_asset_table)
@@ -843,7 +913,9 @@ class ShootingLogView(RefreshOnShowView):
             name_item.setData(Qt.UserRole, asset.asset_id)
             self.proj_asset_table.setItem(i, 0, name_item)
             self.proj_asset_table.setItem(i, 1, QTableWidgetItem(asset.file_type))
-            self.proj_asset_table.setItem(i, 2, QTableWidgetItem(format_size(asset.file_size)))
+            self.proj_asset_table.setItem(
+                i, 2, QTableWidgetItem(format_size(asset.file_size))
+            )
             self.proj_asset_table.setItem(i, 3, QTableWidgetItem(asset.scene))
             self.proj_asset_table.setItem(i, 4, QTableWidgetItem(asset.shot))
             status = "已关联" if asset.log_id else "未关联"
@@ -886,8 +958,9 @@ class ShootingLogView(RefreshOnShowView):
         self.selected_assets_label.setText(f"已选 {len(ids)} 个素材")
         self.bottom_tabs.setCurrentIndex(0)
         QMessageBox.information(
-            self, "已选定素材",
-            f"已选定 {len(ids)} 个素材，请在上方填写场景/镜头/镜次等信息后点击「添加日志」。"
+            self,
+            "已选定素材",
+            f"已选定 {len(ids)} 个素材，请在上方填写场景/镜头/镜次等信息后点击「添加日志」。",
         )
 
 

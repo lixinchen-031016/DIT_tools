@@ -1,4 +1,5 @@
 """Background task history and storage-health snapshot persistence."""
+
 import json
 import sqlite3
 import uuid
@@ -12,8 +13,13 @@ class TaskRepository(BaseRepository):
     """Owns operational records consumed by task and project-health views."""
 
     def create(
-        self, task_name: str, project_id: str | None = None, *, state: str = "queued",
-        parameters: dict | None = None, recovery_info: dict | None = None,
+        self,
+        task_name: str,
+        project_id: str | None = None,
+        *,
+        state: str = "queued",
+        parameters: dict | None = None,
+        recovery_info: dict | None = None,
     ) -> str:
         task_id = str(uuid.uuid4())
         now = now_local().isoformat()
@@ -22,21 +28,33 @@ class TaskRepository(BaseRepository):
                 "INSERT INTO task_history "
                 "(task_id, task_name, project_id, state, parameters_json, recovery_json, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (task_id, task_name, project_id, state,
-                 json.dumps(parameters or {}, ensure_ascii=False, default=str),
-                 json.dumps(recovery_info or {}, ensure_ascii=False, default=str), now),
+                (
+                    task_id,
+                    task_name,
+                    project_id,
+                    state,
+                    json.dumps(parameters or {}, ensure_ascii=False, default=str),
+                    json.dumps(recovery_info or {}, ensure_ascii=False, default=str),
+                    now,
+                ),
             )
         return task_id
 
     def update(
-        self, task_id: str, state: str, *, output: dict | None = None,
-        error_summary: str = "", recovery_info: dict | None = None,
+        self,
+        task_id: str,
+        state: str,
+        *,
+        output: dict | None = None,
+        error_summary: str = "",
+        recovery_info: dict | None = None,
     ) -> bool:
         terminal = {"completed", "failed", "cancelled", "recoverable"}
         try:
             with self._transaction() as conn:
                 current = conn.execute(
-                    "SELECT recovery_json FROM task_history WHERE task_id = ?", (task_id,)
+                    "SELECT recovery_json FROM task_history WHERE task_id = ?",
+                    (task_id,),
                 ).fetchone()
                 if current is None:
                     return False
@@ -47,9 +65,16 @@ class TaskRepository(BaseRepository):
                     "UPDATE task_history SET state = ?, output_json = ?, error_summary = ?, "
                     "recovery_json = ?, started_at = COALESCE(started_at, ?), "
                     "completed_at = CASE WHEN ? THEN ? ELSE completed_at END WHERE task_id = ?",
-                    (state, json.dumps(output or {}, ensure_ascii=False, default=str), error_summary,
-                     json.dumps(merged_recovery, ensure_ascii=False, default=str), now_local().isoformat(),
-                     int(state in terminal), now_local().isoformat(), task_id),
+                    (
+                        state,
+                        json.dumps(output or {}, ensure_ascii=False, default=str),
+                        error_summary,
+                        json.dumps(merged_recovery, ensure_ascii=False, default=str),
+                        now_local().isoformat(),
+                        int(state in terminal),
+                        now_local().isoformat(),
+                        task_id,
+                    ),
                 )
             return True
         except (sqlite3.Error, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -65,7 +90,8 @@ class TaskRepository(BaseRepository):
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM task_history ORDER BY created_at DESC LIMIT ?", (limit,)
+                    "SELECT * FROM task_history ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
                 ).fetchall()
         result = []
         for row in rows:
@@ -95,7 +121,11 @@ class TaskRepository(BaseRepository):
             return cursor.rowcount
 
     def record_storage_health(
-        self, project_id: str | None, target_path: str, total_bytes: int, free_bytes: int,
+        self,
+        project_id: str | None,
+        target_path: str,
+        total_bytes: int,
+        free_bytes: int,
     ) -> bool:
         try:
             with self._transaction() as conn:
@@ -103,27 +133,39 @@ class TaskRepository(BaseRepository):
                     "INSERT INTO storage_health_snapshots "
                     "(snapshot_id, project_id, target_path, total_bytes, free_bytes, captured_at) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (str(uuid.uuid4()), project_id, target_path, int(total_bytes), int(free_bytes),
-                     now_local().isoformat()),
+                    (
+                        str(uuid.uuid4()),
+                        project_id,
+                        target_path,
+                        int(total_bytes),
+                        int(free_bytes),
+                        now_local().isoformat(),
+                    ),
                 )
             return True
         except sqlite3.Error as exc:
             logger.warning(f"记录存储健康快照失败: {exc}")
             return False
 
-    def list_storage_health(self, project_id: str | None, limit: int = 60) -> list[dict]:
+    def list_storage_health(
+        self, project_id: str | None, limit: int = 60
+    ) -> list[dict]:
         limit = max(1, min(int(limit), 5000))
         with self._connection() as conn:
             if project_id:
                 rows = conn.execute(
                     "SELECT * FROM storage_health_snapshots WHERE project_id = ? "
-                    "ORDER BY captured_at DESC LIMIT ?", (project_id, limit),
+                    "ORDER BY captured_at DESC LIMIT ?",
+                    (project_id, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM storage_health_snapshots ORDER BY captured_at DESC LIMIT ?", (limit,)
+                    "SELECT * FROM storage_health_snapshots ORDER BY captured_at DESC LIMIT ?",
+                    (limit,),
                 ).fetchall()
         result = [dict(row) for row in reversed(rows)]
         for item in result:
-            item["captured_at"] = self._database._parse_datetime(item.get("captured_at"))
+            item["captured_at"] = self._database._parse_datetime(
+                item.get("captured_at")
+            )
         return result

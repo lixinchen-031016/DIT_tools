@@ -1,4 +1,5 @@
 """校验和计算服务 - 支持MD5和XXHash64"""
+
 import hashlib
 import threading
 from collections import OrderedDict
@@ -16,14 +17,19 @@ class ChecksumService:
     """校验和计算服务"""
 
     def __init__(
-        self, buffer_size: int | None = None, cache_size: int | None = None,
-        db_service=None, persistent_cache_size: int | None = None,
+        self,
+        buffer_size: int | None = None,
+        cache_size: int | None = None,
+        db_service=None,
+        persistent_cache_size: int | None = None,
     ):
         self.buffer_size = buffer_size or config.checksum_buffer_size
         self._max_cache_size = (
             config.checksum_cache_size if cache_size is None else cache_size
         )
-        if not isinstance(self._max_cache_size, int) or isinstance(self._max_cache_size, bool):
+        if not isinstance(self._max_cache_size, int) or isinstance(
+            self._max_cache_size, bool
+        ):
             raise TypeError("cache_size 必须是正整数")
         if self._max_cache_size <= 0:
             raise ValueError("cache_size 必须是正整数")
@@ -32,22 +38,32 @@ class ChecksumService:
         self._db_service = db_service
         self._persistent_cache_size = (
             config.checksum_persistent_cache_size
-            if persistent_cache_size is None else persistent_cache_size
+            if persistent_cache_size is None
+            else persistent_cache_size
         )
-        if not isinstance(self._persistent_cache_size, int) or self._persistent_cache_size <= 0:
+        if (
+            not isinstance(self._persistent_cache_size, int)
+            or self._persistent_cache_size <= 0
+        ):
             raise ValueError("persistent_cache_size 必须是正整数")
 
     @staticmethod
-    def _cache_key(file_path: str, file_size: int, mtime_ns: int, algorithm: ChecksumAlgorithm) -> str:
+    def _cache_key(
+        file_path: str, file_size: int, mtime_ns: int, algorithm: ChecksumAlgorithm
+    ) -> str:
         return f"{file_path}_{file_size}_{mtime_ns}_{algorithm.value}"
 
-    def _load_persistent(self, path: Path, file_size: int, mtime_ns: int,
-                         algorithm: ChecksumAlgorithm) -> FileChecksum | None:
+    def _load_persistent(
+        self, path: Path, file_size: int, mtime_ns: int, algorithm: ChecksumAlgorithm
+    ) -> FileChecksum | None:
         if self._db_service is None:
             return None
         try:
             hash_value = self._db_service.get_checksum_cache(
-                str(path), file_size, mtime_ns, algorithm.value,
+                str(path),
+                file_size,
+                mtime_ns,
+                algorithm.value,
             )
         except Exception as exc:
             logger.debug(f"读取持久化校验和缓存失败: {exc}")
@@ -55,13 +71,19 @@ class ChecksumService:
         if not hash_value:
             return None
         return FileChecksum(
-            file_path=str(path), algorithm=algorithm, hash_value=hash_value,
-            file_size=file_size, mtime_ns=mtime_ns,
+            file_path=str(path),
+            algorithm=algorithm,
+            hash_value=hash_value,
+            file_size=file_size,
+            mtime_ns=mtime_ns,
         )
 
     def _remember(self, checksum: FileChecksum) -> None:
         key = self._cache_key(
-            checksum.file_path, checksum.file_size, checksum.mtime_ns, checksum.algorithm,
+            checksum.file_path,
+            checksum.file_size,
+            checksum.mtime_ns,
+            checksum.algorithm,
         )
         with self._cache_lock:
             self._cache[key] = checksum
@@ -71,8 +93,11 @@ class ChecksumService:
         if self._db_service is not None:
             try:
                 self._db_service.put_checksum_cache(
-                    checksum.file_path, checksum.file_size, checksum.mtime_ns,
-                    checksum.algorithm.value, checksum.hash_value,
+                    checksum.file_path,
+                    checksum.file_size,
+                    checksum.mtime_ns,
+                    checksum.algorithm.value,
+                    checksum.hash_value,
                     limit=self._persistent_cache_size,
                 )
             except Exception as exc:
@@ -83,7 +108,7 @@ class ChecksumService:
         file_path: str,
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
         progress_callback: Callable[[float], None] | None = None,
-        cancel_check: Callable[[], bool] | None = None
+        cancel_check: Callable[[], bool] | None = None,
     ) -> FileChecksum:
         """
         计算文件校验和
@@ -131,7 +156,7 @@ class ChecksumService:
             algorithm=algorithm,
             hash_value=hash_value,
             file_size=file_size,
-            mtime_ns=mtime_ns
+            mtime_ns=mtime_ns,
         )
 
         self._remember(checksum)
@@ -147,8 +172,7 @@ class ChecksumService:
         try:
             stat = path.stat()
             return (
-                cached.file_size == stat.st_size
-                and cached.mtime_ns == stat.st_mtime_ns
+                cached.file_size == stat.st_size and cached.mtime_ns == stat.st_mtime_ns
             )
         except (OSError, ValueError):
             return False
@@ -159,7 +183,7 @@ class ChecksumService:
         algorithm: ChecksumAlgorithm,
         file_size: int,
         progress_callback: Callable[[float], None] | None,
-        cancel_check: Callable[[], bool] | None = None
+        cancel_check: Callable[[], bool] | None = None,
     ) -> str:
         """内部哈希计算"""
         if algorithm == ChecksumAlgorithm.XXHASH64:
@@ -188,7 +212,7 @@ class ChecksumService:
         dest_path: str,
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
         progress_callback: Callable[[float], None] | None = None,
-        cancel_check: Callable[[], bool] | None = None
+        cancel_check: Callable[[], bool] | None = None,
     ) -> FileChecksum:
         """边拷贝边计算源文件校验和（单次读盘）。
 
@@ -247,7 +271,7 @@ class ChecksumService:
         expected_hash: str,
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
         progress_callback: Callable[[float], None] | None = None,
-        cancel_check: Callable[[], bool] | None = None
+        cancel_check: Callable[[], bool] | None = None,
     ) -> bool:
         """
         验证文件完整性
@@ -266,7 +290,10 @@ class ChecksumService:
             raise FileNotFoundError(f"文件不存在: {file_path}")
 
         computed = self.compute_file_checksum(
-            str(path), algorithm, progress_callback, cancel_check,
+            str(path),
+            algorithm,
+            progress_callback,
+            cancel_check,
         )
         return computed.hash_value == expected_hash
 
@@ -274,7 +301,7 @@ class ChecksumService:
         self,
         file_pairs: list[tuple[str, str]],
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
-        progress_callback: Callable[[int, int, str], None] | None = None
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> list[dict]:
         """
         批量验证文件完整性
@@ -296,29 +323,34 @@ class ChecksumService:
                 target_checksum = self.compute_file_checksum(target_path, algorithm)
                 verified = source_checksum.hash_value == target_checksum.hash_value
 
-                results.append({
-                    "source": source_path,
-                    "target": target_path,
-                    "verified": verified,
-                    "error": None
-                })
+                results.append(
+                    {
+                        "source": source_path,
+                        "target": target_path,
+                        "verified": verified,
+                        "error": None,
+                    }
+                )
 
                 if progress_callback:
-                    progress_callback(i + 1, total,
-                                     f"验证: {Path(source_path).name}")
+                    progress_callback(i + 1, total, f"验证: {Path(source_path).name}")
 
             except Exception as e:
-                results.append({
-                    "source": source_path,
-                    "target": target_path,
-                    "verified": False,
-                    "error": str(e)
-                })
+                results.append(
+                    {
+                        "source": source_path,
+                        "target": target_path,
+                        "verified": False,
+                        "error": str(e),
+                    }
+                )
                 logger.error(f"批量验证失败 {source_path} -> {target_path}: {e}")
 
         return results
 
-    def compute_string_checksum(self, data: str, algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64) -> str:
+    def compute_string_checksum(
+        self, data: str, algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64
+    ) -> str:
         """计算字符串校验和"""
         if algorithm == ChecksumAlgorithm.XXHASH64:
             return xxhash.xxh64(data.encode()).hexdigest()
@@ -331,7 +363,7 @@ class ChecksumService:
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
         total_size: int = 0,
         progress_callback: Callable[[float], None] | None = None,
-        cancel_check: Callable[[], bool] | None = None
+        cancel_check: Callable[[], bool] | None = None,
     ) -> str:
         """
         从流中计算校验和

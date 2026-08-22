@@ -7,6 +7,7 @@
 4. 是否开启校验和验证
 5. 确认后执行恢复，显示进度/结果。
 """
+
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -34,6 +35,7 @@ class _ProgressBridge(QObject):
     由于接收槽位于主线程，Qt 会以 QueuedConnection 把更新投递到事件循环，
     保证 UI 更新始终在主线程执行。
     """
+
     progress = Signal(int, int, str)  # current, total, message
 
     def __call__(self, current: int, total: int, message: str) -> None:
@@ -59,7 +61,9 @@ class RestoreWizard(QDialog):
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         main.addWidget(title)
 
-        desc = QLabel("选择项目、备份位置与目标目录，应用会从备份卷将素材复制回工作盘。")
+        desc = QLabel(
+            "选择项目、备份位置与目标目录，应用会从备份卷将素材复制回工作盘。"
+        )
         desc.setWordWrap(True)
         main.addWidget(desc)
 
@@ -101,7 +105,9 @@ class RestoreWizard(QDialog):
         # 操作按钮
         btn_row = QHBoxLayout()
         self.restore_btn = QPushButton("开始恢复")
-        self.restore_btn.setStyleSheet(f"background: {COLOR.PRIMARY}; color: white; padding: 8px 20px; border-radius: 6px; font-weight: bold;")
+        self.restore_btn.setStyleSheet(
+            f"background: {COLOR.PRIMARY}; color: white; padding: 8px 20px; border-radius: 6px; font-weight: bold;"
+        )
         self.restore_btn.clicked.connect(self._start_restore)
         self.restore_btn.setEnabled(False)
         btn_row.addStretch()
@@ -134,7 +140,7 @@ class RestoreWizard(QDialog):
         seen = set()
         try:
             for asset in self.db_service.iter_project_assets(project_id):
-                for loc in (asset.backup_locations or []):
+                for loc in asset.backup_locations or []:
                     if loc not in seen:
                         seen.add(loc)
                         self.loc_combo.addItem(loc, loc)
@@ -162,6 +168,7 @@ class RestoreWizard(QDialog):
         self.log_output.append("开始恢复...")
 
         from DITWorkstation.Utils.workers import WorkerThread
+
         restore_service = BackupRestoreService(self.db_service)
 
         # 线程安全桥接：进度回调在工作线程触发，UI 更新经信号投递到主线程
@@ -170,7 +177,8 @@ class RestoreWizard(QDialog):
 
         self._worker = WorkerThread(
             restore_service.restore_project,
-            project_id, dest,
+            project_id,
+            dest,
             source_locations=[source_loc] if source_loc else None,
             verify=self.verify_check.isChecked(),
             progress_callback=self._progress_bridge,

@@ -5,6 +5,7 @@
 - 复制错误详情按钮（含完整 traceback）
 - 可选的重试按钮
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -41,7 +42,7 @@ class ErrorDialog(QDialog):
         description: str,
         details: str = "",
         retry_callback: Callable | None = None,
-        parent=None
+        parent=None,
     ):
         super().__init__(parent)
         self.setWindowTitle("错误")
@@ -69,7 +70,9 @@ class ErrorDialog(QDialog):
 
         # 错误描述
         desc_label = QLabel(description)
-        desc_label.setStyleSheet(f"font-size: {FONT_SIZE.BASE}px; color: {COLOR.TEXT_PRIMARY};")
+        desc_label.setStyleSheet(
+            f"font-size: {FONT_SIZE.BASE}px; color: {COLOR.TEXT_PRIMARY};"
+        )
         desc_label.setWordWrap(True)
         layout.addWidget(desc_label)
 
@@ -95,10 +98,14 @@ class ErrorDialog(QDialog):
             layout.addWidget(self.details_text)
 
             self._details_visible = False
+
             def _toggle_details():
                 self._details_visible = not self._details_visible
                 self.details_text.setVisible(self._details_visible)
-                details_btn.setText("▼ 隐藏技术详情" if self._details_visible else "▶ 查看技术详情")
+                details_btn.setText(
+                    "▼ 隐藏技术详情" if self._details_visible else "▶ 查看技术详情"
+                )
+
             details_btn.clicked.connect(_toggle_details)
 
         # 分隔线
@@ -169,6 +176,7 @@ class ErrorDialog(QDialog):
         if sender:
             sender.setText("✓ 已复制")
             from PySide6.QtCore import QTimer
+
             QTimer.singleShot(2000, lambda: sender.setText("📋 复制错误详情"))
 
     def _on_retry(self):
@@ -183,7 +191,7 @@ def show_error(
     description: str,
     details: str = "",
     retry_callback: Callable | None = None,
-    parent=None
+    parent=None,
 ):
     """便捷函数：弹出错误对话框。
 

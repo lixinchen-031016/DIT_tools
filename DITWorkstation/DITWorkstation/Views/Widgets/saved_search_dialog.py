@@ -2,6 +2,7 @@
 
 从素材检索视图的「保存搜索」按钮打开。
 """
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
@@ -98,6 +99,7 @@ class SavedSearchDialog(QDialog):
             return
         item = self._items[row]
         from PySide6.QtWidgets import QInputDialog
+
         name, ok = QInputDialog.getText(self, "重命名", "新名称:", text=item["name"])
         if ok and name:
             self.db_service.update_saved_search(item["search_id"], name=name)

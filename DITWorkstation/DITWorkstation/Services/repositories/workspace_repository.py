@@ -1,4 +1,5 @@
 """Workspace persistence operations."""
+
 import sqlite3
 import uuid
 from datetime import datetime
@@ -33,12 +34,16 @@ class WorkspaceRepository(BaseRepository):
                     workspace.updated_at.isoformat(),
                 ),
             )
-            logger.info(f"创建工作区: {workspace.workspace_id} - {workspace.name} (path={workspace.path})")
+            logger.info(
+                f"创建工作区: {workspace.workspace_id} - {workspace.name} (path={workspace.path})"
+            )
         return workspace
 
     def list_all(self) -> list[Workspace]:
         with self._connection() as conn:
-            rows = conn.execute("SELECT * FROM workspaces ORDER BY created_at DESC").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM workspaces ORDER BY created_at DESC"
+            ).fetchall()
         return [self._row_to_workspace(row) for row in rows]
 
     def get(self, workspace_id: str) -> Workspace | None:
@@ -108,7 +113,9 @@ class WorkspaceRepository(BaseRepository):
                         "UPDATE projects SET workspace_id = 'default' WHERE workspace_id = ?",
                         (workspace_id,),
                     )
-                conn.execute("DELETE FROM workspaces WHERE workspace_id = ?", (workspace_id,))
+                conn.execute(
+                    "DELETE FROM workspaces WHERE workspace_id = ?", (workspace_id,)
+                )
                 logger.info(f"删除工作区: {workspace_id}（项目已归入 default）")
                 return True
         except sqlite3.Error as exc:

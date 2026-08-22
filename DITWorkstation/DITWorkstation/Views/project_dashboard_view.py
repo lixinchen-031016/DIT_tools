@@ -1,4 +1,5 @@
 """项目概览看板视图 - 聚合展示当前项目进度，提供 SOP 下一步引导"""
+
 import zipfile
 from pathlib import Path
 
@@ -101,10 +102,14 @@ class _StatCard(QFrame):
         )
         layout.addWidget(self.hint_label)
 
-    def set_value(self, value: str, hint: str = "", hint_color: str = COLOR.TEXT_SECONDARY):
+    def set_value(
+        self, value: str, hint: str = "", hint_color: str = COLOR.TEXT_SECONDARY
+    ):
         self.value_label.setText(value)
         self.hint_label.setText(hint)
-        self.hint_label.setStyleSheet(f"color: {hint_color}; font-size: {FONT_SIZE.XS}px;")
+        self.hint_label.setStyleSheet(
+            f"color: {hint_color}; font-size: {FONT_SIZE.XS}px;"
+        )
 
 
 class ProjectDashboardView(RefreshOnShowView):
@@ -160,7 +165,9 @@ class ProjectDashboardView(RefreshOnShowView):
 
         layout.addLayout(header)
 
-        subtitle = QLabel("聚合展示当前项目的导入/备份/日志/报告进度，快速跳转到下一步操作")
+        subtitle = QLabel(
+            "聚合展示当前项目的导入/备份/日志/报告进度，快速跳转到下一步操作"
+        )
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
@@ -248,18 +255,29 @@ class ProjectDashboardView(RefreshOnShowView):
         self.btn_archive.clicked.connect(self._archive_project)
 
         self.btn_restore = QPushButton("↩ 恢复项目…")
-        self.btn_restore.setToolTip("从归档 zip 恢复项目到当前工作区（可选还原素材文件）")
+        self.btn_restore.setToolTip(
+            "从归档 zip 恢复项目到当前工作区（可选还原素材文件）"
+        )
         self.btn_restore.clicked.connect(self._restore_project)
 
         self.btn_template = QPushButton("🧩 从模板新建项目…")
-        self.btn_template.setToolTip("基于项目模板快速创建新项目（名称/描述/工作目录自动预填）")
+        self.btn_template.setToolTip(
+            "基于项目模板快速创建新项目（名称/描述/工作目录自动预填）"
+        )
         self.btn_template.clicked.connect(self._create_from_template)
 
         self.btn_save_template = QPushButton("💾 保存当前项目为模板…")
-        self.btn_save_template.setToolTip("把当前项目的名称/描述/工作目录保存为模板，供后续复用")
+        self.btn_save_template.setToolTip(
+            "把当前项目的名称/描述/工作目录保存为模板，供后续复用"
+        )
         self.btn_save_template.clicked.connect(self._save_as_template)
 
-        for btn in (self.btn_archive, self.btn_restore, self.btn_template, self.btn_save_template):
+        for btn in (
+            self.btn_archive,
+            self.btn_restore,
+            self.btn_template,
+            self.btn_save_template,
+        ):
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {COLOR.BG_CARD};
@@ -316,7 +334,9 @@ class ProjectDashboardView(RefreshOnShowView):
         )
         health_row.addWidget(self.health_summary_label, 1)
         self.refresh_health_btn = QPushButton("刷新健康状态")
-        self.refresh_health_btn.setToolTip("检查失联素材、失败任务、待重试文件和备份盘剩余容量")
+        self.refresh_health_btn.setToolTip(
+            "检查失联素材、失败任务、待重试文件和备份盘剩余容量"
+        )
         self.refresh_health_btn.clicked.connect(self._refresh_health)
         health_row.addWidget(self.refresh_health_btn)
         layout.addLayout(health_row)
@@ -367,9 +387,7 @@ class ProjectDashboardView(RefreshOnShowView):
     @safe_slot("从模板新建项目失败")
     def _create_from_template(self):
         """从模板新建项目：创建后广播并让选择控件选中新项目。"""
-        project = create_project_from_template(
-            parent=self, db_service=self.db_service
-        )
+        project = create_project_from_template(parent=self, db_service=self.db_service)
         if project:
             self.selector.refresh()
             self._refresh()
@@ -388,8 +406,9 @@ class ProjectDashboardView(RefreshOnShowView):
         )
         if template:
             QMessageBox.information(
-                self, "保存成功",
-                f"项目模板「{template.name}」已保存，可在「从模板新建项目…」中使用。"
+                self,
+                "保存成功",
+                f"项目模板「{template.name}」已保存，可在「从模板新建项目…」中使用。",
             )
 
     def _on_show_refresh(self):
@@ -480,12 +499,14 @@ class ProjectDashboardView(RefreshOnShowView):
         self.card_logs.set_value(
             str(log_count),
             f"共 {backup_job_count} 次备份作业" if backup_job_count else "无备份记录",
-            COLOR.TEXT_SECONDARY
+            COLOR.TEXT_SECONDARY,
         )
         self.card_size.set_value(format_size(total_size), "全部素材累计大小")
 
         # SOP 提示
-        self.sop_hint.setText(self._build_sop_hint(asset_count, backed_up, log_count, backup_job_count))
+        self.sop_hint.setText(
+            self._build_sop_hint(asset_count, backed_up, log_count, backup_job_count)
+        )
         self._refresh_health(capture_capacity=False)
 
     @safe_slot("刷新项目健康状态失败")
@@ -493,11 +514,19 @@ class ProjectDashboardView(RefreshOnShowView):
         project_id = self.selector.get_current_project_id()
         if not project_id:
             return
-        report = self.health_service.get_health_report(project_id, capture_capacity=capture_capacity)
+        report = self.health_service.get_health_report(
+            project_id, capture_capacity=capture_capacity
+        )
         issues = report["issues"]
         check = report["last_integrity_check"]
-        check_text = "从未校验" if not check else (
-            check["created_at"].strftime("%Y-%m-%d %H:%M") if check.get("created_at") else "时间未知"
+        check_text = (
+            "从未校验"
+            if not check
+            else (
+                check["created_at"].strftime("%Y-%m-%d %H:%M")
+                if check.get("created_at")
+                else "时间未知"
+            )
         )
         capacity_lines = []
         for item in report["capacities"]:
@@ -506,7 +535,9 @@ class ProjectDashboardView(RefreshOnShowView):
                     f"{Path(item['path']).name or item['path']}：剩余 {format_size(item['free_bytes'])}"
                 )
             else:
-                capacity_lines.append(f"{Path(item['path']).name or item['path']}：不可达")
+                capacity_lines.append(
+                    f"{Path(item['path']).name or item['path']}：不可达"
+                )
         forecast = report.get("capacity_forecast", {})
         if forecast.get("warning"):
             days = forecast.get("days_remaining")
@@ -518,7 +549,8 @@ class ProjectDashboardView(RefreshOnShowView):
         self.health_summary_label.setText(
             f"状态：{state}  |  未备份 {issues['unbacked_assets']}  |  失联路径 {issues['missing_assets']}  | "
             f"失败任务 {issues['failed_tasks']}  |  待重试 {issues['retry_files']}\n"
-            f"最后校验：{check_text}" + ("  |  " + "；".join(capacity_lines) if capacity_lines else "")
+            f"最后校验：{check_text}"
+            + ("  |  " + "；".join(capacity_lines) if capacity_lines else "")
         )
         self.capacity_trend.set_snapshots(report.get("capacity_history", []))
 
@@ -544,50 +576,78 @@ class ProjectDashboardView(RefreshOnShowView):
     def _count_assets_with_log(self, project_id: str) -> int:
         """统计已关联 log_id 的 asset 数（用于卡片提示）"""
         try:
-            return self.db_service.get_project_stats(project_id).get("linked_asset_count", 0)
+            return self.db_service.get_project_stats(project_id).get(
+                "linked_asset_count", 0
+            )
         except Exception as e:
             logger.warning(f"统计已关联日志素材失败 project_id={project_id}: {e}")
             return 0
 
-    def _build_sop_hint(self, asset_count: int, backed_up: int,
-                        log_count: int, backup_job_count: int) -> str:
+    def _build_sop_hint(
+        self, asset_count: int, backed_up: int, log_count: int, backup_job_count: int
+    ) -> str:
         """根据当前进度生成 SOP 下一步建议"""
         if not is_enabled("sop_guide"):
             # 个人模式：简化引导，不出现日志/报告等团队流程
-            return self._build_sop_hint_personal(asset_count, backed_up, backup_job_count)
+            return self._build_sop_hint_personal(
+                asset_count, backed_up, backup_job_count
+            )
         if asset_count == 0:
-            return ("① 下一步：去「媒体导入」扫描存储卡并导入素材到当前项目。\n"
-                    "  提示：导入前可先去「数据备份」做存储卡的多目标安全备份。")
+            return (
+                "① 下一步：去「媒体导入」扫描存储卡并导入素材到当前项目。\n"
+                "  提示：导入前可先去「数据备份」做存储卡的多目标安全备份。"
+            )
         if backed_up == 0 and backup_job_count == 0:
-            return ("② 下一步：去「数据备份」做存储卡的安全备份（会自动回写素材的备份位置）。\n"
-                    "  提示：备份时记得在「关联项目」下拉选中当前项目，否则无法回写 backup_locations。")
+            return (
+                "② 下一步：去「数据备份」做存储卡的安全备份（会自动回写素材的备份位置）。\n"
+                "  提示：备份时记得在「关联项目」下拉选中当前项目，否则无法回写 backup_locations。"
+            )
         if backed_up < asset_count:
-            return (f"⚠ 部分素材（{asset_count - backed_up} 个）尚未备份。\n"
-                    "  下一步：去「数据备份」继续备份未覆盖的文件。")
+            return (
+                f"⚠ 部分素材（{asset_count - backed_up} 个）尚未备份。\n"
+                "  下一步：去「数据备份」继续备份未覆盖的文件。"
+            )
         if log_count == 0:
-            return ("③ 下一步：去「拍摄日志」补录场景/镜头/镜次，并关联已导入的素材。\n"
-                    "  提示：可在日志视图用「从代表素材填充 EXIF」自动带出相机/镜头/ISO。")
-        unlinked = asset_count - self._count_assets_with_log(self.selector.get_current_project_id())
+            return (
+                "③ 下一步：去「拍摄日志」补录场景/镜头/镜次，并关联已导入的素材。\n"
+                "  提示：可在日志视图用「从代表素材填充 EXIF」自动带出相机/镜头/ISO。"
+            )
+        unlinked = asset_count - self._count_assets_with_log(
+            self.selector.get_current_project_id()
+        )
         if unlinked > 0:
-            return (f"⚠ 还有 {unlinked} 个素材未关联到任何拍摄日志。\n"
-                    "  下一步：去「拍摄日志」选中日志后点「关联素材」补全关联。")
-        return ("④ 下一步：去「报告生成」生成项目数据管理与 QC 报告。\n"
-                "  完成后可去「素材检索」复核全部数据。")
+            return (
+                f"⚠ 还有 {unlinked} 个素材未关联到任何拍摄日志。\n"
+                "  下一步：去「拍摄日志」选中日志后点「关联素材」补全关联。"
+            )
+        return (
+            "④ 下一步：去「报告生成」生成项目数据管理与 QC 报告。\n"
+            "  完成后可去「素材检索」复核全部数据。"
+        )
 
-    def _build_sop_hint_personal(self, asset_count: int, backed_up: int,
-                                 backup_job_count: int) -> str:
+    def _build_sop_hint_personal(
+        self, asset_count: int, backed_up: int, backup_job_count: int
+    ) -> str:
         """个人模式的简化下一步建议（仅导入 → 备份 → 检索主流程）"""
         if asset_count == 0:
-            return ("① 下一步：去「媒体导入」扫描存储卡并导入素材到当前项目。\n"
-                    "  提示：导入前可先去「数据备份」为存储卡做一次安全备份。")
+            return (
+                "① 下一步：去「媒体导入」扫描存储卡并导入素材到当前项目。\n"
+                "  提示：导入前可先去「数据备份」为存储卡做一次安全备份。"
+            )
         if backed_up == 0 and backup_job_count == 0:
-            return ("② 下一步：去「数据备份」为素材做安全备份（会自动回写备份位置）。\n"
-                    "  提示：备份时记得在「关联项目」下拉选中当前项目。")
+            return (
+                "② 下一步：去「数据备份」为素材做安全备份（会自动回写备份位置）。\n"
+                "  提示：备份时记得在「关联项目」下拉选中当前项目。"
+            )
         if backed_up < asset_count:
-            return (f"⚠ 部分素材（{asset_count - backed_up} 个）尚未备份。\n"
-                    "  下一步：去「数据备份」继续备份未覆盖的文件。")
-        return ("✅ 素材已全部完成备份。\n"
-                "  可在「素材检索」定位素材，或用「RAW提取」「文件重命名」继续整理。")
+            return (
+                f"⚠ 部分素材（{asset_count - backed_up} 个）尚未备份。\n"
+                "  下一步：去「数据备份」继续备份未覆盖的文件。"
+            )
+        return (
+            "✅ 素材已全部完成备份。\n"
+            "  可在「素材检索」定位素材，或用「RAW提取」「文件重命名」继续整理。"
+        )
 
     def _set_guide_enabled(self, enabled: bool):
         for btn in (self.btn_import, self.btn_backup, self.btn_log, self.btn_report):
@@ -608,7 +668,9 @@ class ProjectDashboardView(RefreshOnShowView):
             else:
                 logger.warning(f"_jump_to 找不到 nav_list，view_index={view_index}")
         except Exception as e:
-            logger.error(f"_jump_to 跳转失败 view_index={view_index}: {e}", exc_info=True)
+            logger.error(
+                f"_jump_to 跳转失败 view_index={view_index}: {e}", exc_info=True
+            )
 
     # ===== 项目管理：归档 / 恢复 =====
 
@@ -622,13 +684,18 @@ class ProjectDashboardView(RefreshOnShowView):
             QMessageBox.warning(self, "提示", "已有任务正在运行，请稍候")
             return
 
-        include_files = QMessageBox.question(
-            self, "归档项目",
-            "是否把素材文件一并打包进归档？\n\n"
-            "· 是：归档包自包含（体积大，适合长期保存/交接）\n"
-            "· 否：仅归档项目信息与素材元数据（体积小）",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
-        ) == QMessageBox.Yes
+        include_files = (
+            QMessageBox.question(
+                self,
+                "归档项目",
+                "是否把素材文件一并打包进归档？\n\n"
+                "· 是：归档包自包含（体积大，适合长期保存/交接）\n"
+                "· 否：仅归档项目信息与素材元数据（体积小）",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            == QMessageBox.Yes
+        )
 
         default_name = f"项目归档_{now_local().strftime('%Y%m%d_%H%M%S')}.zip"
         path = pick_save_file(
@@ -637,14 +704,18 @@ class ProjectDashboardView(RefreshOnShowView):
         if not path:
             return
 
-        self._set_task_running(True, f"归档项目（{'含' if include_files else '不含'}素材文件）…")
+        self._set_task_running(
+            True, f"归档项目（{'含' if include_files else '不含'}素材文件）…"
+        )
         self._dashboard_task_kind = "archive"
         self.task_vm.start(
             self.archive_service.archive_project,
             project_id,
             path,
             include_files=include_files,
-            progress_callback=lambda cur, tot, msg: self._archive_progress.emit(cur, tot, msg),
+            progress_callback=lambda cur, tot, msg: self._archive_progress.emit(
+                cur, tot, msg
+            ),
             inject_cancel_check=True,
             task_name="归档项目",
             project_id=project_id,
@@ -655,7 +726,9 @@ class ProjectDashboardView(RefreshOnShowView):
     def _on_archive_finished(self, result):
         self._set_task_running(False)
         QMessageBox.information(
-            self, "归档完成", f"项目已归档到：\n{result}\n\n可随时通过「恢复项目」还原。"
+            self,
+            "归档完成",
+            f"项目已归档到：\n{result}\n\n可随时通过「恢复项目」还原。",
         )
 
     @safe_slot("恢复项目失败")
@@ -686,12 +759,16 @@ class ProjectDashboardView(RefreshOnShowView):
         files_dest = None
         if has_files:
             reply = QMessageBox.question(
-                self, "还原素材文件",
+                self,
+                "还原素材文件",
                 "归档包内包含素材文件，是否一并还原到项目工作目录？",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
             )
             if reply == QMessageBox.Yes:
-                files_dest = pick_directory(self, "选择素材文件还原目录", category="archive_restore")
+                files_dest = pick_directory(
+                    self, "选择素材文件还原目录", category="archive_restore"
+                )
                 if files_dest:
                     restore_files = True
 
@@ -704,7 +781,9 @@ class ProjectDashboardView(RefreshOnShowView):
             restore_files=restore_files,
             files_dest=files_dest,
             verify=restore_files,
-            progress_callback=lambda cur, tot, msg: self._archive_progress.emit(cur, tot, msg),
+            progress_callback=lambda cur, tot, msg: self._archive_progress.emit(
+                cur, tot, msg
+            ),
             inject_cancel_check=True,
             task_name="恢复项目",
             recovery_info={"archive_path": path, "restore_files": restore_files},

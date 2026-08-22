@@ -25,8 +25,9 @@ class WorkspaceDialog(QDialog):
     编辑模式下预填现有值；保存后通过 `get_workspace()` 返回最新对象。
     """
 
-    def __init__(self, parent=None, workspace: Workspace | None = None,
-                 db_service=None):
+    def __init__(
+        self, parent=None, workspace: Workspace | None = None, db_service=None
+    ):
         """
         Args:
             workspace: 为 None 时新建；为 Workspace 实例时编辑现有
@@ -55,7 +56,9 @@ class WorkspaceDialog(QDialog):
         browse_btn = QPushButton("浏览…")
 
         def _browse():
-            d = pick_directory(self, "选择工作区目录", self.path_edit.text(), category="workspace")
+            d = pick_directory(
+                self, "选择工作区目录", self.path_edit.text(), category="workspace"
+            )
             if d:
                 self.path_edit.setText(d)
 
@@ -65,9 +68,7 @@ class WorkspaceDialog(QDialog):
         path_container.setLayout(path_row)
         path_container.layout().setContentsMargins(0, 0, 0, 0)
 
-        self.desc_edit = QLineEdit(
-            workspace.description if is_edit else ""
-        )
+        self.desc_edit = QLineEdit(workspace.description if is_edit else "")
         self.desc_edit.setPlaceholderText("描述（可选）")
 
         form.addRow("名称 *:", self.name_edit)
@@ -97,7 +98,9 @@ class WorkspaceDialog(QDialog):
                 if self._db_service is not None:
                     ok = self._db_service.update_workspace(
                         self._workspace.workspace_id,
-                        name=name, path=path, description=description
+                        name=name,
+                        path=path,
+                        description=description,
                     )
                     if not ok:
                         QMessageBox.warning(self, "提示", "更新失败")
@@ -120,9 +123,12 @@ class WorkspaceDialog(QDialog):
                 else:
                     # 无 db_service 时返回未持久化的临时对象
                     from uuid import uuid4
+
                     self._saved_workspace = Workspace(
                         workspace_id=str(uuid4())[:8],
-                        name=name, path=path, description=description
+                        name=name,
+                        path=path,
+                        description=description,
                     )
             self.accept()
         except Exception as e:

@@ -1,4 +1,5 @@
 """JPG筛选后RAW提取页面"""
+
 from PySide6.QtCore import Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -93,7 +94,9 @@ class RawExtractionView(RefreshOnShowView):
             db_service=self.db_service,
         )
         link_layout.addWidget(self.selector, 1)
-        self.auto_import_check = QCheckBox("提取后自动入库到所选项目（继承原 JPG 的 log_id）")
+        self.auto_import_check = QCheckBox(
+            "提取后自动入库到所选项目（继承原 JPG 的 log_id）"
+        )
         self.auto_import_check.setChecked(True)
         link_layout.addWidget(self.auto_import_check)
         link_layout.addStretch()
@@ -109,7 +112,11 @@ class RawExtractionView(RefreshOnShowView):
         self.jpg_edit.setPlaceholderText("选择筛选后的JPG文件夹...")
         self.jpg_edit.setReadOnly(True)
         jpg_btn = QPushButton("浏览…")
-        jpg_btn.clicked.connect(lambda: self._select_folder(self.jpg_edit, "选择JPG文件夹", category="raw_jpg"))
+        jpg_btn.clicked.connect(
+            lambda: self._select_folder(
+                self.jpg_edit, "选择JPG文件夹", category="raw_jpg"
+            )
+        )
         jpg_row.addWidget(self.jpg_edit, 1)
         jpg_row.addWidget(jpg_btn)
         path_layout.addRow("JPG文件夹:", jpg_row)
@@ -124,7 +131,11 @@ class RawExtractionView(RefreshOnShowView):
             "常见格式：CR2/CR3（佳能）、NEF（尼康）、ARW（索尼）。"
         )
         raw_btn = QPushButton("浏览…")
-        raw_btn.clicked.connect(lambda: self._select_folder(self.raw_edit, "选择RAW源文件夹", category="raw_raw_dir"))
+        raw_btn.clicked.connect(
+            lambda: self._select_folder(
+                self.raw_edit, "选择RAW源文件夹", category="raw_raw_dir"
+            )
+        )
         raw_row.addWidget(self.raw_edit, 1)
         raw_row.addWidget(raw_btn)
         path_layout.addRow("RAW源文件夹:", raw_row)
@@ -135,7 +146,11 @@ class RawExtractionView(RefreshOnShowView):
         self.output_edit.setPlaceholderText("选择RAW输出文件夹...")
         self.output_edit.setReadOnly(True)
         out_btn = QPushButton("浏览…")
-        out_btn.clicked.connect(lambda: self._select_folder(self.output_edit, "选择输出文件夹", category="raw_output"))
+        out_btn.clicked.connect(
+            lambda: self._select_folder(
+                self.output_edit, "选择输出文件夹", category="raw_output"
+            )
+        )
         out_row.addWidget(self.output_edit, 1)
         out_row.addWidget(out_btn)
         path_layout.addRow("输出文件夹:", out_row)
@@ -183,10 +198,17 @@ class RawExtractionView(RefreshOnShowView):
         self.result_table = make_table(["JPG文件", "匹配RAW", "状态"])
         self.result_table.setMinimumHeight(120)
         result_layout.addWidget(self.result_table)
-        attach_empty_state(self.result_table, "🔍", "暂无匹配结果", "选择 JPG 和 RAW 目录后点击「扫描匹配」")
+        attach_empty_state(
+            self.result_table,
+            "🔍",
+            "暂无匹配结果",
+            "选择 JPG 和 RAW 目录后点击「扫描匹配」",
+        )
 
         self.match_label = QLabel("")
-        self.match_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        self.match_label.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+        )
         result_layout.addWidget(self.match_label)
 
         # 下段容器
@@ -248,10 +270,13 @@ class RawExtractionView(RefreshOnShowView):
                 f"共 {len(matches)} 个JPG文件，成功匹配 {matched_count} 个RAW文件"
             )
             self.extract_btn.setEnabled(matched_count > 0)
-            self.status_label.setText(f"扫描完成: {matched_count}/{len(matches)} 匹配成功")
+            self.status_label.setText(
+                f"扫描完成: {matched_count}/{len(matches)} 匹配成功"
+            )
 
         except Exception as e:
             import traceback
+
             show_error(
                 title="扫描错误",
                 description=str(e),
@@ -275,9 +300,11 @@ class RawExtractionView(RefreshOnShowView):
                     names = next(iter(conflicts.values()))
                     preview = "、".join(names[:5]) + ("…" if len(names) > 5 else "")
                     reply = QMessageBox.question(
-                        self, "存在同名 RAW 文件",
+                        self,
+                        "存在同名 RAW 文件",
                         f"输出目录中已存在 {len(names)} 个同名 RAW 文件，继续提取将覆盖：\n\n  · {preview}\n\n是否继续？",
-                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No,
                     )
                     if reply != QMessageBox.Yes:
                         self.status_label.setText("已取消：输出目录存在同名 RAW 文件")
@@ -299,7 +326,11 @@ class RawExtractionView(RefreshOnShowView):
             progress_callback=lambda c, t, m: self._progress_sig.emit(c, t, m),
             task_name="RAW 提取",
             project_id=self.selector.get_current_project_id(),
-            recovery_info={"jpg_path": self.jpg_edit.text(), "raw_path": self.raw_edit.text(), "output_path": output},
+            recovery_info={
+                "jpg_path": self.jpg_edit.text(),
+                "raw_path": self.raw_edit.text(),
+                "output_path": output,
+            },
         )
         self.status_label.setText("正在提取RAW文件...")
 
@@ -323,9 +354,9 @@ class RawExtractionView(RefreshOnShowView):
         self.cancel_btn.setEnabled(False)
         self.progress_bar.setValue(100)
 
-        success = result['extracted']
-        not_found = result['not_found']
-        failed = result['failed']
+        success = result["extracted"]
+        not_found = result["not_found"]
+        failed = result["failed"]
 
         status_text = f"✅ 提取完成: 成功 {success} 个"
         if not_found > 0:
@@ -342,23 +373,27 @@ class RawExtractionView(RefreshOnShowView):
         log_inherited = 0
         if auto_import and success > 0:
             try:
-                imported_count, log_inherited = self._auto_import_extracted(result, project_id)
+                imported_count, log_inherited = self._auto_import_extracted(
+                    result, project_id
+                )
                 if imported_count > 0:
                     self.status_label.setText(
-                        status_text + f"，已入库 {imported_count} 个（{log_inherited} 个继承 log_id）"
+                        status_text
+                        + f"，已入库 {imported_count} 个（{log_inherited} 个继承 log_id）"
                     )
             except Exception as e:
                 logger.error(f"RAW 提取后自动入库失败: {e}", exc_info=True)
                 QMessageBox.warning(
-                    self, "自动入库失败",
+                    self,
+                    "自动入库失败",
                     f"RAW 文件已提取到输出目录，但自动入库失败：\n{e}\n"
-                    "可稍后到「媒体导入」视图手动入库。"
+                    "可稍后到「媒体导入」视图手动入库。",
                 )
 
         details = []
         if failed > 0:
-            for item in result['details']:
-                if item['status'] == 'failed':
+            for item in result["details"]:
+                if item["status"] == "failed":
                     details.append(f"- {item['raw']}: {item.get('error', '未知错误')}")
 
         msg_text = f"RAW文件提取完成！\n\n成功: {success} 个\n未找到: {not_found} 个\n失败: {failed} 个"
@@ -404,6 +439,7 @@ class RawExtractionView(RefreshOnShowView):
             try:
                 # 通过公开方法查 JPG 关联的 log_id（不再穿透到 _get_conn 私有方法）
                 from pathlib import Path as _P
+
                 log_id = self.db_service.get_asset_log_id_by_path(jpg_path)
                 stem_to_log_id[normalize_name_key(_P(jpg_path).stem)] = log_id
             except Exception as e:
@@ -420,6 +456,7 @@ class RawExtractionView(RefreshOnShowView):
 
         # 按 stem 分组（同 stem 共享 log_id）
         from pathlib import Path as _P
+
         file_log_pairs = []
         for fp in output_files:
             stem = normalize_name_key(_P(fp).stem)
@@ -430,6 +467,7 @@ class RawExtractionView(RefreshOnShowView):
         log_inherited = 0
         # 按 log_id 分批导入（import_assets 接受单一 log_id，所以分组）
         from collections import defaultdict
+
         groups = defaultdict(list)
         for fp, lid in file_log_pairs:
             groups[lid].append(fp)

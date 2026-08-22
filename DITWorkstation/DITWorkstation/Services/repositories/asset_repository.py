@@ -1,4 +1,5 @@
 """Read-side media asset persistence operations."""
+
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -24,19 +25,41 @@ class AssetRepository(BaseRepository):
     @staticmethod
     def _asset_values(asset: MediaAsset) -> tuple:
         return (
-            asset.asset_id, asset.project_id, asset.file_path, asset.file_name,
-            asset.file_size, asset.file_type, asset.asset_type,
-            asset.checksum_algorithm, asset.checksum_value, asset.scene, asset.shot,
-            asset.take, asset.date_imported.isoformat(),
+            asset.asset_id,
+            asset.project_id,
+            asset.file_path,
+            asset.file_name,
+            asset.file_size,
+            asset.file_type,
+            asset.asset_type,
+            asset.checksum_algorithm,
+            asset.checksum_value,
+            asset.scene,
+            asset.shot,
+            asset.take,
+            asset.date_imported.isoformat(),
             asset.date_taken.isoformat() if asset.date_taken else None,
-            asset.camera_make, asset.camera_model, "|".join(asset.backup_locations),
-            asset.log_id, 1 if asset.is_working_copy else 0, asset.original_path,
-            asset.width, asset.height, asset.duration_seconds, asset.lens_model,
-            asset.focal_length, asset.video_metadata, asset.rating, asset.tags, asset.notes,
+            asset.camera_make,
+            asset.camera_model,
+            "|".join(asset.backup_locations),
+            asset.log_id,
+            1 if asset.is_working_copy else 0,
+            asset.original_path,
+            asset.width,
+            asset.height,
+            asset.duration_seconds,
+            asset.lens_model,
+            asset.focal_length,
+            asset.video_metadata,
+            asset.rating,
+            asset.tags,
+            asset.notes,
         )
 
     @staticmethod
-    def _normalize_datetime_bound(value: str | None, *, upper: bool = False) -> str | None:
+    def _normalize_datetime_bound(
+        value: str | None, *, upper: bool = False
+    ) -> str | None:
         """Normalize UI date bounds to the ISO format stored in SQLite."""
         if not value:
             return value
@@ -63,8 +86,13 @@ class AssetRepository(BaseRepository):
             self._insert_asset(conn, asset)
             self.sync_tags(conn, asset.asset_id, asset.tags)
             self._database._sync_asset_fts(
-                conn, asset.asset_id, file_name=asset.file_name, scene=asset.scene,
-                shot=asset.shot, notes=asset.notes, tags=asset.tags,
+                conn,
+                asset.asset_id,
+                file_name=asset.file_name,
+                scene=asset.scene,
+                shot=asset.shot,
+                notes=asset.notes,
+                tags=asset.tags,
             )
             logger.info(f"添加素材资产: {asset.asset_id} - {asset.file_name}")
         return asset
@@ -89,8 +117,13 @@ class AssetRepository(BaseRepository):
                     )
                 for asset in assets:
                     self._database._sync_asset_fts(
-                        conn, asset.asset_id, file_name=asset.file_name, scene=asset.scene,
-                        shot=asset.shot, notes=asset.notes, tags=asset.tags,
+                        conn,
+                        asset.asset_id,
+                        file_name=asset.file_name,
+                        scene=asset.scene,
+                        shot=asset.shot,
+                        notes=asset.notes,
+                        tags=asset.tags,
                     )
                 logger.info(f"批量添加素材资产: {len(assets)} 个")
                 return len(assets)
@@ -100,8 +133,12 @@ class AssetRepository(BaseRepository):
 
     def update_result(self, asset_id: str, **kwargs) -> OperationResult:
         sql, params = build_update_clause(
-            MEDIA_ASSET_FIELDS, "media_assets", "asset_id", asset_id,
-            touch_updated_at=False, **kwargs,
+            MEDIA_ASSET_FIELDS,
+            "media_assets",
+            "asset_id",
+            asset_id,
+            touch_updated_at=False,
+            **kwargs,
         )
         if not sql:
             return OperationResult(OperationStatus.INVALID, "没有可更新的素材字段")
@@ -111,13 +148,19 @@ class AssetRepository(BaseRepository):
                     "SELECT 1 FROM media_assets WHERE asset_id = ?", (asset_id,)
                 ).fetchone()
                 if exists is None:
-                    return OperationResult(OperationStatus.NOT_FOUND, f"素材不存在: {asset_id}")
+                    return OperationResult(
+                        OperationStatus.NOT_FOUND, f"素材不存在: {asset_id}"
+                    )
                 conn.execute(sql, params)
                 if "tags" in kwargs:
                     self.sync_tags(conn, asset_id, kwargs.get("tags") or "")
                 self._database._refresh_asset_fts(conn, asset_id)
                 self._database._record_operation_in_transaction(
-                    conn, "更新素材", project_id=None, object_type="asset", object_id=asset_id,
+                    conn,
+                    "更新素材",
+                    project_id=None,
+                    object_type="asset",
+                    object_id=asset_id,
                 )
             return OperationResult(OperationStatus.SUCCESS, affected_count=1)
         except sqlite3.Error as exc:
@@ -153,11 +196,16 @@ class AssetRepository(BaseRepository):
                     placeholders = ", ".join("?" for _ in chunk)
                     if self._database._fts_available:
                         conn.execute(
-                            f"DELETE FROM media_assets_fts WHERE asset_id IN ({placeholders})", chunk
+                            f"DELETE FROM media_assets_fts WHERE asset_id IN ({placeholders})",
+                            chunk,
                         )
-                    conn.execute(f"DELETE FROM asset_tags WHERE asset_id IN ({placeholders})", chunk)
+                    conn.execute(
+                        f"DELETE FROM asset_tags WHERE asset_id IN ({placeholders})",
+                        chunk,
+                    )
                     cursor = conn.execute(
-                        f"DELETE FROM media_assets WHERE asset_id IN ({placeholders})", chunk
+                        f"DELETE FROM media_assets WHERE asset_id IN ({placeholders})",
+                        chunk,
                     )
                     deleted += max(cursor.rowcount, 0)
         except sqlite3.Error as exc:
@@ -167,20 +215,33 @@ class AssetRepository(BaseRepository):
         return deleted
 
     def snapshot(self, conn, row: sqlite3.Row) -> dict:
-        tags = [item["tag"] for item in conn.execute(
-            "SELECT tag FROM asset_tags WHERE asset_id = ? ORDER BY tag", (row["asset_id"],)
-        )]
+        tags = [
+            item["tag"]
+            for item in conn.execute(
+                "SELECT tag FROM asset_tags WHERE asset_id = ? ORDER BY tag",
+                (row["asset_id"],),
+            )
+        ]
         return {"asset": dict(row), "tags": tags}
 
     def delete_rows(self, conn, asset_ids: list[str]) -> None:
         for chunk in self._chunks(asset_ids):
             placeholders = ", ".join("?" for _ in chunk)
             if self._database._fts_available:
-                conn.execute(f"DELETE FROM media_assets_fts WHERE asset_id IN ({placeholders})", chunk)
-            conn.execute(f"DELETE FROM asset_tags WHERE asset_id IN ({placeholders})", chunk)
-            conn.execute(f"DELETE FROM media_assets WHERE asset_id IN ({placeholders})", chunk)
+                conn.execute(
+                    f"DELETE FROM media_assets_fts WHERE asset_id IN ({placeholders})",
+                    chunk,
+                )
+            conn.execute(
+                f"DELETE FROM asset_tags WHERE asset_id IN ({placeholders})", chunk
+            )
+            conn.execute(
+                f"DELETE FROM media_assets WHERE asset_id IN ({placeholders})", chunk
+            )
 
-    def delete_result(self, asset_ids: list[str], retention_days: int = 30) -> OperationResult:
+    def delete_result(
+        self, asset_ids: list[str], retention_days: int = 30
+    ) -> OperationResult:
         """Soft-delete assets, preserving recovery snapshots in the caller's transaction domain."""
         unique_ids = list(dict.fromkeys(asset_id for asset_id in asset_ids if asset_id))
         if not unique_ids:
@@ -190,25 +251,41 @@ class AssetRepository(BaseRepository):
                 rows = []
                 for chunk in self._chunks(unique_ids):
                     placeholders = ", ".join("?" for _ in chunk)
-                    rows.extend(conn.execute(
-                        f"SELECT * FROM media_assets WHERE asset_id IN ({placeholders})", chunk
-                    ).fetchall())
+                    rows.extend(
+                        conn.execute(
+                            f"SELECT * FROM media_assets WHERE asset_id IN ({placeholders})",
+                            chunk,
+                        ).fetchall()
+                    )
                 if not rows:
                     return OperationResult(OperationStatus.NOT_FOUND, "素材不存在")
                 recovery_ids = []
                 for row in rows:
-                    recovery_ids.append(self._database._store_recycle_snapshot(
-                        conn, "asset", row["asset_id"], row["project_id"],
-                        self.snapshot(conn, row), retention_days,
-                    ))
+                    recovery_ids.append(
+                        self._database._store_recycle_snapshot(
+                            conn,
+                            "asset",
+                            row["asset_id"],
+                            row["project_id"],
+                            self.snapshot(conn, row),
+                            retention_days,
+                        )
+                    )
                 self.delete_rows(conn, [row["asset_id"] for row in rows])
                 for row, recovery_id in zip(rows, recovery_ids):
                     self._database._record_operation_in_transaction(
-                        conn, "删除素材", "素材记录已移入回收站", row["project_id"],
-                        object_type="asset", object_id=row["asset_id"], recovery_id=recovery_id,
+                        conn,
+                        "删除素材",
+                        "素材记录已移入回收站",
+                        row["project_id"],
+                        object_type="asset",
+                        object_id=row["asset_id"],
+                        recovery_id=recovery_id,
                     )
             return OperationResult(
-                OperationStatus.SUCCESS, affected_count=len(rows), recovery_id=recovery_ids[0],
+                OperationStatus.SUCCESS,
+                affected_count=len(rows),
+                recovery_id=recovery_ids[0],
                 value=recovery_ids,
             )
         except sqlite3.Error as exc:
@@ -216,34 +293,49 @@ class AssetRepository(BaseRepository):
             return OperationResult(OperationStatus.ERROR, str(exc))
 
     def relink_result(
-        self, project_id: str, updates: list[tuple[str, str, str, int]],
+        self,
+        project_id: str,
+        updates: list[tuple[str, str, str, int]],
     ) -> OperationResult:
         """Atomically apply validated relink paths and record the associated audit entries."""
         if not updates:
             return OperationResult(OperationStatus.INVALID, "没有重新链接更新")
         try:
             with self._transaction() as conn:
-                if conn.execute(
-                    "SELECT 1 FROM projects WHERE project_id = ?", (project_id,)
-                ).fetchone() is None:
-                    return OperationResult(OperationStatus.NOT_FOUND, f"项目不存在: {project_id}")
+                if (
+                    conn.execute(
+                        "SELECT 1 FROM projects WHERE project_id = ?", (project_id,)
+                    ).fetchone()
+                    is None
+                ):
+                    return OperationResult(
+                        OperationStatus.NOT_FOUND, f"项目不存在: {project_id}"
+                    )
                 seen_paths = set()
                 for asset_id, new_path, _name, _size in updates:
                     if new_path in seen_paths:
-                        return OperationResult(OperationStatus.CONFLICT, f"多个素材选择了同一路径: {new_path}")
+                        return OperationResult(
+                            OperationStatus.CONFLICT,
+                            f"多个素材选择了同一路径: {new_path}",
+                        )
                     seen_paths.add(new_path)
                     row = conn.execute(
                         "SELECT asset_id FROM media_assets WHERE asset_id = ? AND project_id = ?",
                         (asset_id, project_id),
                     ).fetchone()
                     if row is None:
-                        return OperationResult(OperationStatus.NOT_FOUND, f"素材不存在或不属于项目: {asset_id}")
+                        return OperationResult(
+                            OperationStatus.NOT_FOUND,
+                            f"素材不存在或不属于项目: {asset_id}",
+                        )
                     conflict = conn.execute(
                         "SELECT asset_id FROM media_assets WHERE project_id = ? AND file_path = ? AND asset_id != ?",
                         (project_id, new_path, asset_id),
                     ).fetchone()
                     if conflict is not None:
-                        return OperationResult(OperationStatus.CONFLICT, f"路径已关联其他素材: {new_path}")
+                        return OperationResult(
+                            OperationStatus.CONFLICT, f"路径已关联其他素材: {new_path}"
+                        )
                 for asset_id, new_path, name, size in updates:
                     conn.execute(
                         "UPDATE media_assets SET file_path = ?, file_name = ?, file_size = ? WHERE asset_id = ?",
@@ -251,8 +343,12 @@ class AssetRepository(BaseRepository):
                     )
                     self._database._refresh_asset_fts(conn, asset_id)
                     self._database._record_operation_in_transaction(
-                        conn, "重新链接素材", new_path, project_id,
-                        object_type="asset", object_id=asset_id,
+                        conn,
+                        "重新链接素材",
+                        new_path,
+                        project_id,
+                        object_type="asset",
+                        object_id=asset_id,
                     )
             return OperationResult(OperationStatus.SUCCESS, affected_count=len(updates))
         except sqlite3.Error as exc:
@@ -260,7 +356,10 @@ class AssetRepository(BaseRepository):
             return OperationResult(OperationStatus.ERROR, str(exc))
 
     def list_all(
-        self, project_id: str, limit: int | None = None, offset: int | None = None,
+        self,
+        project_id: str,
+        limit: int | None = None,
+        offset: int | None = None,
     ) -> list[MediaAsset]:
         query = (
             "SELECT * FROM media_assets WHERE project_id = ? "
@@ -282,7 +381,8 @@ class AssetRepository(BaseRepository):
         with self._connection() as conn:
             cursor = conn.execute(
                 "SELECT * FROM media_assets WHERE project_id = ? "
-                "ORDER BY date_imported DESC, asset_id DESC", (project_id,)
+                "ORDER BY date_imported DESC, asset_id DESC",
+                (project_id,),
             )
             while True:
                 rows = cursor.fetchmany(max(1, batch_size))
@@ -298,14 +398,19 @@ class AssetRepository(BaseRepository):
             ).fetchone()[0]
 
     def capture_timeline(
-        self, project_id: str | None = None, *, granularity: str = "day", limit: int = 366,
+        self,
+        project_id: str | None = None,
+        *,
+        granularity: str = "day",
+        limit: int = 366,
     ) -> list[dict]:
         """按拍摄日期聚合素材，返回轻量时间线记录而非完整素材对象。"""
         if granularity not in {"day", "week"}:
             raise ValueError("时间线粒度必须是 day 或 week")
         limit = max(1, min(int(limit), 2000))
         period_sql = (
-            "substr(date_taken, 1, 10)" if granularity == "day"
+            "substr(date_taken, 1, 10)"
+            if granularity == "day"
             else "strftime('%Y-W%W', date_taken)"
         )
         where = "WHERE date_taken IS NOT NULL AND date_taken != ''"
@@ -325,7 +430,9 @@ class AssetRepository(BaseRepository):
         return [dict(row) for row in rows]
 
     def get_page(
-        self, project_id: str, page_size: int = 500,
+        self,
+        project_id: str,
+        page_size: int = 500,
         cursor: tuple[str, str] | None = None,
     ) -> tuple[list[MediaAsset], tuple[str, str] | None]:
         """Return a keyset page ordered by ``date_imported, asset_id`` descending."""
@@ -356,7 +463,8 @@ class AssetRepository(BaseRepository):
 
     def missing_file_ids(self, project_id: str) -> list[str]:
         return [
-            asset.asset_id for asset in self.iter_project(project_id)
+            asset.asset_id
+            for asset in self.iter_project(project_id)
             if not asset.file_path or not Path(asset.file_path).exists()
         ]
 
@@ -387,7 +495,8 @@ class AssetRepository(BaseRepository):
     def log_id_by_path(self, file_path: str) -> str | None:
         with self._connection() as conn:
             row = conn.execute(
-                "SELECT log_id FROM media_assets WHERE file_path = ?", (normalize_path(file_path),)
+                "SELECT log_id FROM media_assets WHERE file_path = ?",
+                (normalize_path(file_path),),
             ).fetchone()
         return row["log_id"] if row else None
 
@@ -417,15 +526,19 @@ class AssetRepository(BaseRepository):
                        ORDER BY project_id, date_imported""",
                     (group["checksum_value"], group["checksum_algorithm"]),
                 ).fetchall()
-                results.append({
-                    "checksum_value": group["checksum_value"],
-                    "algorithm": group["checksum_algorithm"],
-                    "count": group["c"],
-                    "assets": [self._row_to_asset(row) for row in rows],
-                })
+                results.append(
+                    {
+                        "checksum_value": group["checksum_value"],
+                        "algorithm": group["checksum_algorithm"],
+                        "count": group["c"],
+                        "assets": [self._row_to_asset(row) for row in rows],
+                    }
+                )
         return results
 
-    def update_path(self, asset_id: str, new_path: str, new_name: str | None = None) -> bool:
+    def update_path(
+        self, asset_id: str, new_path: str, new_name: str | None = None
+    ) -> bool:
         try:
             with self._transaction() as conn:
                 if new_name:
@@ -434,7 +547,10 @@ class AssetRepository(BaseRepository):
                         (new_path, new_name, asset_id),
                     )
                 else:
-                    conn.execute("UPDATE media_assets SET file_path = ? WHERE asset_id = ?", (new_path, asset_id))
+                    conn.execute(
+                        "UPDATE media_assets SET file_path = ? WHERE asset_id = ?",
+                        (new_path, asset_id),
+                    )
                 self._database._refresh_asset_fts(conn, asset_id)
                 logger.info(f"更新素材路径: {asset_id}")
             return True
@@ -443,7 +559,10 @@ class AssetRepository(BaseRepository):
             return False
 
     def update_path_by_old_path(
-        self, old_path: str, new_path: str, new_name: str | None = None,
+        self,
+        old_path: str,
+        new_path: str,
+        new_name: str | None = None,
     ) -> bool:
         old_key, new_key = normalize_path(old_path), normalize_path(new_path)
         try:
@@ -471,12 +590,19 @@ class AssetRepository(BaseRepository):
             return False
 
     def _filter_clause(
-        self, project_id: str | None = None, scene: str | None = None,
-        shot: str | None = None, file_type: str | None = None,
-        date_from: str | None = None, date_to: str | None = None,
-        keyword: str | None = None, log_id: str | None = None,
-        rating: int | None = None, tag: str | None = None,
-        taken_from: str | None = None, taken_to: str | None = None,
+        self,
+        project_id: str | None = None,
+        scene: str | None = None,
+        shot: str | None = None,
+        file_type: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        keyword: str | None = None,
+        log_id: str | None = None,
+        rating: int | None = None,
+        tag: str | None = None,
+        taken_from: str | None = None,
+        taken_to: str | None = None,
     ) -> tuple[str, list]:
         query, params = " WHERE 1=1", []
         if project_id:
@@ -505,7 +631,9 @@ class AssetRepository(BaseRepository):
             params.append(self._normalize_datetime_bound(taken_to, upper=True))
         fts_keyword = self._database._fts_query(keyword or "")
         if keyword and not (self._database._fts_available and fts_keyword):
-            query += " AND (file_name LIKE ? OR scene LIKE ? OR shot LIKE ? OR notes LIKE ?)"
+            query += (
+                " AND (file_name LIKE ? OR scene LIKE ? OR shot LIKE ? OR notes LIKE ?)"
+            )
             params.extend([f"%{keyword}%"] * 4)
         if log_id:
             query += " AND log_id = ?"
@@ -514,8 +642,10 @@ class AssetRepository(BaseRepository):
             query += " AND rating >= ?"
             params.append(rating)
         if tag:
-            query += (" AND EXISTS (SELECT 1 FROM asset_tags WHERE "
-                      "asset_id = media_assets.asset_id AND tag LIKE ? COLLATE NOCASE)")
+            query += (
+                " AND EXISTS (SELECT 1 FROM asset_tags WHERE "
+                "asset_id = media_assets.asset_id AND tag LIKE ? COLLATE NOCASE)"
+            )
             params.append(f"%{tag}%")
         return query, params
 
@@ -531,12 +661,20 @@ class AssetRepository(BaseRepository):
             params.append(fts_keyword)
         return where_sql, params
 
-    def iter_search(self, *, batch_size: int = 500,
-                    cursor: tuple[str, str] | None = None,
-                    limit: int | None = None, offset: int | None = None, **filters):
+    def iter_search(
+        self,
+        *,
+        batch_size: int = 500,
+        cursor: tuple[str, str] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+        **filters,
+    ):
         where_sql, params = self._search_sql(**filters)
         if cursor:
-            where_sql += " AND (date_imported < ? OR (date_imported = ? AND asset_id < ?))"
+            where_sql += (
+                " AND (date_imported < ? OR (date_imported = ? AND asset_id < ?))"
+            )
             params.extend([cursor[0], cursor[0], cursor[1]])
         query = f"SELECT * FROM media_assets{where_sql} ORDER BY date_imported DESC, asset_id DESC"
         if limit is not None and limit > 0:
@@ -554,15 +692,28 @@ class AssetRepository(BaseRepository):
                 yield from (self._row_to_asset(row) for row in rows)
 
     def get_search_page(
-        self, *, page_size: int = 500, cursor: tuple[str, str] | None = None, **filters,
+        self,
+        *,
+        page_size: int = 500,
+        cursor: tuple[str, str] | None = None,
+        **filters,
     ) -> tuple[list[MediaAsset], tuple[str, str] | None]:
         page_size = max(1, page_size)
-        rows = list(self.iter_search(
-            **filters, cursor=cursor, limit=page_size + 1, batch_size=page_size + 1,
-        ))
+        rows = list(
+            self.iter_search(
+                **filters,
+                cursor=cursor,
+                limit=page_size + 1,
+                batch_size=page_size + 1,
+            )
+        )
         has_next = len(rows) > page_size
         rows = rows[:page_size]
-        next_cursor = (rows[-1].date_imported.isoformat(), rows[-1].asset_id) if has_next and rows else None
+        next_cursor = (
+            (rows[-1].date_imported.isoformat(), rows[-1].asset_id)
+            if has_next and rows
+            else None
+        )
         return rows, next_cursor
 
     def search(self, **filters) -> list[MediaAsset]:
@@ -571,7 +722,9 @@ class AssetRepository(BaseRepository):
     def count(self, **filters) -> int:
         where_sql, params = self._search_sql(**filters)
         with self._connection() as conn:
-            return conn.execute(f"SELECT COUNT(*) FROM media_assets{where_sql}", params).fetchone()[0]
+            return conn.execute(
+                f"SELECT COUNT(*) FROM media_assets{where_sql}", params
+            ).fetchone()[0]
 
     def all_tags(self) -> list[str]:
         with self._connection() as conn:
@@ -592,7 +745,10 @@ class AssetRepository(BaseRepository):
                         (asset_id,),
                     )
                 else:
-                    conn.execute("UPDATE media_assets SET log_id = ? WHERE asset_id = ?", (log_id, asset_id))
+                    conn.execute(
+                        "UPDATE media_assets SET log_id = ? WHERE asset_id = ?",
+                        (log_id, asset_id),
+                    )
                 logger.info(f"更新素材日志关联: {asset_id} -> {log_id or 'None'}")
             return True
         except sqlite3.Error as exc:
@@ -600,7 +756,10 @@ class AssetRepository(BaseRepository):
             return False
 
     def add_backup_locations(
-        self, file_paths: list[str], target_path: str, project_id: str | None = None,
+        self,
+        file_paths: list[str],
+        target_path: str,
+        project_id: str | None = None,
     ) -> int:
         if not file_paths or not target_path:
             return 0
@@ -610,7 +769,10 @@ class AssetRepository(BaseRepository):
                 rows_by_path = {}
                 for chunk in self._chunks(keys):
                     placeholders = ",".join("?" * len(chunk))
-                    query = "SELECT asset_id, file_path, backup_locations FROM media_assets " + f"WHERE file_path IN ({placeholders})"
+                    query = (
+                        "SELECT asset_id, file_path, backup_locations FROM media_assets "
+                        + f"WHERE file_path IN ({placeholders})"
+                    )
                     params = (*chunk, project_id) if project_id else chunk
                     if project_id:
                         query += " AND project_id = ?"
@@ -621,7 +783,11 @@ class AssetRepository(BaseRepository):
                     row = rows_by_path.get(path)
                     if not row:
                         continue
-                    locations = [item for item in (row["backup_locations"] or "").split("|") if item]
+                    locations = [
+                        item
+                        for item in (row["backup_locations"] or "").split("|")
+                        if item
+                    ]
                     if target_path in locations:
                         continue
                     conn.execute(
@@ -630,7 +796,9 @@ class AssetRepository(BaseRepository):
                     )
                     updated += 1
             if updated:
-                logger.info(f"批量回写 backup_locations: {updated} 个 asset += {target_path}")
+                logger.info(
+                    f"批量回写 backup_locations: {updated} 个 asset += {target_path}"
+                )
             return updated
         except sqlite3.Error as exc:
             logger.error(f"批量回写 backup_locations 失败: {exc}")
@@ -639,7 +807,7 @@ class AssetRepository(BaseRepository):
     @staticmethod
     def _chunks(asset_ids: list[str], size: int = 500):
         for offset in range(0, len(asset_ids), size):
-            yield asset_ids[offset:offset + size]
+            yield asset_ids[offset : offset + size]
 
     @staticmethod
     def _row_to_asset(row: sqlite3.Row) -> MediaAsset:
@@ -657,19 +825,29 @@ class AssetRepository(BaseRepository):
             shot=row["shot"],
             take=row["take"],
             date_imported=datetime.fromisoformat(row["date_imported"]),
-            date_taken=datetime.fromisoformat(row["date_taken"]) if row["date_taken"] else None,
+            date_taken=datetime.fromisoformat(row["date_taken"])
+            if row["date_taken"]
+            else None,
             camera_make=row["camera_make"],
             camera_model=row["camera_model"],
-            backup_locations=row["backup_locations"].split("|") if row["backup_locations"] else [],
+            backup_locations=row["backup_locations"].split("|")
+            if row["backup_locations"]
+            else [],
             log_id=row["log_id"],
-            is_working_copy=bool(row["is_working_copy"]) if "is_working_copy" in row.keys() else False,
+            is_working_copy=bool(row["is_working_copy"])
+            if "is_working_copy" in row.keys()
+            else False,
             original_path=row["original_path"] if "original_path" in row.keys() else "",
             width=row["width"] if "width" in row.keys() else 0,
             height=row["height"] if "height" in row.keys() else 0,
-            duration_seconds=row["duration_seconds"] if "duration_seconds" in row.keys() else 0.0,
+            duration_seconds=row["duration_seconds"]
+            if "duration_seconds" in row.keys()
+            else 0.0,
             lens_model=row["lens_model"] if "lens_model" in row.keys() else "",
             focal_length=row["focal_length"] if "focal_length" in row.keys() else "",
-            video_metadata=row["video_metadata"] if "video_metadata" in row.keys() else "",
+            video_metadata=row["video_metadata"]
+            if "video_metadata" in row.keys()
+            else "",
             rating=row["rating"] if "rating" in row.keys() else 0,
             tags=row["tags"] if "tags" in row.keys() else "",
             notes=row["notes"] if "notes" in row.keys() else "",

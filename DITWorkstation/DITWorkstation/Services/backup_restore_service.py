@@ -8,6 +8,7 @@ DIT 片场常见收尾动作：把已备份到存储盘上的素材按校验和/
 - 冲突策略：目标已存在同名文件且校验一致 → 跳过；不一致 → 记入 conflicts；
 - 全程迭代处理，不把全部素材加载进内存。
 """
+
 import shutil
 from pathlib import Path
 
@@ -39,6 +40,7 @@ class BackupRestoreService:
         # 懒注入：避免 import 循环
         if backup_service is None:
             from DITWorkstation.Services.backup_service import BackupService
+
             backup_service = BackupService(db_service=db_service)
         self.backup_service = backup_service
         self.checksum_service = checksum_service or get_checksum_service()
@@ -71,9 +73,15 @@ class BackupRestoreService:
         try:
             dest_root.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            return {"restored": 0, "skipped": 0, "verification_failed": 0,
-                    "missing": 0, "conflicts": [], "errors": [str(exc)],
-                    "cancelled": False}
+            return {
+                "restored": 0,
+                "skipped": 0,
+                "verification_failed": 0,
+                "missing": 0,
+                "conflicts": [],
+                "errors": [str(exc)],
+                "cancelled": False,
+            }
 
         assets = list(self.db_service.iter_project_assets(project_id))
         # 待恢复素材：至少有一个有效备份位置
@@ -84,8 +92,15 @@ class BackupRestoreService:
         jobs = self.db_service.get_backup_jobs(project_id)
         loc_meta = self._build_location_meta(jobs)
 
-        stats = {"restored": 0, "skipped": 0, "verification_failed": 0,
-                 "missing": 0, "conflicts": [], "errors": [], "cancelled": False}
+        stats = {
+            "restored": 0,
+            "skipped": 0,
+            "verification_failed": 0,
+            "missing": 0,
+            "conflicts": [],
+            "errors": [],
+            "cancelled": False,
+        }
 
         for i, asset in enumerate(pending):
             if cancel_check and cancel_check():
@@ -94,8 +109,11 @@ class BackupRestoreService:
             if progress_callback:
                 progress_callback(i, total, f"恢复: {asset.file_name}")
 
-            locations = [loc for loc in asset.backup_locations
-                         if not source_locations or loc in source_locations]
+            locations = [
+                loc
+                for loc in asset.backup_locations
+                if not source_locations or loc in source_locations
+            ]
             if not locations:
                 continue
 
@@ -149,7 +167,9 @@ class BackupRestoreService:
                 loc = target.get("path")
                 if not loc:
                     continue
-                entry = meta.setdefault(loc, {"source_path": job.get("source_path"), "snapshots": {}})
+                entry = meta.setdefault(
+                    loc, {"source_path": job.get("source_path"), "snapshots": {}}
+                )
                 for item in job.get("file_snapshots", []):
                     sp = item.get("path")
                     rel = item.get("relative")
@@ -197,7 +217,9 @@ class BackupRestoreService:
                 return None
         return None
 
-    def _restore_one(self, asset, src: Path, dest: Path, verify: bool) -> tuple[bool, str]:
+    def _restore_one(
+        self, asset, src: Path, dest: Path, verify: bool
+    ) -> tuple[bool, str]:
         """恢复单个文件。返回 (成功, 原因)：
         restored / skipped（已存在且一致）/ conflict / verify_failed
         """
@@ -208,7 +230,9 @@ class BackupRestoreService:
                     algo = ChecksumAlgorithm(asset.checksum_algorithm)
                 except ValueError:
                     algo = ChecksumAlgorithm.XXHASH64
-                existing_hash = self.checksum_service.compute_file_checksum(str(dest), algo).hash_value
+                existing_hash = self.checksum_service.compute_file_checksum(
+                    str(dest), algo
+                ).hash_value
                 if existing_hash == asset.checksum_value:
                     return True, "skipped"
                 return False, "conflict"
@@ -222,7 +246,9 @@ class BackupRestoreService:
                 algo = ChecksumAlgorithm(asset.checksum_algorithm)
             except ValueError:
                 algo = ChecksumAlgorithm.XXHASH64
-            copied_hash = self.checksum_service.compute_file_checksum(str(dest), algo).hash_value
+            copied_hash = self.checksum_service.compute_file_checksum(
+                str(dest), algo
+            ).hash_value
             if copied_hash != asset.checksum_value:
                 dest.unlink(missing_ok=True)
                 return False, "verify_failed"

@@ -1,4 +1,5 @@
 """Recycle-bin snapshot persistence and restoration."""
+
 import json
 import sqlite3
 import uuid
@@ -14,7 +15,12 @@ class RecycleRepository(BaseRepository):
     """Owns recycle-bin rows while reusing facade audit and FTS helpers."""
 
     def store_snapshot(
-        self, conn, entity_type: str, entity_id: str, project_id: str | None, snapshot: dict,
+        self,
+        conn,
+        entity_type: str,
+        entity_id: str,
+        project_id: str | None,
+        snapshot: dict,
         retention_days: int = 30,
     ) -> str:
         recycle_id = str(uuid.uuid4())
@@ -23,9 +29,15 @@ class RecycleRepository(BaseRepository):
             "INSERT INTO recycle_bin "
             "(recycle_id, entity_type, entity_id, project_id, snapshot_json, deleted_at, expires_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (recycle_id, entity_type, entity_id, project_id,
-             json.dumps(snapshot, ensure_ascii=False), now.isoformat(),
-             (now + timedelta(days=retention_days)).isoformat()),
+            (
+                recycle_id,
+                entity_type,
+                entity_id,
+                project_id,
+                json.dumps(snapshot, ensure_ascii=False),
+                now.isoformat(),
+                (now + timedelta(days=retention_days)).isoformat(),
+            ),
         )
         return recycle_id
 
@@ -67,37 +79,62 @@ class RecycleRepository(BaseRepository):
                     "SELECT * FROM recycle_bin WHERE recycle_id = ?", (recycle_id,)
                 ).fetchone()
                 if item is None:
-                    return OperationResult(OperationStatus.NOT_FOUND, f"回收站项不存在: {recycle_id}")
+                    return OperationResult(
+                        OperationStatus.NOT_FOUND, f"回收站项不存在: {recycle_id}"
+                    )
                 snapshot = json.loads(item["snapshot_json"])
                 if item["entity_type"] == "asset":
                     asset = snapshot["asset"]
                     if conn.execute(
-                        "SELECT 1 FROM media_assets WHERE asset_id = ?", (asset["asset_id"],)
+                        "SELECT 1 FROM media_assets WHERE asset_id = ?",
+                        (asset["asset_id"],),
                     ).fetchone():
-                        return OperationResult(OperationStatus.CONFLICT, "素材 ID 已被重新使用")
-                    if conn.execute(
-                        "SELECT 1 FROM projects WHERE project_id = ?", (asset["project_id"],)
-                    ).fetchone() is None:
-                        return OperationResult(OperationStatus.CONFLICT, "素材所属项目不存在，无法恢复")
+                        return OperationResult(
+                            OperationStatus.CONFLICT, "素材 ID 已被重新使用"
+                        )
+                    if (
+                        conn.execute(
+                            "SELECT 1 FROM projects WHERE project_id = ?",
+                            (asset["project_id"],),
+                        ).fetchone()
+                        is None
+                    ):
+                        return OperationResult(
+                            OperationStatus.CONFLICT, "素材所属项目不存在，无法恢复"
+                        )
                     self.restore_asset_snapshot(conn, snapshot)
                     project_id, object_id = asset["project_id"], asset["asset_id"]
                 elif item["entity_type"] == "project":
                     project = snapshot["project"]
                     if conn.execute(
-                        "SELECT 1 FROM projects WHERE project_id = ?", (project["project_id"],)
+                        "SELECT 1 FROM projects WHERE project_id = ?",
+                        (project["project_id"],),
                     ).fetchone():
-                        return OperationResult(OperationStatus.CONFLICT, "项目 ID 已被重新使用")
-                    asset_ids = [asset["asset"]["asset_id"] for asset in snapshot.get("assets", [])]
+                        return OperationResult(
+                            OperationStatus.CONFLICT, "项目 ID 已被重新使用"
+                        )
+                    asset_ids = [
+                        asset["asset"]["asset_id"]
+                        for asset in snapshot.get("assets", [])
+                    ]
                     if asset_ids:
                         placeholders = ", ".join("?" for _ in asset_ids)
                         if conn.execute(
-                            f"SELECT 1 FROM media_assets WHERE asset_id IN ({placeholders}) LIMIT 1", asset_ids
+                            f"SELECT 1 FROM media_assets WHERE asset_id IN ({placeholders}) LIMIT 1",
+                            asset_ids,
                         ).fetchone():
-                            return OperationResult(OperationStatus.CONFLICT, "项目素材 ID 已被重新使用")
+                            return OperationResult(
+                                OperationStatus.CONFLICT, "项目素材 ID 已被重新使用"
+                            )
                     workspace_id = project.get("workspace_id")
-                    if workspace_id and conn.execute(
-                        "SELECT 1 FROM workspaces WHERE workspace_id = ?", (workspace_id,)
-                    ).fetchone() is None:
+                    if (
+                        workspace_id
+                        and conn.execute(
+                            "SELECT 1 FROM workspaces WHERE workspace_id = ?",
+                            (workspace_id,),
+                        ).fetchone()
+                        is None
+                    ):
                         project["workspace_id"] = "default"
                         now = now_local().isoformat()
                         conn.execute(
@@ -118,13 +155,24 @@ class RecycleRepository(BaseRepository):
                         )
                     project_id = object_id = project["project_id"]
                 else:
-                    return OperationResult(OperationStatus.INVALID, "不支持的回收站实体类型")
-                conn.execute("DELETE FROM recycle_bin WHERE recycle_id = ?", (recycle_id,))
-                self._database._record_operation_in_transaction(
-                    conn, "恢复回收站项目", "已恢复数据库记录", project_id,
-                    object_type=item["entity_type"], object_id=object_id, recovery_id=recycle_id,
+                    return OperationResult(
+                        OperationStatus.INVALID, "不支持的回收站实体类型"
+                    )
+                conn.execute(
+                    "DELETE FROM recycle_bin WHERE recycle_id = ?", (recycle_id,)
                 )
-            return OperationResult(OperationStatus.SUCCESS, affected_count=1, recovery_id=recycle_id)
+                self._database._record_operation_in_transaction(
+                    conn,
+                    "恢复回收站项目",
+                    "已恢复数据库记录",
+                    project_id,
+                    object_type=item["entity_type"],
+                    object_id=object_id,
+                    recovery_id=recycle_id,
+                )
+            return OperationResult(
+                OperationStatus.SUCCESS, affected_count=1, recovery_id=recycle_id
+            )
         except (sqlite3.Error, KeyError, TypeError, json.JSONDecodeError) as exc:
             logger.error(f"恢复回收站项失败 {recycle_id}: {exc}")
             return OperationResult(OperationStatus.ERROR, str(exc))
@@ -143,17 +191,24 @@ class RecycleRepository(BaseRepository):
             if result:
                 restored += result.affected_count
             else:
-                failed.append({"recycle_id": row["recycle_id"], "message": result.message})
+                failed.append(
+                    {"recycle_id": row["recycle_id"], "message": result.message}
+                )
         message = "" if not failed else f"{len(failed)} 项因冲突或数据错误未恢复"
         return OperationResult(
-            OperationStatus.SUCCESS, message, value={"failed": failed}, affected_count=restored,
+            OperationStatus.SUCCESS,
+            message,
+            value={"failed": failed},
+            affected_count=restored,
         )
 
     def empty(self) -> OperationResult:
         try:
             with self._transaction() as conn:
                 cursor = conn.execute("DELETE FROM recycle_bin")
-            return OperationResult(OperationStatus.SUCCESS, affected_count=max(cursor.rowcount, 0))
+            return OperationResult(
+                OperationStatus.SUCCESS, affected_count=max(cursor.rowcount, 0)
+            )
         except sqlite3.Error as exc:
             logger.error(f"清空回收站失败: {exc}")
             return OperationResult(OperationStatus.ERROR, str(exc))
@@ -162,8 +217,12 @@ class RecycleRepository(BaseRepository):
         now = now or now_local()
         try:
             with self._transaction() as conn:
-                cursor = conn.execute("DELETE FROM recycle_bin WHERE expires_at <= ?", (now.isoformat(),))
-            return OperationResult(OperationStatus.SUCCESS, affected_count=max(cursor.rowcount, 0))
+                cursor = conn.execute(
+                    "DELETE FROM recycle_bin WHERE expires_at <= ?", (now.isoformat(),)
+                )
+            return OperationResult(
+                OperationStatus.SUCCESS, affected_count=max(cursor.rowcount, 0)
+            )
         except sqlite3.Error as exc:
             logger.error(f"清理回收站失败: {exc}")
             return OperationResult(OperationStatus.ERROR, str(exc))

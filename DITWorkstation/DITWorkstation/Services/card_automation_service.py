@@ -1,4 +1,5 @@
 """相机卡自动化 SOP：按配置串联导入、备份、整理和交付步骤。"""
+
 from collections.abc import Callable
 from pathlib import Path
 
@@ -72,9 +73,15 @@ class CardAutomationService:
         files = self.backup_service.scan_source(source_path)
         paths = [item["path"] for item in files]
         result = {
-            "source_path": source_path, "files": len(paths), "steps": steps,
-            "import": None, "backup": None, "raw_extract": None,
-            "rename": None, "report": None, "cancelled": False,
+            "source_path": source_path,
+            "files": len(paths),
+            "steps": steps,
+            "import": None,
+            "backup": None,
+            "raw_extract": None,
+            "rename": None,
+            "report": None,
+            "cancelled": False,
         }
 
         def check_cancel():
@@ -130,16 +137,26 @@ class CardAutomationService:
                     matches = self.raw_service.scan_jpg_folder(jpg_folder)
                     raw_index = self.raw_service.scan_raw_folder(raw_folder)
                     matches = self.raw_service.match_raw_files(matches, raw_index)
-                    result["raw_extract"] = self.raw_service.extract_raw_files_streaming(
-                        matches, output_folder, verify=verify,
-                        progress_callback=lambda current, total, message: emit(
-                            STEP_RAW_EXTRACT, current / total if total else 1.0, message
-                        ),
+                    result["raw_extract"] = (
+                        self.raw_service.extract_raw_files_streaming(
+                            matches,
+                            output_folder,
+                            verify=verify,
+                            progress_callback=lambda current, total, message: emit(
+                                STEP_RAW_EXTRACT,
+                                current / total if total else 1.0,
+                                message,
+                            ),
+                        )
                     )
                 else:
                     from DITWorkstation.Models import ChecksumAlgorithm
+
                     result["raw_extract"] = self.raw_service.extract_raw_files(
-                        jpg_folder, raw_folder, output_folder, verify=verify,
+                        jpg_folder,
+                        raw_folder,
+                        output_folder,
+                        verify=verify,
                         algorithm=ChecksumAlgorithm(algorithm),
                         progress_callback=lambda current, total, message: emit(
                             STEP_RAW_EXTRACT, current / total if total else 1.0, message
@@ -149,9 +166,14 @@ class CardAutomationService:
                 options = dict(rename_config or {})
                 rename_files = options.get("files") or paths
                 raw_rule = options.get("rule") or {}
-                rule = raw_rule if isinstance(raw_rule, RenameRule) else RenameRule(**raw_rule)
+                rule = (
+                    raw_rule
+                    if isinstance(raw_rule, RenameRule)
+                    else RenameRule(**raw_rule)
+                )
                 result["rename"] = self.rename_service.execute_rename(
-                    rename_files, rule,
+                    rename_files,
+                    rule,
                     progress_callback=lambda current, total, message: emit(
                         STEP_RENAME, current / total if total else 1.0, message
                     ),
@@ -165,8 +187,12 @@ class CardAutomationService:
                 result["rename_synced"] = synced
             elif step == STEP_REPORT:
                 project = self.db_service.get_project(project_id)
-                result["report"] = (report_service or self.report_service).generate_backup_report(
-                    project, self.db_service.get_backup_jobs(project_id), report_path,
+                result["report"] = (
+                    report_service or self.report_service
+                ).generate_backup_report(
+                    project,
+                    self.db_service.get_backup_jobs(project_id),
+                    report_path,
                 )
 
         backup = result.get("backup")

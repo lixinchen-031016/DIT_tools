@@ -1,4 +1,5 @@
 """回收站对话框：查看并恢复软删除的项目和素材记录。"""
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
@@ -31,12 +32,16 @@ class RecycleBinDialog(QDialog):
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
-        note = QLabel("已删除的数据库记录会在保留期内显示于此。恢复不会覆盖现有同 ID 记录。")
+        note = QLabel(
+            "已删除的数据库记录会在保留期内显示于此。恢复不会覆盖现有同 ID 记录。"
+        )
         note.setWordWrap(True)
         layout.addWidget(note)
 
         self.table = QTableWidget(0, 5, self)
-        self.table.setHorizontalHeaderLabels(["类型", "对象 ID", "项目 ID", "删除时间", "到期时间"])
+        self.table.setHorizontalHeaderLabels(
+            ["类型", "对象 ID", "项目 ID", "删除时间", "到期时间"]
+        )
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -75,7 +80,9 @@ class RecycleBinDialog(QDialog):
         items = self.db_service.get_recycle_bin_items()
         self.table.setRowCount(len(items))
         for row, item in enumerate(items):
-            type_item = QTableWidgetItem(_ENTITY_LABELS.get(item["entity_type"], item["entity_type"]))
+            type_item = QTableWidgetItem(
+                _ENTITY_LABELS.get(item["entity_type"], item["entity_type"])
+            )
             type_item.setData(Qt.UserRole, item["recycle_id"])
             self.table.setItem(row, 0, type_item)
             self.table.setItem(row, 1, QTableWidgetItem(item["entity_id"]))
@@ -110,16 +117,20 @@ class RecycleBinDialog(QDialog):
         if not count:
             return
         reply = QMessageBox.question(
-            self, "确认还原全部记录",
+            self,
+            "确认还原全部记录",
             f"确定还原回收站中的全部 {count} 项记录？\n\n"
             "恢复不会覆盖现有同 ID 记录；无法恢复的记录将保留在回收站中。",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return
         result = self.db_service.restore_all_recycle_items()
         if not result:
-            QMessageBox.warning(self, "恢复失败", result.message or "无法恢复回收站记录")
+            QMessageBox.warning(
+                self, "恢复失败", result.message or "无法恢复回收站记录"
+            )
             return
         if result.affected_count:
             logger.info(f"已从回收站批量恢复记录: {result.affected_count}")
@@ -135,10 +146,12 @@ class RecycleBinDialog(QDialog):
         if not count:
             return
         reply = QMessageBox.question(
-            self, "确认清空回收站",
+            self,
+            "确认清空回收站",
             f"确定永久删除回收站中的全部 {count} 项记录？\n\n"
             "此操作无法撤销，且不会删除磁盘上的源媒体文件。",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return
@@ -147,5 +160,7 @@ class RecycleBinDialog(QDialog):
             QMessageBox.warning(self, "清空失败", result.message or "无法清空回收站")
             return
         logger.info(f"已清空回收站: {result.affected_count} 项")
-        QMessageBox.information(self, "清空完成", f"已永久删除 {result.affected_count} 项回收站记录。")
+        QMessageBox.information(
+            self, "清空完成", f"已永久删除 {result.affected_count} 项回收站记录。"
+        )
         self._refresh_items()

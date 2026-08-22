@@ -1,4 +1,5 @@
 """数据模型定义"""
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -9,12 +10,14 @@ from DITWorkstation.Utils.common import now_local
 
 class ChecksumAlgorithm(Enum):
     """校验和算法"""
+
     XXHASH64 = "xxhash64"
     MD5 = "md5"
 
 
 class AssetType(Enum):
     """资产类型"""
+
     IMAGE = "image"
     VIDEO = "video"
     RAW = "raw"
@@ -24,6 +27,7 @@ class AssetType(Enum):
 
 class CopyStatus(Enum):
     """拷贝状态"""
+
     PENDING = "pending"
     COPYING = "copying"
     VERIFYING = "verifying"
@@ -34,6 +38,7 @@ class CopyStatus(Enum):
 
 class BackupStatus(Enum):
     """备份任务状态"""
+
     IDLE = "idle"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -43,6 +48,7 @@ class BackupStatus(Enum):
 
 class OperationStatus(str, Enum):
     """写操作的稳定结果分类，供服务与 UI 使用。"""
+
     SUCCESS = "success"
     NOT_FOUND = "not_found"
     CONFLICT = "conflict"
@@ -54,6 +60,7 @@ class OperationStatus(str, Enum):
 @dataclass
 class OperationResult:
     """服务写操作的结构化结果；布尔值兼容原有调用方。"""
+
     status: OperationStatus
     message: str = ""
     value: Any = None
@@ -74,9 +81,10 @@ class AssetRating(Enum):
     数据库存储为 INTEGER（0/1/2/3），MediaAsset.rating 仍为 int 类型以兼容
     旧代码与 SQLite 列类型；本枚举仅作为常量引用，消除散落的魔法数字。
     """
-    NONE = 0       # 未评级
-    USABLE = 1     # 可用
-    BACKUP = 2     # 备选
+
+    NONE = 0  # 未评级
+    USABLE = 1  # 可用
+    BACKUP = 2  # 备选
     PREFERRED = 3  # 优选
 
 
@@ -92,6 +100,7 @@ RATING_LABELS = {
 @dataclass
 class FileChecksum:
     """文件校验和信息"""
+
     file_path: str
     algorithm: ChecksumAlgorithm
     hash_value: str
@@ -103,6 +112,7 @@ class FileChecksum:
 @dataclass
 class CopyTask:
     """单个文件拷贝任务"""
+
     source_path: str
     dest_path: str
     file_size: int = 0
@@ -117,6 +127,7 @@ class CopyTask:
 @dataclass
 class BackupTarget:
     """备份目标位置"""
+
     path: str
     name: str = ""
     status: CopyStatus = CopyStatus.PENDING
@@ -126,13 +137,16 @@ class BackupTarget:
     copied_bytes: int = 0
     verified: bool = False
     error_message: str = ""
-    failed_files: list[str] = field(default_factory=list)  # 失败文件相对路径列表（供断点续传/重试）
+    failed_files: list[str] = field(
+        default_factory=list
+    )  # 失败文件相对路径列表（供断点续传/重试）
     pending_files: list[str] = field(default_factory=list)  # 尚未处理文件（异常恢复用）
 
 
 @dataclass
 class BackupJob:
     """备份作业（包含多个目标）"""
+
     job_id: str
     source_path: str
     targets: list[BackupTarget] = field(default_factory=list)
@@ -147,6 +161,7 @@ class BackupJob:
 @dataclass
 class RenameRule:
     """重命名规则"""
+
     pattern: str = "{scene}_{shot}_{take}_{original}"
     scene: str = ""
     shot: str = ""
@@ -160,6 +175,7 @@ class RenameRule:
 @dataclass
 class MediaMetadata:
     """素材元数据"""
+
     file_path: str
     file_name: str
     file_size: int = 0
@@ -182,6 +198,7 @@ class MediaMetadata:
 @dataclass
 class VideoMetadata:
     """视频元数据"""
+
     duration_seconds: float = 0.0
     width: int = 0
     height: int = 0
@@ -199,6 +216,7 @@ class Workspace:
     一个工作区下可有多个项目（严格 1:N）。工作区的 path 是该工作区下所有项目
     的默认工作目录根（导入素材可默认复制到 path/<项目名>/ 下）。
     """
+
     workspace_id: str
     name: str
     path: str = ""  # 物理目录路径
@@ -210,6 +228,7 @@ class Workspace:
 @dataclass
 class Project:
     """项目"""
+
     project_id: str
     name: str
     description: str = ""
@@ -222,6 +241,7 @@ class Project:
 @dataclass
 class ProjectTemplate:
     """项目模板：快速创建新项目时预填的名称/描述/工作目录等字段"""
+
     template_id: str
     name: str
     description: str = ""
@@ -234,6 +254,7 @@ class ProjectTemplate:
 @dataclass
 class BackupTemplate:
     """备份方案模板：复用备份目标、校验算法和完整性验证选项。"""
+
     template_id: str
     name: str
     target_paths: list[str] = field(default_factory=list)
@@ -247,6 +268,7 @@ class BackupTemplate:
 @dataclass
 class ShootingLog:
     """拍摄日志"""
+
     log_id: str
     project_id: str
     scene: str
@@ -266,6 +288,7 @@ class ShootingLog:
 @dataclass
 class MediaAsset:
     """素材资产记录"""
+
     asset_id: str
     project_id: str
     file_path: str

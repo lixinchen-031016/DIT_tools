@@ -11,6 +11,7 @@
   对同一张卡的内容唯一性足够；采样最多 FINGERPRINT_MAX_FILES 个文件名，
   避免超大型卡枚举过慢。
 """
+
 import hashlib
 from pathlib import Path
 
@@ -20,7 +21,9 @@ from DITWorkstation.App import config
 FINGERPRINT_MAX_FILES = 200
 
 
-def media_files_in_top_level(root: Path, limit: int = FINGERPRINT_MAX_FILES) -> list[str]:
+def media_files_in_top_level(
+    root: Path, limit: int = FINGERPRINT_MAX_FILES
+) -> list[str]:
     """返回根目录下（非递归）媒体文件的文件名列表，按名称排序。"""
     if not root.is_dir():
         return []
@@ -42,8 +45,10 @@ def key_directories(root: Path) -> list[str]:
         return []
     try:
         return sorted(
-            e.name for e in root.iterdir()
-            if e.is_dir() and e.name.upper() in ("DCIM", "AVCHD", "PRIVATE", "M4ROOT", "MISC")
+            e.name
+            for e in root.iterdir()
+            if e.is_dir()
+            and e.name.upper() in ("DCIM", "AVCHD", "PRIVATE", "M4ROOT", "MISC")
         )
     except (OSError, PermissionError):
         return []
@@ -74,6 +79,7 @@ def is_fingerprint_processed(fingerprint: str) -> bool:
 def mark_fingerprint_processed(fingerprint: str) -> None:
     """记录指纹到已处理列表（最多保留 50 条，防止无限增长）。"""
     from DITWorkstation.Utils import save_app_settings
+
     if not fingerprint:
         return
     current = list(getattr(config, "processed_card_fingerprints", []))
@@ -139,6 +145,7 @@ class CardBatchQueue:
                 self._start_cb(self._in_flight)
             except Exception as exc:
                 from DITWorkstation.Utils import logger
+
                 logger.error(f"存储卡队列启动回调失败: {exc}")
                 self.on_failed()
 

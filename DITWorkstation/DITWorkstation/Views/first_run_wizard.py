@@ -7,6 +7,7 @@
 
 向导为非阻塞对话框，用户可随时取消；取消后仍可正常使用主程序。
 """
+
 from __future__ import annotations
 
 import platform
@@ -65,6 +66,7 @@ _WELCOME_TEXT = (
     "你随时可以跳过本向导，后续可在「项目概览」看板查看下一步建议。"
 )
 
+
 def _workspace_hint() -> str:
     """按平台生成工作区示例路径（Windows 盘符 / macOS 挂载点 / Linux 挂载点）。"""
     system = platform.system()
@@ -85,8 +87,7 @@ def _workspace_hint() -> str:
 _WORKSPACE_HINT = _workspace_hint()
 
 _PROJECT_HINT = (
-    "为本次拍摄任务创建一个项目，例如「镜头组A」。\n"
-    "该项目将归属于上一步创建的工作区。"
+    "为本次拍摄任务创建一个项目，例如「镜头组A」。\n该项目将归属于上一步创建的工作区。"
 )
 
 # 个人模式：无工作区概念，项目由数据库自动归入 default 工作区
@@ -227,12 +228,14 @@ class _CreateWorkspacePage(QWizardPage):
             ws = db.create_workspace(
                 name=name,
                 path=self.path_edit.text().strip(),
-                description=self.desc_edit.text().strip()
+                description=self.desc_edit.text().strip(),
             )
             self._wizard._created_workspace_id = ws.workspace_id
             self._wizard._created_workspace_path = ws.path
             self._set_status(f"✓ 已创建工作区：{name}", _STATUS_SUCCESS_COLOR)
-            logger.info(f"首启向导创建工作区: {ws.workspace_id} - {name} (path={ws.path})")
+            logger.info(
+                f"首启向导创建工作区: {ws.workspace_id} - {name} (path={ws.path})"
+            )
             return True
         except Exception as e:
             self._set_status(f"✗ 创建失败：{e}", _STATUS_ERROR_COLOR)
@@ -285,13 +288,13 @@ class _CreateProjectPage(QWizardPage):
             # 在向导创建的工作区内创建项目；若用户跳过了工作区步骤则归入默认工作区
             ws_id = self._wizard._created_workspace_id
             project = db.create_project(
-                name=name,
-                description=self.desc_edit.text().strip(),
-                workspace_id=ws_id
+                name=name, description=self.desc_edit.text().strip(), workspace_id=ws_id
             )
             self._wizard._created_project_id = project.project_id
             self._set_status(f"✓ 已创建项目：{name}", _STATUS_SUCCESS_COLOR)
-            logger.info(f"首启向导创建项目: {project.project_id} - {name} (workspace={ws_id})")
+            logger.info(
+                f"首启向导创建项目: {project.project_id} - {name} (workspace={ws_id})"
+            )
             return True
         except Exception as e:
             self._set_status(f"✗ 创建失败：{e}", _STATUS_ERROR_COLOR)

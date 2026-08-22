@@ -1,4 +1,5 @@
 """统一的可取消文件扫描器。"""
+
 from __future__ import annotations
 
 import os
@@ -85,7 +86,11 @@ def _emit_batch(callback: Callable[[list[Path]], None], batch: list[Path]) -> No
     callback(batch)
 
 
-def _matches(path: Path, extensions: Iterable[str] | None, include_hidden: bool) -> bool:
+def _matches(
+    path: Path, extensions: Iterable[str] | None, include_hidden: bool
+) -> bool:
     if not include_hidden and path.name.startswith("."):
         return False
-    return extensions is None or path.suffix.lower() in {ext.lower() for ext in extensions}
+    return extensions is None or path.suffix.lower() in {
+        ext.lower() for ext in extensions
+    }

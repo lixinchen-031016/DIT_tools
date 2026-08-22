@@ -1,4 +1,5 @@
 """后台任务历史中心。"""
+
 import json
 
 from PySide6.QtCore import Qt, Slot
@@ -42,10 +43,12 @@ class TaskHistoryDialog(QDialog):
         self.db_service = db_service or get_db_service()
         checksum_service = (
             get_checksum_service()
-            if db_service is None else ChecksumService(db_service=self.db_service)
+            if db_service is None
+            else ChecksumService(db_service=self.db_service)
         )
         self.backup_service = BackupService(
-            db_service=self.db_service, checksum_service=checksum_service,
+            db_service=self.db_service,
+            checksum_service=checksum_service,
         )
         self.task_vm = TaskViewModel(self, task_store=self.db_service)
         self.task_vm.progress.connect(self._on_retry_progress)
@@ -121,14 +124,21 @@ class TaskHistoryDialog(QDialog):
         state = self.state_filter.currentData() or ""
         project_id = self.project_filter.currentData()
         records = self.db_service.get_task_history(project_id, limit=500)
-        self._records = [record for record in records if not state or record.get("state") == state]
-        project_names = {project.project_id: project.name for project in self.db_service.get_projects()}
+        self._records = [
+            record for record in records if not state or record.get("state") == state
+        ]
+        project_names = {
+            project.project_id: project.name
+            for project in self.db_service.get_projects()
+        }
         self.task_table.setRowCount(len(self._records))
         for row, record in enumerate(self._records):
             values = [
                 self._format_datetime(record.get("created_at")),
                 record.get("task_name") or "",
-                project_names.get(record.get("project_id"), record.get("project_id") or "—"),
+                project_names.get(
+                    record.get("project_id"), record.get("project_id") or "—"
+                ),
                 _STATE_LABELS.get(record.get("state"), record.get("state") or ""),
                 self._format_datetime(record.get("completed_at")),
                 record.get("error_summary") or "",
@@ -144,7 +154,11 @@ class TaskHistoryDialog(QDialog):
 
     @staticmethod
     def _format_datetime(value) -> str:
-        return value.strftime("%Y-%m-%d %H:%M:%S") if hasattr(value, "strftime") else str(value or "")
+        return (
+            value.strftime("%Y-%m-%d %H:%M:%S")
+            if hasattr(value, "strftime")
+            else str(value or "")
+        )
 
     def _selected_record(self) -> dict | None:
         row = self.task_table.currentRow()
@@ -166,7 +180,9 @@ class TaskHistoryDialog(QDialog):
             "输出": record.get("output", {}),
             "错误": record.get("error_summary") or "",
         }
-        self.detail_edit.setPlainText(json.dumps(detail, ensure_ascii=False, indent=2, default=str))
+        self.detail_edit.setPlainText(
+            json.dumps(detail, ensure_ascii=False, indent=2, default=str)
+        )
         self.retry_btn.setEnabled(self._retry_job_id(record) is not None)
 
     @staticmethod
@@ -217,7 +233,9 @@ class TaskHistoryDialog(QDialog):
 
     def closeEvent(self, event):
         if self.task_vm.is_running():
-            QMessageBox.information(self, "提示", "任务正在运行，请等待完成后再关闭任务中心")
+            QMessageBox.information(
+                self, "提示", "任务正在运行，请等待完成后再关闭任务中心"
+            )
             event.ignore()
             return
         super().closeEvent(event)

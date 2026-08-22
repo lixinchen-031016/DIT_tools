@@ -20,6 +20,7 @@
 - App.navigation 不应在模块顶层反向导入本模块，
   navigation.get_nav_index() 需要过滤激活列表时使用局部导入。
 """
+
 from enum import Enum
 
 from DITWorkstation.App import config
@@ -28,6 +29,7 @@ from DITWorkstation.App.navigation import NAV_ITEMS
 
 class UsageMode(str, Enum):
     """使用模式：团队版（完整 DIT 工作流）/ 个人版（独立创作者裁剪界面）"""
+
     TEAM = "team"
     PERSONAL = "personal"
 
@@ -46,21 +48,23 @@ PERSONAL_NAV_KEYS = (
 # 组件级特性开关：仅团队模式可用的特性集合。
 # 个人模式下 is_enabled() 对这些特性返回 False；未知特性按启用处理，
 # 避免未来新增特性被意外禁用。
-_TEAM_ONLY_FEATURES = frozenset({
-    "workspace_selector",   # 工作区下拉 / 新建 / 编辑
-    "shooting_log",         # 拍摄日志（导航、关联入口、日志筛选）
-    "ratings",              # 素材评级（控件、批量操作、筛选）
-    "report",               # 报告生成
-    "multi_target_backup",  # 多目标备份（个人模式仅允许单目标）
-    "backup_templates",     # 备份方案模板
-    "mhl_export",           # MHL 校验清单导出
-    "project_templates",    # 项目模板
-    "archive_restore",      # 归档 / 恢复
-    "audit_panel",          # 最近操作审计面板
-    "sop_guide",            # SOP 团队引导（含日志/报告流程的文案与入口）
-    "card_automation",      # 存储卡自动导入/备份
-    "task_history",         # 后台任务历史中心
-})
+_TEAM_ONLY_FEATURES = frozenset(
+    {
+        "workspace_selector",  # 工作区下拉 / 新建 / 编辑
+        "shooting_log",  # 拍摄日志（导航、关联入口、日志筛选）
+        "ratings",  # 素材评级（控件、批量操作、筛选）
+        "report",  # 报告生成
+        "multi_target_backup",  # 多目标备份（个人模式仅允许单目标）
+        "backup_templates",  # 备份方案模板
+        "mhl_export",  # MHL 校验清单导出
+        "project_templates",  # 项目模板
+        "archive_restore",  # 归档 / 恢复
+        "audit_panel",  # 最近操作审计面板
+        "sop_guide",  # SOP 团队引导（含日志/报告流程的文案与入口）
+        "card_automation",  # 存储卡自动导入/备份
+        "task_history",  # 后台任务历史中心
+    }
+)
 
 
 def get_usage_mode() -> UsageMode:
@@ -92,6 +96,7 @@ def set_usage_mode(mode) -> None:
     # 局部导入：Utils.common 在模块顶层导入 App.config，
     # 顶层反向导入会在特定加载顺序下形成循环
     from DITWorkstation.Utils import save_app_settings
+
     save_app_settings(usage_mode=mode.value)
 
 
@@ -166,6 +171,7 @@ def ensure_personal_default_workspace_path(db_service) -> str | None:
         return None
     try:
         from DITWorkstation.Utils import is_writable_directory, logger
+
         ws = db_service.get_or_create_default_workspace()
         if ws.path:
             if is_writable_directory(ws.path):

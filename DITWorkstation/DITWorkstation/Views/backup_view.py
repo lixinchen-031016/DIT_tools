@@ -1,4 +1,5 @@
 """数据备份页面 - 安全拷贝与多重备份"""
+
 import shutil
 from pathlib import Path
 
@@ -165,7 +166,9 @@ class BackupView(RefreshOnShowView):
 
         # 空状态提示
         self.target_empty_label = QLabel("（暂无备份目标，点击下方「添加目标」按钮）")
-        self.target_empty_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px; padding: 8px;")
+        self.target_empty_label.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px; padding: 8px;"
+        )
         target_layout.addWidget(self.target_empty_label)
 
         target_btn_layout = QHBoxLayout()
@@ -190,7 +193,9 @@ class BackupView(RefreshOnShowView):
         self.template_combo.currentIndexChanged.connect(self._apply_selected_template)
         template_row.addWidget(self.template_combo)
         self.save_template_btn = QPushButton("保存当前方案")
-        self.save_template_btn.setToolTip("把当前备份目标、校验算法和验证选项保存为可复用模板")
+        self.save_template_btn.setToolTip(
+            "把当前备份目标、校验算法和验证选项保存为可复用模板"
+        )
         self.save_template_btn.clicked.connect(self._save_backup_template)
         template_row.addWidget(self.save_template_btn)
         self.delete_template_btn = QPushButton("删除方案")
@@ -203,8 +208,10 @@ class BackupView(RefreshOnShowView):
         # 与个人模式单目标语义冲突）。对象仍创建，仅不可见。
         if not is_enabled("backup_templates"):
             for widget in (
-                self.template_label, self.template_combo,
-                self.save_template_btn, self.delete_template_btn,
+                self.template_label,
+                self.template_combo,
+                self.save_template_btn,
+                self.delete_template_btn,
             ):
                 widget.setVisible(False)
 
@@ -312,7 +319,9 @@ class BackupView(RefreshOnShowView):
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.history_table.setMaximumHeight(150)
-        self.history_table.itemSelectionChanged.connect(self._on_history_selection_changed)
+        self.history_table.itemSelectionChanged.connect(
+            self._on_history_selection_changed
+        )
         history_layout.addWidget(self.history_table)
 
         history_detail = QHBoxLayout()
@@ -337,7 +346,6 @@ class BackupView(RefreshOnShowView):
 
         result_widget.setMinimumHeight(300)
         return result_widget
-
 
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
@@ -369,12 +377,16 @@ class BackupView(RefreshOnShowView):
         template_id = self.template_combo.itemData(index)
         if not template_id:
             return
-        template = next((t for t in self._backup_templates if t.template_id == template_id), None)
+        template = next(
+            (t for t in self._backup_templates if t.template_id == template_id), None
+        )
         if template is None:
             return
         self._target_paths = list(template.target_paths)
         self._rebuild_target_rows()
-        self.algorithm_combo.setCurrentIndex(0 if template.algorithm == ChecksumAlgorithm.XXHASH64 else 1)
+        self.algorithm_combo.setCurrentIndex(
+            0 if template.algorithm == ChecksumAlgorithm.XXHASH64 else 1
+        )
         self.verify_check.setChecked(template.verify_after_copy)
         self._log(f"已应用备份方案: {template.name}")
 
@@ -411,12 +423,17 @@ class BackupView(RefreshOnShowView):
         if not template_id:
             QMessageBox.information(self, "提示", "请选择要删除的备份方案")
             return
-        template = next((t for t in self._backup_templates if t.template_id == template_id), None)
+        template = next(
+            (t for t in self._backup_templates if t.template_id == template_id), None
+        )
         if template is None:
             return
         reply = QMessageBox.question(
-            self, "确认删除", f"确定删除备份方案「{template.name}」？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            self,
+            "确认删除",
+            f"确定删除备份方案「{template.name}」？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return
@@ -441,9 +458,7 @@ class BackupView(RefreshOnShowView):
         for raw in jobs[:20]:
             row = self.history_table.rowCount()
             self.history_table.insertRow(row)
-            failed_total = sum(
-                len(t.get("failed_files", [])) for t in raw["targets"]
-            )
+            failed_total = sum(len(t.get("failed_files", [])) for t in raw["targets"])
             values = [
                 raw["created_at"].strftime("%m-%d %H:%M"),
                 raw["project_id"] or "—",
@@ -482,11 +497,7 @@ class BackupView(RefreshOnShowView):
             return
         if job is None:
             return
-        failed = [
-            f"{t.name} / {rel}"
-            for t in job.targets
-            for rel in t.failed_files
-        ]
+        failed = [f"{t.name} / {rel}" for t in job.targets for rel in t.failed_files]
         if failed:
             shown = "\n".join(failed[:50])
             if len(failed) > 50:
@@ -518,14 +529,17 @@ class BackupView(RefreshOnShowView):
         failed_total = sum(len(t.failed_files) for t in job.targets)
         detail = "\n".join(
             f"· {t.name}: {len(t.failed_files)} 个文件"
-            for t in job.targets if t.failed_files
+            for t in job.targets
+            if t.failed_files
         )
         reply = QMessageBox.question(
-            self, "重试失败文件",
+            self,
+            "重试失败文件",
             f"将重新拷贝该作业中失败的 {failed_total} 个文件到对应目标：\n\n"
             f"{detail}\n\n"
             "目标中已存在且校验一致的文件会自动跳过（断点续传）。是否继续？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
         )
         if reply != QMessageBox.Yes:
             return
@@ -578,9 +592,9 @@ class BackupView(RefreshOnShowView):
         # 已存在一个目标后禁止继续添加，数据库历史记录不受影响）
         if not is_enabled("multi_target_backup") and len(self._target_paths) >= 1:
             QMessageBox.information(
-                self, "提示",
-                "个人模式仅支持单目标备份。\n"
-                "如需更换目标，请先移除现有目标再添加。",
+                self,
+                "提示",
+                "个人模式仅支持单目标备份。\n如需更换目标，请先移除现有目标再添加。",
             )
             return
         path = self._pick_directory("选择备份目标路径", category="backup_target")
@@ -634,12 +648,16 @@ class BackupView(RefreshOnShowView):
 
             idx_label = QLabel(f"{i + 1}.")
             idx_label.setFixedWidth(24)
-            idx_label.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-weight: bold; background: transparent;")
+            idx_label.setStyleSheet(
+                f"color: {COLOR.TEXT_SECONDARY}; font-weight: bold; background: transparent;"
+            )
             row_layout.addWidget(idx_label)
 
             path_label = QLabel(path)
             path_label.setToolTip(path)
-            path_label.setStyleSheet(f"color: {COLOR.TEXT_PRIMARY}; background: transparent;")
+            path_label.setStyleSheet(
+                f"color: {COLOR.TEXT_PRIMARY}; background: transparent;"
+            )
             path_label.setWordWrap(False)
             path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
             row_layout.addWidget(path_label, 1)
@@ -674,15 +692,20 @@ class BackupView(RefreshOnShowView):
             del_btn.clicked.connect(lambda _, idx=i: self._remove_target_at(idx))
             row_layout.addWidget(del_btn)
 
-            self.target_container_layout.insertWidget(self.target_container_layout.count() - 1, row)
+            self.target_container_layout.insertWidget(
+                self.target_container_layout.count() - 1, row
+            )
 
     def _clear_targets(self):
         """清空所有备份目标"""
         if not self._target_paths:
             return
         reply = QMessageBox.question(
-            self, "确认", f"确定清空全部 {len(self._target_paths)} 个备份目标？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            self,
+            "确认",
+            f"确定清空全部 {len(self._target_paths)} 个备份目标？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
         )
         if reply == QMessageBox.Yes:
             self._target_paths.clear()
@@ -705,6 +728,7 @@ class BackupView(RefreshOnShowView):
         # 覆盖确认：扫描源目录与各目标目录的同名文件冲突
         try:
             from pathlib import Path as _Path
+
             src_path = _Path(source)
             if src_path.is_dir():
                 source_file_names = [p.name for p in src_path.iterdir() if p.is_file()]
@@ -715,12 +739,16 @@ class BackupView(RefreshOnShowView):
                     for t_dir, names in conflicts.items():
                         total += len(names)
                         preview = "、".join(names[:5]) + ("…" if len(names) > 5 else "")
-                        detail_lines.append(f"  · {t_dir}（{len(names)} 个）: {preview}")
+                        detail_lines.append(
+                            f"  · {t_dir}（{len(names)} 个）: {preview}"
+                        )
                     detail = "\n".join(detail_lines)
                     reply = QMessageBox.question(
-                        self, "存在同名文件",
+                        self,
+                        "存在同名文件",
                         f"以下目标目录中已存在 {total} 个同名文件，继续备份将覆盖：\n\n{detail}\n\n是否继续？",
-                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No,
                     )
                     if reply != QMessageBox.Yes:
                         self._log("用户取消备份：存在同名文件冲突")
@@ -730,7 +758,11 @@ class BackupView(RefreshOnShowView):
             self._log(f"（警告）覆盖冲突检测失败: {e}")
 
         # 确定算法
-        algorithm = ChecksumAlgorithm.XXHASH64 if self.algorithm_combo.currentIndex() == 0 else ChecksumAlgorithm.MD5
+        algorithm = (
+            ChecksumAlgorithm.XXHASH64
+            if self.algorithm_combo.currentIndex() == 0
+            else ChecksumAlgorithm.MD5
+        )
 
         # 当前关联的项目（可空）
         project_id = self.selector.get_current_project_id()
@@ -740,15 +772,22 @@ class BackupView(RefreshOnShowView):
         # 创建备份作业；增量模式以持久化快照筛选不变文件。
         if self.incremental_check.isChecked():
             self.current_job = self.backup_service.create_incremental_backup_job(
-                source, targets, algorithm, project_id=project_id,
+                source,
+                targets,
+                algorithm,
+                project_id=project_id,
             )
             unchanged = self.current_job.__dict__.get("_unchanged_files", 0)
             self._log(f"增量快照比对完成：{unchanged} 个未变化文件将跳过复制")
         else:
-            self.current_job = self.backup_service.create_backup_job(source, targets, algorithm)
-        self._log(f"创建备份作业 [{self.current_job.job_id}]: {len(targets)} 个目标, "
-                  f"{self.current_job.total_files} 个文件"
-                  + (f"，关联项目 {project_id}" if project_id else ""))
+            self.current_job = self.backup_service.create_backup_job(
+                source, targets, algorithm
+            )
+        self._log(
+            f"创建备份作业 [{self.current_job.job_id}]: {len(targets)} 个目标, "
+            f"{self.current_job.total_files} 个文件"
+            + (f"，关联项目 {project_id}" if project_id else "")
+        )
 
         # 磁盘空间预检：任一目标剩余空间不足则拒绝启动
         space_results = self.backup_service.check_target_space(
@@ -770,10 +809,11 @@ class BackupView(RefreshOnShowView):
                     f"剩余 {format_size(r['free'])} {error_note}"
                 )
             QMessageBox.warning(
-                self, "目标磁盘空间不足",
+                self,
+                "目标磁盘空间不足",
                 f"以下 {len(insufficient)} 个备份目标剩余空间不足，已取消备份：\n\n"
                 + "\n".join(detail_lines)
-                + "\n\n请更换目标磁盘或清理空间后重试。"
+                + "\n\n请更换目标磁盘或清理空间后重试。",
             )
             self._log("备份已取消：目标磁盘空间不足")
             return
@@ -804,9 +844,10 @@ class BackupView(RefreshOnShowView):
         project_id = self.selector.get_current_project_id()
         if not project_id:
             QMessageBox.warning(
-                self, "提示",
+                self,
+                "提示",
                 "请先在「关联项目」中选择要校验的项目。\n"
-                "仅当备份时关联了项目，素材的备份位置才会被记录。"
+                "仅当备份时关联了项目，素材的备份位置才会被记录。",
             )
             return
         if self.task_vm.is_running():
@@ -826,7 +867,9 @@ class BackupView(RefreshOnShowView):
             project_id,
             task_name="备份完整性校验",
             recovery_info={"project_id": project_id},
-            progress_callback=lambda cur, tot, msg: self._verify_progress.emit(cur, tot, msg),
+            progress_callback=lambda cur, tot, msg: self._verify_progress.emit(
+                cur, tot, msg
+            ),
             inject_cancel_check=True,
         )
 
@@ -866,8 +909,7 @@ class BackupView(RefreshOnShowView):
             return
         default_name = f"MHL_{self.current_job.job_id}.xml"
         path = pick_save_file(
-            self, "导出 MHL 校验清单", default_name,
-            "MHL 文件 (*.xml);;所有文件 (*)"
+            self, "导出 MHL 校验清单", default_name, "MHL 文件 (*.xml);;所有文件 (*)"
         )
         if not path:
             return
@@ -924,8 +966,10 @@ class BackupView(RefreshOnShowView):
 
         for target in job.targets:
             status_icon = "✅" if target.status.value == "completed" else "❌"
-            self._log(f"  {status_icon} {target.name}: {target.status.value} "
-                      f"({target.completed_files}/{target.total_files} 文件)")
+            self._log(
+                f"  {status_icon} {target.name}: {target.status.value} "
+                f"({target.completed_files}/{target.total_files} 文件)"
+            )
 
         # 数据闭环：备份关联项目时，把未入库的源文件自动导入为 asset，
         # 并把成功的备份目标回写到 asset.backup_locations。
@@ -934,7 +978,7 @@ class BackupView(RefreshOnShowView):
         project_id = self._backup_project_id
         if project_id and job.status.value in ("completed", "partial"):
             try:
-                files = getattr(job, '_files_cache', None)
+                files = getattr(job, "_files_cache", None)
                 if files is None:
                     files = self.backup_service.scan_source(job.source_path)
                 source_paths = [f["path"] for f in files]
@@ -951,7 +995,9 @@ class BackupView(RefreshOnShowView):
                 imported = import_result.get("imported", 0)
                 skipped = import_result.get("skipped", 0)
                 failed = import_result.get("failed", 0)
-                self._log(f"登记完成: 新增 {imported}, 跳过 {skipped}（已存在）, 失败 {failed}")
+                self._log(
+                    f"登记完成: 新增 {imported}, 跳过 {skipped}（已存在）, 失败 {failed}"
+                )
 
                 # 对刚入库的 asset 补写 backup_locations（execute_backup 内部那次回写
                 # 发生在导入之前，未覆盖新入库 asset）
@@ -974,7 +1020,11 @@ class BackupView(RefreshOnShowView):
 
         # 备份完成提示；团队模式提供跳转拍摄日志的快捷入口（个人模式隐藏）
         if job.status.value in ("completed", "partial"):
-            status_text = "所有目标验证通过" if job.status.value == "completed" else "部分目标未完成，请检查失败目标"
+            status_text = (
+                "所有目标验证通过"
+                if job.status.value == "completed"
+                else "部分目标未完成，请检查失败目标"
+            )
             msg_box = QMessageBox(self)
             msg_box.setIcon(QMessageBox.Information)
             msg_box.setWindowTitle("备份完成")
@@ -990,7 +1040,7 @@ class BackupView(RefreshOnShowView):
                     main_window = self.window()
                     log_idx = get_nav_index("log")
                     # 目标页未激活时 get_nav_index 返回 None，禁止传给 setCurrentRow
-                    if hasattr(main_window, 'nav_list') and log_idx is not None:
+                    if hasattr(main_window, "nav_list") and log_idx is not None:
                         main_window.nav_list.setCurrentRow(log_idx)
                 except Exception as e:
                     logger.warning(f"跳转日志视图失败: {e}")
