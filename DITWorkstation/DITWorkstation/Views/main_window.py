@@ -38,6 +38,14 @@ from DITWorkstation.App.session_context import (
 )
 from DITWorkstation.App.version import APP_VERSION
 from DITWorkstation.Services.card_automation_service import CardAutomationService
+from DITWorkstation.Services.card_identity import (
+    CardBatchQueue,
+    compute_card_fingerprint,
+)
+from DITWorkstation.Services.integrity_scheduler import (
+    IntegrityScheduler,
+    ScheduledTaskService,
+)
 from DITWorkstation.Services.volume_monitor import VolumeMonitor
 from DITWorkstation.Utils import get_db_service, logger
 from DITWorkstation.Utils.workers import WorkerThread
@@ -160,6 +168,7 @@ class MainWindow(QMainWindow):
                 activated=lambda idx=i - 1: self.nav_list.setCurrentRow(idx),
             )
         QShortcut(QKeySequence("F5"), self, activated=self._refresh_current_view)
+        QShortcut(QKeySequence("Ctrl+K"), self, activated=self._show_command_palette)
         QShortcut(QKeySequence("Esc"), self, activated=self._cancel_running_workers)
 
     def _build_status_bar(self, bus):
@@ -198,7 +207,18 @@ class MainWindow(QMainWindow):
         self.volume_monitor.volume_mounted.connect(self._on_volume_mounted)
         self.volume_monitor.start()
         self.card_automation_service = CardAutomationService(self.backup_view.db_service)
+        # 多卡批处理队列
+        self.card_batch_queue = CardBatchQueue(
+            start_cb=self._start_card_from_queue,
+            dedupe=bool(getattr(config, "skip_processed_cards", True)),
+        )
+        # 完整性校验定时调度
+        self._integrity_scheduler = None
+        self._init_integrity_scheduler()
+        # 启动时检查更新（静默）
+        self._check_update_on_startup()
         self.card_automation_worker = None
+        self.card_automation_source_path = None
 
     def _setup_menu(self):
         """创建菜单栏 — 提供帮助入口与新手向导重启"""
@@ -218,6 +238,14 @@ class MainWindow(QMainWindow):
         log_viewer_action = settings_menu.addAction("日志查看器…")
         log_viewer_action.setToolTip("在应用内查看日志文件内容")
         log_viewer_action.triggered.connect(self._show_log_viewer)
+
+        restore_action = settings_menu.addAction("从备份恢复素材…")
+        restore_action.setToolTip("把已备份素材从备份卷复制回工作盘（回拷）")
+        restore_action.triggered.connect(self._show_restore_wizard)
+
+        verify_action = settings_menu.addAction("立即完整性校验…")
+        verify_action.setToolTip("手动触发一次备份完整性校验")
+        verify_action.triggered.connect(self._trigger_integrity_check)
 
         task_history_action = settings_menu.addAction("任务中心…")
         task_history_action.setToolTip("查看后台任务历史、错误摘要和可恢复任务")
@@ -274,6 +302,8 @@ class MainWindow(QMainWindow):
             "• Ctrl+F：跳转到素材检索",
             "• Ctrl+I：跳转到媒体导入",
             "• Ctrl+B：跳转到数据备份",
+            "• Ctrl+,：打开设置对话框",
+            "• Ctrl+K：打开命令面板（运行路径/URL/搜索跳转）",
         ]
         # Ctrl+L 跳拍摄日志仅团队模式可用
         if is_nav_enabled("log"):
@@ -311,6 +341,36 @@ class MainWindow(QMainWindow):
         """打开日志查看器对话框。"""
         from DITWorkstation.Views.Widgets.log_viewer_dialog import LogViewerDialog
         LogViewerDialog(self).exec()
+
+    def _show_restore_wizard(self):
+        """打开「从备份恢复素材」向导。"""
+        from DITWorkstation.Views.Widgets.restore_wizard import RestoreWizard
+        RestoreWizard(self, db_service=self.backup_view.db_service).exec()
+
+    def _trigger_integrity_check(self):
+        """手动触发一次完整性校验（立即执行，走任务线程避免卡 UI）。"""
+        from DITWorkstation.Services.integrity_scheduler import IntegrityScheduler
+
+        integrity = IntegrityScheduler(self.backup_view.backup_service, self.backup_view.db_service)
+        worker = WorkerThread(integrity.run_all_projects)
+        self._integrity_worker = worker
+
+        def _done(results):
+            self.status_label_task.setText("✅ 完整性校验完成")
+            total = len(results) if isinstance(results, dict) else 0
+            QMessageBox.information(
+                self, "完整性校验",
+                f"校验完成，共检查 {total} 个项目。\n详细结果已写入操作审计日志。",
+            )
+
+        def _err(error):
+            QMessageBox.warning(self, "校验失败", str(error))
+
+        worker.finished.connect(_done)
+        worker.error.connect(_err)
+        worker.thread_finished.connect(worker.deleteLater)
+        worker.start()
+        self.status_label_task.setText("⚙ 正在执行完整性校验…")
 
     def _show_task_center(self):
         """打开后台任务历史中心。"""
@@ -546,6 +606,7 @@ class MainWindow(QMainWindow):
             self.status_label_task.setText("⚠ 自动化项目不存在，请检查设置")
             return
         set_current_project(project_id)
+        self.card_automation_source_path = source_path
         self.card_automation_worker = WorkerThread(
             self.card_automation_service.execute,
             source_path,
@@ -590,6 +651,92 @@ class MainWindow(QMainWindow):
         self.card_automation_worker = None
         self.status_label_task.setText(f"❌ 相机卡自动处理失败: {error}")
         logger.error(f"相机卡自动处理失败: {error}")
+
+    def _show_command_palette(self):
+        """打开 Ctrl+K 全局命令面板。"""
+        from DITWorkstation.Views.Widgets.command_palette import CommandPalette
+        cp = CommandPalette(self)
+        cp.exec()
+
+    def _start_card_from_queue(self, path: str):
+        """从多卡队列取出一张卡启动自动化（与单卡触发走同一流程）。"""
+        self._start_card_automation(path)
+
+    def _on_volume_mounted(self, path: str):
+        """检测到新存储卡：入多卡队列（去重/防重复处理）。"""
+        if (getattr(config, "auto_card_automation_enabled", False)
+                and is_enabled("card_automation")):
+            self.card_batch_queue.enqueue(path)
+        elif (getattr(config, "auto_detect_volume", True)
+              and is_enabled("card_automation")):
+            # 未启用自动任务时，仍跳转导入视图
+            self.status_label_task.setText(f"💾 检测到存储卡: {Path(path).name}")
+
+    def _on_card_automation_finished(self, result):
+        self.card_automation_worker = None
+        # 多卡队列：记录指纹并派发下一张
+        if self.card_automation_source_path:
+            fp = compute_card_fingerprint(self.card_automation_source_path)
+            self.card_batch_queue.on_finished(fingerprint=fp)
+        backup = result.get("backup") if isinstance(result, dict) else None
+        imported = (result.get("import") or {}).get("imported", 0) if isinstance(result, dict) else 0
+        backup_text = ""
+        if backup is not None:
+            backup_text = f"，备份状态 {backup.status.value}"
+        self.status_label_task.setText(f"✅ 相机卡自动处理完成：导入 {imported} 个{backup_text}")
+        if imported:
+            get_data_bus().emit_data_changed("assets_changed")
+
+    def _on_card_automation_error(self, error: str):
+        self.card_automation_worker = None
+        if self.card_automation_source_path:
+            self.card_batch_queue.on_failed()
+        self.status_label_task.setText(f"❌ 相机卡自动处理失败: {error}")
+        logger.error(f"相机卡自动处理失败: {error}")
+
+    def _init_integrity_scheduler(self):
+        """启动完整性校验定时调度（按配置间隔）。"""
+        interval = int(getattr(config, "integrity_check_interval_hours", 0) or 0)
+        if interval <= 0:
+            return
+        try:
+            scheduler = ScheduledTaskService()
+            integrity = IntegrityScheduler(
+                self.backup_view.backup_service,
+                self.backup_view.db_service,
+                scheduler,
+            )
+            integrity.setup(interval_hours=interval)
+            scheduler.start()
+            self._integrity_scheduler = scheduler
+            logger.info(f"完整性校验调度已启动，间隔 {interval} 小时")
+        except Exception as exc:
+            logger.warning(f"启动完整性校验调度失败: {exc}")
+
+    def _check_update_on_startup(self):
+        """启动时静默检查更新（仅配置了 URL 时，后台线程执行避免阻塞 UI）。"""
+        from DITWorkstation.App.version import APP_VERSION
+        from DITWorkstation.Services.update_checker import check_for_update
+        from DITWorkstation.Utils.workers import WorkerThread
+
+        url = getattr(config, "auto_update_check_url", "") or ""
+        if not url:
+            return
+
+        worker = WorkerThread(check_for_update, url)
+
+        def _done(info):
+            if info.is_newer:
+                self.status_label_task.setText(f"🔄 发现新版本 {info.version}")
+                logger.info(f"发现新版本 {info.version}，当前 {APP_VERSION}")
+
+        def _err(exc):
+            logger.debug("启动时更新检查失败: %s", exc)
+
+        worker.finished.connect(_done)
+        worker.error.connect(_err)
+        worker.thread_finished.connect(worker.deleteLater)
+        worker.start()
 
     def _apply_style(self):
         """应用样式（主窗口 + 侧栏）。全局 QSS 由 main.py 通过 theme.apply_global_style 注入。"""

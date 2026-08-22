@@ -6,9 +6,9 @@ from .capacity_trend import CapacityTrendWidget
 from .capture_timeline import CaptureTimelineWidget
 from .error_dialog import ErrorDialog, show_error
 from .recycle_bin_dialog import RecycleBinDialog
+from .task_history_dialog import TaskHistoryDialog
 from .workspace_dialog import WorkspaceDialog
 from .workspace_project_selector import WorkspaceProjectSelector
-from .task_history_dialog import TaskHistoryDialog
 
 __all__ = [
     'AssetTableModel',

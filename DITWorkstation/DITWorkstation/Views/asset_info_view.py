@@ -1334,6 +1334,7 @@ class AssetInfoView(RefreshOnShowView):
             )
         except Exception as e:
             logger.warning(f"记录评级操作日志失败: {e}")
+        self._sync_xmp_sidecar()
         # 广播素材变更，让看板/检索等视图刷新
         try:
             get_data_bus().emit_data_changed("assets_changed")
@@ -1479,10 +1480,40 @@ class AssetInfoView(RefreshOnShowView):
             )
         except Exception as e:
             logger.warning(f"记录标签操作日志失败: {e}")
+        self._sync_xmp_sidecar()
         try:
             get_data_bus().emit_data_changed("assets_changed")
         except Exception as e:
             logger.warning(f"广播 assets_changed 失败: {e}")
+
+    def _sync_xmp_sidecar(self):
+        """把当前素材的评级/标签/备注同步写入 XMP sidecar 文件。
+
+        仅当源文件存在且为非音视频文件时执行（XMP 侧挂对视频/音频无意义）；
+        失败不影响数据库操作（降级为提示）。
+        """
+        if not self.current_asset or not self.current_asset.file_path:
+            return
+        asset_type = getattr(self.current_asset, "asset_type", "") or ""
+        if asset_type in ("video", "audio"):
+            return
+        file_path = self.current_asset.file_path
+        if not Path(file_path).exists():
+            return
+        try:
+            from DITWorkstation.Utils import get_metadata_service
+            svc = get_metadata_service()
+            tags = self.current_asset.tags or ""
+            ok = svc.write_xmp_sidecar(
+                file_path,
+                rating=self.current_asset.rating,
+                tags=[t.strip() for t in tags.split(",") if t.strip()],
+                notes=self.current_asset.notes or "",
+            )
+            if not ok:
+                logger.info(f"XMP 同步跳过: {file_path}")
+        except Exception as e:
+            logger.warning(f"XMP 同步失败 {file_path}: {e}")
 
     # ===== 单个文件重新读取 EXIF =====
     @safe_slot("读取元数据失败")

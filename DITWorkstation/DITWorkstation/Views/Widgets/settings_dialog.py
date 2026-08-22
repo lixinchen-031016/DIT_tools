@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -81,7 +82,7 @@ class SettingsDialog(QDialog):
         title.setStyleSheet(TITLE_QSS)
         layout.addWidget(title)
 
-        subtitle = QLabel("数据存储位置、临时文件清理与运行参数")
+        subtitle = QLabel("使用场景、外观主题、数据存储、完整性校验、自动更新、存储卡与运行参数")
         subtitle.setStyleSheet(SUBTITLE_QSS)
         layout.addWidget(subtitle)
 
@@ -106,6 +107,22 @@ class SettingsDialog(QDialog):
         usage_hint.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
         usage_layout.addWidget(usage_hint)
         layout.addWidget(usage_group)
+
+        # ===== 外观（深/浅色主题）=====
+        theme_group = QGroupBox("🎨 外观")
+        theme_layout = QHBoxLayout(theme_group)
+        theme_layout.addWidget(QLabel("界面主题:"))
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("浅色", "light")
+        self.theme_combo.addItem("深色", "dark")
+        self.theme_combo.setToolTip("切换深浅配色；重启应用后生效")
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+        theme_layout.addWidget(self.theme_combo)
+        theme_hint = QLabel("切换后重启应用生效")
+        theme_hint.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        theme_layout.addWidget(theme_hint)
+        theme_layout.addStretch()
+        layout.addWidget(theme_group)
 
         # ===== 数据存储位置 =====
         dir_group = QGroupBox("📂 数据存储位置")
@@ -205,6 +222,16 @@ class SettingsDialog(QDialog):
         self.auto_detect_check.toggled.connect(self._on_auto_detect_toggled)
         volume_layout.addWidget(self.auto_detect_check)
 
+        self.skip_processed_cards_check = QCheckBox("跳过已处理过的存储卡（多卡去重）")
+        self.skip_processed_cards_check.setToolTip(
+            "自动任务完成后记录卡的指纹；同一张卡再次插入时不再重复处理，"
+            "多张卡会排队串行处理。"
+        )
+        self.skip_processed_cards_check.toggled.connect(
+            self._on_skip_processed_cards_toggled
+        )
+        volume_layout.addWidget(self.skip_processed_cards_check)
+
         self.auto_card_automation_check = QCheckBox("检测到相机卡后自动执行配置")
         self.auto_card_automation_check.setToolTip(
             "按下面选择的项目和备份方案自动导入或备份；未配置完整时只提示，不会启动任务。"
@@ -289,6 +316,52 @@ class SettingsDialog(QDialog):
         for w in self._automation_widgets:
             w.setVisible(is_enabled("card_automation"))
 
+        # ===== 完整性校验调度 =====
+        integrity_group = QGroupBox("🛡 完整性校验")
+        integrity_layout = QVBoxLayout(integrity_group)
+        self.integrity_enable_check = QCheckBox("启用定期完整性校验")
+        self.integrity_enable_check.toggled.connect(self._on_integrity_enabled)
+        integrity_layout.addWidget(self.integrity_enable_check)
+
+        integrity_row = QHBoxLayout()
+        integrity_row.addWidget(QLabel("校验间隔（小时）:"))
+        self.integrity_interval_spin = QSpinBox()
+        self.integrity_interval_spin.setRange(1, 24 * 90)
+        self.integrity_interval_spin.setValue(168)
+        self.integrity_interval_spin.valueChanged.connect(self._on_integrity_interval)
+        integrity_row.addWidget(self.integrity_interval_spin)
+        integrity_row.addWidget(QLabel("范围:"))
+        self.integrity_scope_combo = QComboBox()
+        self.integrity_scope_combo.addItem("全部项目", "all")
+        self.integrity_scope_combo.addItem("仅备份过素材的项目", "backup")
+        self.integrity_scope_combo.currentIndexChanged.connect(self._on_integrity_scope)
+        integrity_row.addWidget(self.integrity_scope_combo)
+        integrity_row.addStretch()
+        integrity_layout.addLayout(integrity_row)
+
+        integrity_hint = QLabel("应用闲置时自动校验备份完整性，结果写入操作审计日志")
+        integrity_hint.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;")
+        integrity_layout.addWidget(integrity_hint)
+        layout.addWidget(integrity_group)
+
+        # ===== 自动更新 =====
+        update_group = QGroupBox("🔄 自动更新")
+        update_layout = QVBoxLayout(update_group)
+        update_row = QHBoxLayout()
+        update_row.addWidget(QLabel("更新清单 URL（留空禁用）:"))
+        self.update_url_edit = QLineEdit()
+        self.update_url_edit.setPlaceholderText("https://example.com/dit_latest.json")
+        self.update_url_edit.setToolTip(
+            "指向返回 {\"version\":\"alpha.YYYYMMDD\",\"download_url\":\"...\"} 的 JSON 文件"
+        )
+        self.update_url_edit.editingFinished.connect(self._on_update_url_changed)
+        update_row.addWidget(self.update_url_edit, 1)
+        self.check_update_btn = QPushButton("立即检查")
+        self.check_update_btn.clicked.connect(self._check_update_now)
+        update_row.addWidget(self.check_update_btn)
+        update_layout.addLayout(update_row)
+        layout.addWidget(update_group)
+
         settings_io_group = QGroupBox("设置迁移")
         settings_io_layout = QHBoxLayout(settings_io_group)
         settings_io_hint = QLabel("导入的设置将在重启应用后生效")
@@ -353,6 +426,22 @@ class SettingsDialog(QDialog):
         self.recent_info_label.setText(f"共 {recent_total} 条最近使用记录")
         self.verify_after_copy_check.setChecked(config.verify_after_copy)
         self.auto_detect_check.setChecked(config.auto_detect_volume)
+        self.skip_processed_cards_check.setChecked(
+            bool(getattr(config, "skip_processed_cards", True))
+        )
+        self.theme_combo.blockSignals(True)
+        self.theme_combo.setCurrentIndex(
+            max(0, self.theme_combo.findData(config.theme_mode))
+        )
+        self.theme_combo.blockSignals(False)
+        interval = int(getattr(config, "integrity_check_interval_hours", 0) or 0)
+        self.integrity_enable_check.setChecked(interval > 0)
+        self.integrity_interval_spin.setValue(interval if interval > 0 else 168)
+        self.integrity_scope_combo.blockSignals(True)
+        idx = self.integrity_scope_combo.findData(config.integrity_check_scope)
+        self.integrity_scope_combo.setCurrentIndex(max(0, idx))
+        self.integrity_scope_combo.blockSignals(False)
+        self.update_url_edit.setText(getattr(config, "auto_update_check_url", "") or "")
         self._load_automation_options()
 
     def _load_automation_options(self):
@@ -608,6 +697,72 @@ class SettingsDialog(QDialog):
             QMessageBox.information(self, "导入成功", "设置已导入。请重启应用以使更改生效。")
         else:
             QMessageBox.warning(self, "导入失败", "文件不是有效的设置 JSON，或无法保存导入结果。")
+
+    # ===== 外观主题 =====
+
+    def _on_theme_changed(self, index: int):
+        mode = self.theme_combo.currentData() or "light"
+        config.theme_mode = mode
+        save_app_settings(theme_mode=mode)
+
+    # ===== 存储卡多卡去重 =====
+
+    def _on_skip_processed_cards_toggled(self, checked: bool):
+        config.skip_processed_cards = checked
+        save_app_settings(skip_processed_cards=checked)
+
+    # ===== 完整性校验调度 =====
+
+    def _on_integrity_enabled(self, checked: bool):
+        interval = self.integrity_interval_spin.value() if checked else 0
+        config.integrity_check_interval_hours = interval
+        save_app_settings(integrity_check_interval_hours=interval)
+
+    def _on_integrity_interval(self, value: int):
+        if self.integrity_enable_check.isChecked():
+            config.integrity_check_interval_hours = value
+            save_app_settings(integrity_check_interval_hours=value)
+
+    def _on_integrity_scope(self, index: int):
+        scope = self.integrity_scope_combo.currentData() or "all"
+        config.integrity_check_scope = scope
+        save_app_settings(integrity_check_scope=scope)
+
+    # ===== 自动更新 =====
+
+    def _on_update_url_changed(self):
+        url = self.update_url_edit.text().strip()
+        config.auto_update_check_url = url
+        save_app_settings(auto_update_check_url=url)
+
+    def _check_update_now(self):
+        from DITWorkstation.Services.update_checker import check_for_update
+
+        url = self.update_url_edit.text().strip()
+        if not url:
+            QMessageBox.information(self, "更新检查", "请先配置更新清单 URL。")
+            return
+        info = check_for_update(url)
+        if info.error:
+            QMessageBox.warning(self, "检查失败", info.error)
+            return
+        if info.is_newer:
+            text = f"发现新版本 {info.version}。"
+            if info.notes:
+                text += f"\n\n更新说明：\n{info.notes}"
+            if info.download_url:
+                ret = QMessageBox.question(
+                    self, "发现更新", text + "\n\n是否打开下载页面？",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+                )
+                if ret == QMessageBox.Yes:
+                    import webbrowser
+                    webbrowser.open(info.download_url)
+            else:
+                QMessageBox.information(self, "发现更新", text)
+        else:
+            from DITWorkstation.App.version import APP_VERSION
+            QMessageBox.information(self, "检查更新", f"当前 {APP_VERSION} 已是最新版本。")
 
     # ===== 运行参数 =====
 

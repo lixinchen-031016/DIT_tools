@@ -1,5 +1,6 @@
 """拍摄日志管理页面"""
 import uuid
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtWidgets import (
@@ -244,10 +245,24 @@ class ShootingLogView(RefreshOnShowView):
         log_layout.addWidget(self.log_table)
         attach_empty_state(self.log_table, "📋", "暂无拍摄日志", "在上方填写场景/镜头/镜次后点击「添加日志」")
 
+        ctrl_row = QHBoxLayout()
         del_log_btn = QPushButton("删除选中日志")
         del_log_btn.setToolTip("删除选中的拍摄日志")
         del_log_btn.clicked.connect(self._delete_log)
-        log_layout.addWidget(del_log_btn)
+        ctrl_row.addWidget(del_log_btn)
+
+        export_csv_btn = QPushButton("📤 导出 CSV")
+        export_csv_btn.setToolTip("把当前项目的拍摄日志导出为 CSV 镜头清单（Excel 可直接打开）")
+        export_csv_btn.clicked.connect(self._export_logs_csv)
+        ctrl_row.addWidget(export_csv_btn)
+
+        import_csv_btn = QPushButton("📥 导入 CSV")
+        import_csv_btn.setToolTip("从 CSV 场记单导入拍摄日志（按 场景/镜头/镜次 自动去重更新）")
+        import_csv_btn.clicked.connect(self._import_logs_csv)
+        ctrl_row.addWidget(import_csv_btn)
+
+        ctrl_row.addStretch()
+        log_layout.addLayout(ctrl_row)
 
         # 拍摄日志列表伸长为原长度的 2 倍（基于最小内容高度计算，随字体缩放自适应）
         log_group.setMinimumHeight(2 * log_group.minimumSizeHint().height())
@@ -493,6 +508,58 @@ class ShootingLogView(RefreshOnShowView):
         bus = get_data_bus()
         bus.emit_data_changed("logs_changed")
         bus.emit_data_changed("assets_changed")
+
+    def _export_logs_csv(self):
+        """导出当前项目拍摄日志为 CSV（标准镜头清单字段）。"""
+        from DITWorkstation.Services.shooting_log_io import export_logs_csv
+        from DITWorkstation.Utils import pick_save_file
+
+        if not self._logs:
+            QMessageBox.information(self, "无数据", "当前项目暂无拍摄日志可导出。")
+            return
+        default_name = f"shooting_logs_{self.current_project.name if self.current_project else ''}.csv"
+        path = pick_save_file(
+            self, "导出拍摄日志 CSV",
+            start_path=str(Path.home() / default_name),
+            filter_str="CSV 文件 (*.csv)",
+            default_suffix="csv",
+        )
+        if not path:
+            return
+        if export_logs_csv(self._logs, path):
+            QMessageBox.information(self, "导出成功", f"已导出 {len(self._logs)} 条日志到：\n{path}")
+        else:
+            QMessageBox.warning(self, "导出失败", "无法写入 CSV 文件，请检查目标目录权限。")
+
+    def _import_logs_csv(self):
+        """从 CSV 场记单导入拍摄日志（按场景/镜头/镜次去重更新）。"""
+        from DITWorkstation.Services.shooting_log_io import import_logs_csv
+        from DITWorkstation.Utils import pick_open_file
+
+        if not self.current_project:
+            QMessageBox.warning(self, "未选择项目", "请先选择项目。")
+            return
+        path = pick_open_file(
+            self, "导入拍摄日志 CSV",
+            str(Path.home()),
+            "CSV 文件 (*.csv);;所有文件 (*)",
+        )
+        if not path:
+            return
+        stats = import_logs_csv(path, self.current_project.project_id, self.db_service)
+        created, updated = stats["created"], stats["updated"]
+        if stats["errors"] and not created and not updated:
+            QMessageBox.warning(
+                self, "导入失败",
+                "未导入任何日志。\n" + "\n".join(stats["errors"][:5]),
+            )
+            return
+        QMessageBox.information(
+            self, "导入完成",
+            f"新建 {created} 条，更新 {updated} 条，跳过 {stats['skipped']} 条。",
+        )
+        get_data_bus().emit_data_changed("logs_changed")
+        self._load_logs()
 
     def _on_log_context_menu(self, pos):
         """日志表右键菜单：删除此日志 / 复制场景信息"""

@@ -29,6 +29,9 @@ from DITWorkstation.Services.repositories.log_repository import LogRepository
 from DITWorkstation.Services.repositories.project_repository import ProjectRepository
 from DITWorkstation.Services.repositories.recycle_repository import RecycleRepository
 from DITWorkstation.Services.repositories.rename_repository import RenameRepository
+from DITWorkstation.Services.repositories.saved_search_repository import (
+    SavedSearchRepository,
+)
 from DITWorkstation.Services.repositories.task_repository import TaskRepository
 from DITWorkstation.Services.repositories.template_repository import TemplateRepository
 from DITWorkstation.Services.repositories.workspace_repository import (
@@ -77,6 +80,7 @@ class DatabaseService:
         self.backup_jobs = BackupJobRepository(self)
         self.tasks = TaskRepository(self)
         self.checksum_cache = ChecksumCacheRepository(self)
+        self.saved_searches = SavedSearchRepository(self)
         self.cleanup_history()
 
     def _create_conn(self) -> sqlite3.Connection:
@@ -378,7 +382,7 @@ class DatabaseService:
                 pass
 
     # 当前数据库 schema 版本：每次结构变更 +1，并在 _migrate_db 中补充对应迁移
-    _DB_VERSION = 9
+    _DB_VERSION = 10
 
     def _migrate_db(self):
         """按 PRAGMA user_version 分版本迁移数据库。
@@ -429,6 +433,10 @@ class DatabaseService:
                 self._migrate_v9(conn)
                 self._set_user_version(conn, 9)
                 logger.info("数据库迁移完成: v9")
+            if version < 10:
+                self._migrate_v10(conn)
+                self._set_user_version(conn, 10)
+                logger.info("数据库迁移完成: v10")
 
             # FTS 创建必须晚于迁移前备份，否则备份会混入新建索引表。
             # v3 数据库若因中断或旧版本缺失索引，也在这里补建并重建一次。
@@ -712,6 +720,25 @@ class DatabaseService:
         )
 
     @staticmethod
+    def _migrate_v10(conn):
+        """v10：保存搜索 / 智能集合。"""
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS saved_searches (
+                search_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                filters_json TEXT NOT NULL DEFAULT '{}',
+                workspace_id TEXT,
+                project_id TEXT,
+                is_smart INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_saved_searches_name ON saved_searches(name)"
+        )
+
+    @staticmethod
     def _fts_table_exists(conn) -> bool:
         return conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -973,6 +1000,31 @@ class DatabaseService:
     def update_shooting_log(self, log: ShootingLog):
         """更新拍摄日志"""
         self.logs.update_shooting(log)
+
+    # ===== 保存搜索 / 智能集合 =====
+
+    def create_saved_search(self, name, filters, *, workspace_id=None, project_id=None, is_smart=False) -> dict:
+        """创建保存搜索/智能集合。"""
+        return self.saved_searches.create(name, filters, workspace_id=workspace_id,
+                                          project_id=project_id, is_smart=is_smart)
+
+    def get_saved_searches(self, limit=None, workspace_id=None, project_id=None) -> list[dict]:
+        """获取保存搜索列表（按更新时间倒序，默认取配置上限）。"""
+        if limit is None:
+            limit = int(getattr(config, "saved_search_limit", 20) or 20)
+        return self.saved_searches.list(limit, workspace_id, project_id)
+
+    def get_saved_search(self, search_id: str) -> dict | None:
+        """获取单个保存搜索。"""
+        return self.saved_searches.get(search_id)
+
+    def update_saved_search(self, search_id: str, **kwargs) -> bool:
+        """更新保存搜索（name / filters / is_smart）。"""
+        return self.saved_searches.update(search_id, **kwargs)
+
+    def delete_saved_search(self, search_id: str) -> bool:
+        """删除保存搜索。"""
+        return self.saved_searches.delete(search_id)
 
     def delete_shooting_log(self, log_id: str):
         """删除拍摄日志（级联清除关联素材的 log_id 与 scene/shot）

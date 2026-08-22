@@ -248,3 +248,89 @@ class MetadataService:
                 "/usr/lib/libmediainfo.so",
             ])
         return paths
+
+
+    def write_xmp_sidecar(self, file_path, *, rating=None, tags=None, notes=None):
+        """为媒体文件写入 XMP sidecar 文件（.xmp 同目录侧挂）。
+
+        Args:
+            file_path: 原始媒体文件路径
+            rating: 评级 0-5（Adobe XMP 标准；DIT 的 0-3 直接映射）
+            tags: 标签列表
+            notes: 备注/描述
+
+        Returns:
+            True 表示写入成功（含已存在且内容一致=跳过）
+        """
+        path = Path(file_path)
+        if not path.exists():
+            return False
+        xmp_path = path.parent / (path.name + ".xmp")
+        if xmp_path.suffix not in (".xmp",):
+            xmp_path = path.parent / (path.name + ".xmp")
+
+        lines = [
+            '<?xpacket begin="' + _XMP_PACKET_BEGIN + '" id="W5M0MpCehiHzreSzNTczkc9d"?>',
+            '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
+            ' <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">',
+            '  <rdf:Description rdf:about=""',
+            '   xmlns:dc="http://purl.org/dc/elements/1.1/"',
+            '   xmlns:xmp="http://ns.adobe.com/xap/1.0/"',
+            '   xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/">',
+        ]
+
+        if tags:
+            lines.append("   <dc:subject>")
+            lines.append("    <rdf:Bag>")
+            for tag in tags:
+                lines.append("     <rdf:li>" + _xmp_escape(str(tag)) + "</rdf:li>")
+            lines.append("    </rdf:Bag>")
+            lines.append("   </dc:subject>")
+
+        if notes:
+            lines.extend([
+                "   <dc:description>",
+                "    <rdf:Alt>",
+                '     <rdf:li xml:lang="x-default">' + _xmp_escape(str(notes)) + '</rdf:li>',
+                "    </rdf:Alt>",
+                "   </dc:description>",
+            ])
+
+        if rating is not None and rating >= 0:
+            lines.append("   <xmp:Rating>" + str(int(rating)) + "</xmp:Rating>")
+
+        lines.extend([
+            "  </rdf:Description>",
+            " </rdf:RDF>",
+            "</x:xmpmeta>",
+            '<?xpacket end="w"?>',
+        ])
+        xmp_content = "\n".join(lines)
+
+        # 原子写入：避免进程中断产生半成品
+        import tempfile
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", suffix=".xmp",
+                dir=str(xmp_path.parent), delete=False,
+            )
+            tmp.write(xmp_content)
+            tmp.close()
+            if xmp_path.exists():
+                existing = xmp_path.read_text(encoding="utf-8", errors="replace")
+                if existing == xmp_content:
+                    Path(tmp.name).unlink(missing_ok=True)
+                    return True
+            Path(tmp.name).replace(str(xmp_path))
+            return True
+        except (OSError, PermissionError) as exc:
+            logger.warning("XMP 写入失败 %s: %s", xmp_path, exc)
+            return False
+
+
+_XMP_PACKET_BEGIN = "\ufeff"
+
+
+def _xmp_escape(text: str) -> str:
+    import html
+    return html.escape(str(text), quote=True)

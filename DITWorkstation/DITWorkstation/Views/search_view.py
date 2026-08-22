@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from DITWorkstation.App import config
 from DITWorkstation.App.feature_flags import is_enabled
 from DITWorkstation.App.session_context import get_current_workspace_id, get_data_bus
 from DITWorkstation.Models import RATING_LABELS, AssetRating
@@ -298,6 +297,12 @@ class SearchView(RefreshOnShowView):
         dup_btn = QPushButton("🔁 跨项目查重")
         dup_btn.setToolTip("按校验和聚合跨项目重复入库的素材")
         dup_btn.clicked.connect(self._find_duplicates)
+        save_btn = QPushButton("💾 保存搜索")
+        save_btn.setToolTip("把当前检索条件保存为命名搜索（智能集合）")
+        save_btn.clicked.connect(self._save_current_search)
+        manage_btn = QPushButton("🗂 保存的搜索")
+        manage_btn.setToolTip("管理已保存的搜索条件")
+        manage_btn.clicked.connect(self._manage_saved_searches)
         btn_layout.addWidget(QLabel("视图:"))
         self.view_mode_combo = QComboBox()
         self.view_mode_combo.addItems(["列表", "拍摄时间线"])
@@ -307,6 +312,8 @@ class SearchView(RefreshOnShowView):
         btn_layout.addWidget(reset_btn)
         btn_layout.addWidget(export_btn)
         btn_layout.addWidget(dup_btn)
+        btn_layout.addWidget(save_btn)
+        btn_layout.addWidget(manage_btn)
         btn_layout.addWidget(self.view_mode_combo)
         btn_layout.addStretch()
         self.result_label = QLabel("")
@@ -571,6 +578,86 @@ class SearchView(RefreshOnShowView):
             "taken_from": self._timeline_period[0],
             "taken_to": (self._timeline_period[1] + " 23:59:59") if self._timeline_period[1] else None,
         }
+
+    def _save_current_search(self):
+        """把当前检索条件保存为命名搜索。"""
+        from PySide6.QtWidgets import QInputDialog
+
+        filters = self._collect_filters()
+        name, ok = QInputDialog.getText(
+            self, "保存搜索",
+            "搜索名称（可勾选智能集合以自动刷新）：",
+            text=f"{filters.get('scene') or ''}{filters.get('shot') or ''}",
+        )
+        if not ok or not name.strip():
+            return
+        workspace_id = get_current_workspace_id()
+        project_id = filters.get("project_id")
+        try:
+            self.db_service.create_saved_search(
+                name.strip(),
+                filters,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                is_smart=False,
+            )
+            QMessageBox.information(self, "已保存", f"搜索「{name.strip()}」已保存。")
+        except Exception as exc:
+            logger.warning(f"保存搜索失败: {exc}")
+            QMessageBox.warning(self, "保存失败", f"无法保存搜索：{exc}")
+
+    def _manage_saved_searches(self):
+        """打开保存搜索管理对话框（可重命名/删除/应用）。"""
+        from DITWorkstation.Views.Widgets.saved_search_dialog import SavedSearchDialog
+
+        dialog = SavedSearchDialog(
+            self, db_service=self.db_service,
+            on_apply=self._apply_saved_filters,
+        )
+        dialog.exec()
+
+    def _apply_saved_filters(self, filters: dict):
+        """套用已保存的检索条件（回填控件并触发搜索）。"""
+        if not isinstance(filters, dict):
+            return
+        self.project_combo.blockSignals(True)
+        idx = self.project_combo.findData(filters.get("project_id"))
+        if idx >= 0:
+            self.project_combo.setCurrentIndex(idx)
+        self.project_combo.blockSignals(False)
+        self.scene_edit.setText(filters.get("scene") or "")
+        self.shot_edit.setText(filters.get("shot") or "")
+        self.keyword_edit.setText(filters.get("keyword") or "")
+        self.tag_edit.setText(filters.get("tag") or "")
+
+        # 类型
+        file_type = filters.get("file_type")
+        self.type_combo.setCurrentIndex(
+            self.type_combo.findText(file_type) if file_type else 0
+        )
+        # 评级 / 日志
+        if is_enabled("ratings"):
+            rating = filters.get("rating")
+            self.rating_combo.setCurrentIndex(
+                self.rating_combo.findData(rating) if rating is not None else 0
+            )
+        if is_enabled("shooting_log"):
+            log_id = filters.get("log_id")
+            self.log_combo.setCurrentIndex(
+                self.log_combo.findData(log_id) if log_id else 0
+            )
+        # 日期
+        date_from = filters.get("date_from")
+        date_to = filters.get("date_to")
+        if date_from or date_to:
+            self.date_check.setChecked(True)
+            if date_from:
+                self.date_from.setDate(QDate.fromString(date_from[:10], "yyyy-MM-dd"))
+            if date_to:
+                self.date_to.setDate(QDate.fromString(date_to[:10], "yyyy-MM-dd"))
+        else:
+            self.date_check.setChecked(False)
+        self._search()
 
     def _load_page(self):
         """在后台按当前游标读取一页，避免 SQLite/FTS 查询阻塞主线程。"""
