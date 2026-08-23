@@ -135,15 +135,9 @@ class AppConfig:
     auto_card_template_id: str = ""
     auto_card_project_id: str = ""
 
-    # 主题模式：light / dark（重启后生效）
-    theme_mode: str = "light"
-
     # 完整性校验调度：间隔小时数（0=禁用）；scope=all/backup
     integrity_check_interval_hours: int = 0
     integrity_check_scope: str = "all"
-
-    # 自动更新：检查 URL（空字符串=禁用）；返回 {"version":"alpha.YYYYMMDD","download_url":"..."} 的 JSON
-    auto_update_check_url: str = ""
 
     # 已处理的存储卡指纹列表（多卡去重）
     # 多卡去重：跳过已处理过的存储卡指纹

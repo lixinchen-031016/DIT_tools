@@ -2,6 +2,7 @@
 
 验证 App/session_context.py 的信号广播与项目/工作区联动逻辑。
 """
+
 import os
 import sys
 import unittest
@@ -10,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # EventBus 依赖 Qt 信号系统，需 QCoreApplication 实例
 from PySide6.QtCore import QCoreApplication
+
 _app = QCoreApplication.instance() or QCoreApplication(sys.argv)
 
 from DITWorkstation.App import session_context

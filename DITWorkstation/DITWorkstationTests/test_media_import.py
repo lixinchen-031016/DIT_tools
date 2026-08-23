@@ -1,12 +1,12 @@
 """媒体导入功能测试"""
+
 import os
-import tempfile
-import pytest
 from pathlib import Path
 
-from DITWorkstation.Services.media_import_service import MediaImportService
-from DITWorkstation.Services.database_service import DatabaseService
+import pytest
 from DITWorkstation.Models import AssetType, ShootingLog
+from DITWorkstation.Services.database_service import DatabaseService
+from DITWorkstation.Services.media_import_service import MediaImportService
 
 
 @pytest.fixture
@@ -127,9 +127,7 @@ class TestMediaImportService:
         f2.write_bytes(b"image2 data")
 
         result = import_service.import_assets(
-            project.project_id,
-            [str(f1), str(f2)],
-            compute_checksum=False
+            project.project_id, [str(f1), str(f2)], compute_checksum=False
         )
 
         assert result["total"] == 2
@@ -163,7 +161,7 @@ class TestMediaImportService:
             [str(f1)],
             compute_checksum=False,
             copy_to_workspace=True,
-            workspace_dir=str(workspace)
+            workspace_dir=str(workspace),
         )
 
         assert result["imported"] == 1
@@ -205,8 +203,11 @@ class TestMediaImportService:
         # 调用方已拼接好 <ws.path>/<项目名>
         workspace_dir = str(tmp_path / "WS" / "项目A")
         result = svc.import_assets(
-            project.project_id, [str(f)], compute_checksum=False,
-            copy_to_workspace=True, workspace_dir=workspace_dir,
+            project.project_id,
+            [str(f)],
+            compute_checksum=False,
+            copy_to_workspace=True,
+            workspace_dir=workspace_dir,
         )
         assert result["imported"] == 1
         asset = db_service.get_media_assets(project.project_id)[0]
@@ -242,9 +243,7 @@ class TestMediaImportService:
         project = db_service.create_project("测试项目")
 
         result = import_service.import_assets(
-            project.project_id,
-            ["/nonexistent/path.jpg"],
-            compute_checksum=False
+            project.project_id, ["/nonexistent/path.jpg"], compute_checksum=False
         )
 
         assert result["total"] == 1
@@ -302,9 +301,7 @@ class TestMediaImportService:
             return counter["n"] >= 3
 
         result = import_service.import_assets(
-            project.project_id, files,
-            compute_checksum=False,
-            cancel_check=cancel_check
+            project.project_id, files, compute_checksum=False, cancel_check=cancel_check
         )
 
         assert result["cancelled"] is True
@@ -325,9 +322,10 @@ class TestMediaImportService:
             files.append(str(f))
 
         result = import_service.import_assets(
-            project.project_id, files,
+            project.project_id,
+            files,
             compute_checksum=False,
-            cancel_check=lambda: True  # 立即取消
+            cancel_check=lambda: True,  # 立即取消
         )
 
         assert result["cancelled"] is True
@@ -344,9 +342,7 @@ class TestMediaImportService:
         f.write_bytes(b"fake image without exif")
 
         result = import_service.import_assets(
-            project.project_id, [str(f)],
-            compute_checksum=False,
-            read_metadata=True
+            project.project_id, [str(f)], compute_checksum=False, read_metadata=True
         )
         assert result["imported"] == 1
 
@@ -378,9 +374,7 @@ class TestMediaImportService:
         f.write_bytes(b"data")
 
         result = import_service.import_assets(
-            project.project_id, [str(f)],
-            compute_checksum=False,
-            read_metadata=False
+            project.project_id, [str(f)], compute_checksum=False, read_metadata=False
         )
         assert result["imported"] == 1
 
@@ -408,9 +402,7 @@ class TestMediaImportService:
             progress_calls.append((target, progress, msg))
 
         result = import_service.import_assets(
-            project.project_id, files,
-            compute_checksum=False,
-            progress_callback=cb
+            project.project_id, files, compute_checksum=False, progress_callback=cb
         )
 
         assert result["imported"] == 5
@@ -432,8 +424,7 @@ class TestMediaImportService:
         f.write_bytes(b"data")
 
         result = import_service.import_assets(
-            project.project_id, [str(f)],
-            compute_checksum=False
+            project.project_id, [str(f)], compute_checksum=False
         )
 
         # 结果应包含 cancelled 字段（即使未取消）
@@ -454,7 +445,7 @@ class TestMediaImportService:
             project_id=project.project_id,
             scene="S100",
             shot="005B",
-            take="02"
+            take="02",
         )
         db_service.create_shooting_log(log)
 
@@ -462,11 +453,12 @@ class TestMediaImportService:
         f.write_bytes(b"test data")
 
         result = import_service.import_assets(
-            project.project_id, [str(f)],
+            project.project_id,
+            [str(f)],
             compute_checksum=False,
             log_id="log_import_001",
             scene="S100",
-            shot="005B"
+            shot="005B",
         )
         assert result["imported"] == 1
 
@@ -477,7 +469,9 @@ class TestMediaImportService:
         assert asset.scene == "S100"
         assert asset.shot == "005B"
 
-    def test_import_without_log_id_defaults_empty(self, import_service, temp_db, tmp_path):
+    def test_import_without_log_id_defaults_empty(
+        self, import_service, temp_db, tmp_path
+    ):
         """测试不带 log_id 导入时默认值正确（向后兼容）"""
         db_service, _ = temp_db
         project = db_service.create_project("默认值测试")
@@ -486,8 +480,7 @@ class TestMediaImportService:
         f.write_bytes(b"data")
 
         result = import_service.import_assets(
-            project.project_id, [str(f)],
-            compute_checksum=False
+            project.project_id, [str(f)], compute_checksum=False
         )
         assert result["imported"] == 1
 
@@ -507,10 +500,11 @@ class TestMediaImportService:
         f.write_bytes(b"data")
 
         result = import_service.import_assets(
-            project.project_id, [str(f)],
+            project.project_id,
+            [str(f)],
             compute_checksum=False,
             scene="S200",
-            shot="010C"
+            shot="010C",
         )
         assert result["imported"] == 1
 
@@ -531,7 +525,7 @@ class TestMediaImportService:
             project_id=project.project_id,
             scene="S001",
             shot="001A",
-            take="01"
+            take="01",
         )
         db_service.create_shooting_log(log)
 
@@ -543,19 +537,21 @@ class TestMediaImportService:
 
         # 2 个关联日志，1 个不关联
         import_service.import_assets(
-            project.project_id, files[:2],
+            project.project_id,
+            files[:2],
             compute_checksum=False,
             log_id="log_e2e_001",
             scene="S001",
-            shot="001A"
+            shot="001A",
         )
         import_service.import_assets(
-            project.project_id, files[2:],
-            compute_checksum=False
+            project.project_id, files[2:], compute_checksum=False
         )
 
         # 按 log_id 搜索
-        log_assets = db_service.search_assets(project_id=project.project_id, log_id="log_e2e_001")
+        log_assets = db_service.search_assets(
+            project_id=project.project_id, log_id="log_e2e_001"
+        )
         assert len(log_assets) == 2
         for a in log_assets:
             assert a.log_id == "log_e2e_001"
@@ -563,7 +559,9 @@ class TestMediaImportService:
             assert a.shot == "001A"
 
         # 按 scene 搜索
-        scene_assets = db_service.search_assets(project_id=project.project_id, scene="S001")
+        scene_assets = db_service.search_assets(
+            project_id=project.project_id, scene="S001"
+        )
         assert len(scene_assets) == 2
 
         # 全部素材
@@ -578,8 +576,10 @@ class TestMediaImportService:
         f.write_bytes(b"data")
 
         result = import_service.import_assets(
-            project.project_id, [str(f), str(f)],
-            compute_checksum=False, read_metadata=False,
+            project.project_id,
+            [str(f), str(f)],
+            compute_checksum=False,
+            read_metadata=False,
         )
         assert result["imported"] == 1
         assert result["skipped"] == 1
@@ -596,8 +596,10 @@ class TestMediaImportService:
             files.append(str(f))
 
         result = import_service.import_assets(
-            project.project_id, files,
-            compute_checksum=True, read_metadata=False,
+            project.project_id,
+            files,
+            compute_checksum=True,
+            read_metadata=False,
         )
         assert result["imported"] == 20
         assert result["failed"] == 0
@@ -623,8 +625,10 @@ class TestMediaImportService:
         result = import_service.import_assets(
             project.project_id,
             [str(f1), str(f2)],
-            compute_checksum=False, read_metadata=False,
-            copy_to_workspace=True, workspace_dir=str(ws),
+            compute_checksum=False,
+            read_metadata=False,
+            copy_to_workspace=True,
+            workspace_dir=str(ws),
         )
         assert result["imported"] == 2
         names = {a.file_name for a in db_service.get_media_assets(project.project_id)}

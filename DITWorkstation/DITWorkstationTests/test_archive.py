@@ -1,4 +1,5 @@
 """项目归档/恢复服务测试"""
+
 import json
 import os
 import sys
@@ -10,9 +11,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from DITWorkstation.Models import MediaAsset, ShootingLog
 from DITWorkstation.Services.archive_service import ArchiveService
 from DITWorkstation.Services.checksum_service import ChecksumService
-from DITWorkstation.Models import MediaAsset, ShootingLog
 
 
 def _make_project_with_data(db_service, src_dir):
@@ -35,23 +36,25 @@ def _make_project_with_data(db_service, src_dir):
         p = src_dir / f"IMG_{i:03d}.jpg"
         p.write_bytes(b"\xff\xd8\xff\xe0" + os.urandom(1024))
         cached = checksum_svc.compute_file_checksum(str(p))
-        assets.append(MediaAsset(
-            asset_id=str(uuid.uuid4())[:8],
-            project_id=project.project_id,
-            file_path=str(p),
-            file_name=p.name,
-            file_size=p.stat().st_size,
-            file_type=".jpg",
-            asset_type="image",
-            checksum_algorithm=cached.algorithm.value,
-            checksum_value=cached.hash_value,
-            scene="S01",
-            shot="001A",
-            log_id=log.log_id,
-            backup_locations=["/tmp/backup"],
-            tags="日戏,主镜头",
-            notes="归档测试备注",
-        ))
+        assets.append(
+            MediaAsset(
+                asset_id=str(uuid.uuid4())[:8],
+                project_id=project.project_id,
+                file_path=str(p),
+                file_name=p.name,
+                file_size=p.stat().st_size,
+                file_type=".jpg",
+                asset_type="image",
+                checksum_algorithm=cached.algorithm.value,
+                checksum_value=cached.hash_value,
+                scene="S01",
+                shot="001A",
+                log_id=log.log_id,
+                backup_locations=["/tmp/backup"],
+                tags="日戏,主镜头",
+                notes="归档测试备注",
+            )
+        )
     db_service.add_media_assets_batch(assets)
     return project, log, assets
 
@@ -110,7 +113,9 @@ def test_archive_cancel_does_not_replace_existing_output(db_service, tmp_dir):
 
     with pytest.raises(InterruptedError):
         ArchiveService(db_service=db_service).archive_project(
-            project.project_id, str(out), include_files=False,
+            project.project_id,
+            str(out),
+            include_files=False,
             cancel_check=lambda: True,
         )
 
@@ -122,7 +127,7 @@ def test_restore_project_metadata_only(db_service, tmp_dir):
     """恢复（不含文件）：新项目重建，素材/日志记录齐全"""
     src = tmp_dir / "media"
     src.mkdir()
-    project, log, _ = _make_project_with_data(db_service, src)
+    project, _log, _ = _make_project_with_data(db_service, src)
     out = tmp_dir / "proj.zip"
     service = ArchiveService(db_service=db_service)
     service.archive_project(project.project_id, str(out), include_files=False)
@@ -206,12 +211,20 @@ def test_restore_rejects_path_traversal_member(db_service, tmp_dir):
         "version": 1,
         "project": {"name": "恶意归档", "created_at": "2026-01-01T00:00:00"},
     }
-    assets = [{
-        "asset_id": "asset-1", "project_id": "old", "file_path": "x.txt",
-        "file_name": "x.txt", "file_size": 4, "file_type": ".txt",
-        "checksum_algorithm": "xxhash64", "checksum_value": "",
-        "date_imported": "2026-01-01T00:00:00", "archive_file": "files/../outside.txt",
-    }]
+    assets = [
+        {
+            "asset_id": "asset-1",
+            "project_id": "old",
+            "file_path": "x.txt",
+            "file_name": "x.txt",
+            "file_size": 4,
+            "file_type": ".txt",
+            "checksum_algorithm": "xxhash64",
+            "checksum_value": "",
+            "date_imported": "2026-01-01T00:00:00",
+            "archive_file": "files/../outside.txt",
+        }
+    ]
     with zipfile.ZipFile(archive, "w") as zf:
         zf.writestr("manifest.json", json.dumps(manifest))
         zf.writestr("assets.json", json.dumps(assets))
@@ -225,11 +238,14 @@ def test_restore_rejects_path_traversal_member(db_service, tmp_dir):
     assert not (tmp_dir / "outside.txt").exists()
 
 
-@pytest.mark.parametrize("member", [
-    "files/C:/outside.txt",
-    "files/C:\\outside.txt",
-    "files/\\\\server\\share\\outside.txt",
-])
+@pytest.mark.parametrize(
+    "member",
+    [
+        "files/C:/outside.txt",
+        "files/C:\\outside.txt",
+        "files/\\\\server\\share\\outside.txt",
+    ],
+)
 def test_archive_path_validation_rejects_windows_absolute_paths(member):
     """在非 Windows 测试机上也拒绝 Windows 绝对路径语义。"""
     with pytest.raises(ValueError, match="非法归档成员路径"):

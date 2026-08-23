@@ -1,13 +1,11 @@
 """设置对话框测试：布局、模式切换、配置持久化（复用 conftest 的 offscreen QApplication）"""
-import pytest
-from PySide6.QtWidgets import QComboBox, QGroupBox, QPushButton, QScrollArea
 
-from DITWorkstation.App import config
 from DITWorkstation.App.feature_flags import UsageMode, get_usage_mode, set_usage_mode
 from DITWorkstation.Views.Widgets.settings_dialog import SettingsDialog
-
+from PySide6.QtWidgets import QComboBox, QGroupBox, QScrollArea
 
 # ===== 对话框基本构造 =====
+
 
 def test_settings_dialog_instantiation():
     """验证设置对话框可在无头模式下正常构造。"""
@@ -48,6 +46,7 @@ def test_settings_dialog_has_group_boxes():
 
 
 # ===== 使用场景模式切换（直接通过 set_usage_mode 测试持久化） =====
+
 
 def test_usage_mode_persistence_after_switch():
     """验证 set_usage_mode 的配置持久化：切换后应能通过 get_usage_mode 读取到正确值。

@@ -1,4 +1,5 @@
 """校验和服务测试 - 对应 TR-2.1, TR-2.2"""
+
 import os
 import sys
 import tempfile
@@ -26,6 +27,7 @@ class TestChecksumService(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_xxhash64_checksum(self):
@@ -87,9 +89,7 @@ class TestChecksumService(unittest.TestCase):
         def callback(p):
             progress_values.append(p)
 
-        self.service.compute_file_checksum(
-            self.test_file, progress_callback=callback
-        )
+        self.service.compute_file_checksum(self.test_file, progress_callback=callback)
         self.assertGreater(len(progress_values), 0)
         self.assertLessEqual(progress_values[-1], 1.0)
 
@@ -162,9 +162,7 @@ class TestChecksumService(unittest.TestCase):
         """取消回调返回 True 时中断哈希计算"""
         service = ChecksumService(buffer_size=1024)
         with self.assertRaises(InterruptedError):
-            service.compute_file_checksum(
-                self.test_file, cancel_check=lambda: True
-            )
+            service.compute_file_checksum(self.test_file, cancel_check=lambda: True)
 
     def test_copy_file_with_checksum(self):
         """边拷贝边哈希：目标内容一致且哈希等于源文件校验和"""
@@ -173,7 +171,7 @@ class TestChecksumService(unittest.TestCase):
 
         self.assertEqual(
             result.hash_value,
-            self.service.compute_file_checksum(self.test_file).hash_value
+            self.service.compute_file_checksum(self.test_file).hash_value,
         )
         with open(self.test_file, "rb") as a, open(dest, "rb") as b:
             self.assertEqual(a.read(), b.read())

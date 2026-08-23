@@ -75,50 +75,10 @@ class ThemePalette:
 
 LIGHT_PALETTE = ThemePalette()
 
-DARK_PALETTE = ThemePalette(
-    PRIMARY="#0a84ff",
-    PRIMARY_HOVER="#1f93ff",
-    PRIMARY_PRESSED="#0066cc",
-    SUCCESS="#30d158",
-    WARNING="#ff9f0a",
-    DANGER="#ff453a",
-    DANGER_HOVER="#ff6961",
-    INFO="#5e5ce6",
-    TEXT_PRIMARY="#f2f2f7",
-    TEXT_SECONDARY="#98989d",
-    TEXT_PLACEHOLDER="#6e6e73",
-    BG_APP="#121214",
-    BG_CARD="#1c1c1e",
-    BG_GROUP="#232326",
-    BG_HEADER="#2c2c2e",
-    BG_ALT_ROW="#1f1f21",
-    BORDER="#3a3a3c",
-    BORDER_LIGHT="#2c2c2e",
-    SIDEBAR_BG="#1a1a1b",
-    SIDEBAR_TEXT="#ffffff",
-    SIDEBAR_HOVER="#2a2a2b",
-    BANNER_INFO_BG="#0d2137",
-    BANNER_INFO_FG="#64b5f6",
-    BANNER_WARNING_BG="#2b2000",
-    BANNER_WARNING_FG="#ffd54f",
-    BANNER_WARNING_BORDER="#6b5400",
-    DISABLED="#6e6e73",
-)
-
-
 # ============ 当前激活调色板（模块级引用，视图在调用 setStyleSheet 时读取）============
 
-_ACTIVE_PALETTE: ThemePalette = LIGHT_PALETTE
 
-
-class COLOR_PROXY:
-    """颜色代理。访问 COLOR.X 时从当前激活调色板读取。"""
-
-    def __getattr__(self, name):
-        return getattr(_ACTIVE_PALETTE, name)
-
-
-COLOR = COLOR_PROXY()
+COLOR = LIGHT_PALETTE
 
 
 # ============ 字号 ============
@@ -174,7 +134,7 @@ MONO_FONT_QSS = (
 
 def _build_qss() -> str:
     """从当前激活调色板构建全局 QSS 字符串。"""
-    C = _ACTIVE_PALETTE
+    C = LIGHT_PALETTE
     FS = FONT_SIZE
     R = RADIUS
     return f"""
@@ -396,72 +356,6 @@ TITLE_QSS = (
     f"font-size: {FONT_SIZE.XL}px; font-weight: bold; color: {COLOR.TEXT_PRIMARY};"
 )
 SUBTITLE_QSS = f"font-size: {FONT_SIZE.BASE}px; color: {COLOR.TEXT_SECONDARY};"
-
-
-# ============ 主题切换 API ============
-
-
-def set_theme_mode(mode: str) -> None:
-    """设置当前主题并重建模块级 QSS 常量。
-
-    调用方（main.py）在启动时读取 config.theme_mode 后调用此函数，
-    再创建 MainWindow，确保视图构造时 COLOR 已指向正确调色板。
-
-    Args:
-        mode: "light" 或 "dark"
-    """
-    global _ACTIVE_PALETTE, GLOBAL_QSS, PRIMARY_BUTTON_QSS
-    global SECONDARY_BUTTON_QSS, DANGER_BUTTON_QSS, TITLE_QSS, SUBTITLE_QSS
-    if mode == "dark":
-        _ACTIVE_PALETTE = DARK_PALETTE
-    else:
-        _ACTIVE_PALETTE = LIGHT_PALETTE
-    # 重建所有模块级 QSS 常量
-    GLOBAL_QSS = _build_qss()
-    PRIMARY_BUTTON_QSS = f"""QPushButton {{
-    background-color: {COLOR.PRIMARY};
-    color: white;
-    padding: 10px 24px;
-    border-radius: {RADIUS.BUTTON}px;
-    font-size: {FONT_SIZE.MD}px;
-    font-weight: bold;
-    border: none;
-}}
-QPushButton:hover {{ background-color: {COLOR.PRIMARY_HOVER}; }}
-QPushButton:pressed {{ background-color: {COLOR.PRIMARY_PRESSED}; }}
-QPushButton:disabled {{ background-color: {COLOR.DISABLED}; }}"""
-    SECONDARY_BUTTON_QSS = f"""QPushButton {{
-    background-color: {COLOR.BG_CARD};
-    color: {COLOR.TEXT_PRIMARY};
-    padding: 10px 24px;
-    border-radius: {RADIUS.BUTTON}px;
-    font-size: {FONT_SIZE.MD}px;
-    border: 1px solid {COLOR.BORDER};
-}}
-QPushButton:hover {{ background-color: {COLOR.BG_APP}; }}
-QPushButton:pressed {{ background-color: {COLOR.BG_HEADER}; }}
-QPushButton:disabled {{ color: {COLOR.DISABLED}; border-color: {COLOR.DISABLED}; }}"""
-    DANGER_BUTTON_QSS = f"""QPushButton {{
-    background-color: {COLOR.DANGER};
-    color: white;
-    padding: 8px 16px;
-    border-radius: {RADIUS.BUTTON}px;
-    font-size: {FONT_SIZE.SM}px;
-    border: none;
-}}
-QPushButton:hover {{ background-color: {COLOR.DANGER_HOVER}; }}
-QPushButton:disabled {{ background-color: {COLOR.DISABLED}; }}"""
-    TITLE_QSS = (
-        f"font-size: {FONT_SIZE.XL}px; font-weight: bold; color: {COLOR.TEXT_PRIMARY};"
-    )
-    SUBTITLE_QSS = f"font-size: {FONT_SIZE.BASE}px; color: {COLOR.TEXT_SECONDARY};"
-
-
-def get_theme_mode() -> str:
-    """返回当前主题模式名称。"""
-    if _ACTIVE_PALETTE is DARK_PALETTE:
-        return "dark"
-    return "light"
 
 
 # ============ 对勾 SVG ============

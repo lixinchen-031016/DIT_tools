@@ -1,8 +1,9 @@
 """RAW提取服务测试 - 对应 TR-5.1, TR-5.2"""
+
 import os
+import shutil
 import sys
 import tempfile
-import shutil
 import unittest
 from pathlib import Path
 
@@ -86,6 +87,7 @@ class TestRawExtractionService(unittest.TestCase):
         """
         import unicodedata
         from pathlib import Path as _Path
+
         jpg_dir = _Path(self.temp_dir) / "jpg_unicode"
         raw_dir = _Path(self.temp_dir) / "raw_unicode"
         jpg_dir.mkdir()
@@ -107,6 +109,7 @@ class TestRawExtractionService(unittest.TestCase):
             unicodedata.normalize("NFC", matches[0][1].name),
             unicodedata.normalize("NFC", raw.name),
         )
+
     def test_extract_raw_files(self):
         """TR-5.1: 选择JPG文件夹后正确提取对应RAW"""
         result = self.service.extract_raw_files(
@@ -124,7 +127,7 @@ class TestRawExtractionService(unittest.TestCase):
 
     def test_multiple_raw_formats(self):
         """TR-5.2: 支持多种RAW格式"""
-        result = self.service.extract_raw_files(
+        _result = self.service.extract_raw_files(
             self.jpg_dir, self.raw_dir, self.output_dir
         )
 
@@ -158,6 +161,7 @@ class TestRawExtractionService(unittest.TestCase):
 
         # 手动验证一个文件
         from DITWorkstation.Services.checksum_service import ChecksumService
+
         checksum_svc = ChecksumService()
 
         src_raw = os.path.join(self.raw_dir, "IMG_001.cr2")
@@ -173,9 +177,16 @@ class TestRawExtractionService(unittest.TestCase):
         checksum_svc = service.checksum_service
         orig = checksum_svc.copy_file_with_checksum
 
-        def fake_copy(src_path, dest_path, algorithm=None,
-                      progress_callback=None, cancel_check=None):
-            result = orig(src_path, dest_path, algorithm, progress_callback, cancel_check)
+        def fake_copy(
+            src_path,
+            dest_path,
+            algorithm=None,
+            progress_callback=None,
+            cancel_check=None,
+        ):
+            result = orig(
+                src_path, dest_path, algorithm, progress_callback, cancel_check
+            )
             # 第一个文件完成后即触发取消（须在拷贝之后，避免中途 InterruptedError）
             service._set_cancelled(True)
             return result

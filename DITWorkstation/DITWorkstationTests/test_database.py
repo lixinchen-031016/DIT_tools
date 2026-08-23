@@ -1,19 +1,20 @@
 """数据库服务测试 - 对应 TR-6.1, TR-6.2, TR-7.1"""
+
 import os
-import sys
-import sqlite3
-import tempfile
 import shutil
+import sqlite3
+import sys
+import tempfile
 import time
 import unittest
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from DITWorkstation.Models import MediaAsset, ShootingLog
 from DITWorkstation.Services.database_service import DatabaseService
-from DITWorkstation.Models import Project, ShootingLog, MediaAsset, Workspace
 
 
 class TestDatabaseService(unittest.TestCase):
@@ -32,7 +33,7 @@ class TestDatabaseService(unittest.TestCase):
         project = self.db.create_project(
             name="测试项目",
             description="这是一个测试项目",
-            base_path="/tmp/test_project"
+            base_path="/tmp/test_project",
         )
         self.assertIsNotNone(project.project_id)
         self.assertEqual(project.name, "测试项目")
@@ -49,25 +50,45 @@ class TestDatabaseService(unittest.TestCase):
     def test_capture_timeline_groups_by_taken_date(self):
         """时间线按拍摄日期聚合，不混用导入日期。"""
         project = self.db.create_project(name="时间线项目")
-        self.db.add_media_asset(MediaAsset(
-            asset_id="timeline-1", project_id=project.project_id,
-            file_path="/media/a.jpg", file_name="a.jpg", file_size=10,
-            file_type=".jpg", date_taken=datetime(2026, 8, 1, 10, 0),
-        ))
-        self.db.add_media_asset(MediaAsset(
-            asset_id="timeline-2", project_id=project.project_id,
-            file_path="/media/b.jpg", file_name="b.jpg", file_size=20,
-            file_type=".jpg", date_taken=datetime(2026, 8, 1, 12, 0),
-        ))
-        self.db.add_media_asset(MediaAsset(
-            asset_id="timeline-3", project_id=project.project_id,
-            file_path="/media/c.jpg", file_name="c.jpg", file_size=30,
-            file_type=".jpg", date_taken=datetime(2026, 8, 2, 9, 0),
-        ))
+        self.db.add_media_asset(
+            MediaAsset(
+                asset_id="timeline-1",
+                project_id=project.project_id,
+                file_path="/media/a.jpg",
+                file_name="a.jpg",
+                file_size=10,
+                file_type=".jpg",
+                date_taken=datetime(2026, 8, 1, 10, 0, tzinfo=UTC),
+            )
+        )
+        self.db.add_media_asset(
+            MediaAsset(
+                asset_id="timeline-2",
+                project_id=project.project_id,
+                file_path="/media/b.jpg",
+                file_name="b.jpg",
+                file_size=20,
+                file_type=".jpg",
+                date_taken=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
+            )
+        )
+        self.db.add_media_asset(
+            MediaAsset(
+                asset_id="timeline-3",
+                project_id=project.project_id,
+                file_path="/media/c.jpg",
+                file_name="c.jpg",
+                file_size=30,
+                file_type=".jpg",
+                date_taken=datetime(2026, 8, 2, 9, 0, tzinfo=UTC),
+            )
+        )
 
         timeline = self.db.get_capture_timeline(project.project_id)
 
-        self.assertEqual([row["period"] for row in timeline], ["2026-08-01", "2026-08-02"])
+        self.assertEqual(
+            [row["period"] for row in timeline], ["2026-08-01", "2026-08-02"]
+        )
         self.assertEqual(timeline[0]["asset_count"], 2)
         self.assertEqual(timeline[0]["total_size"], 30)
         self.assertEqual(
@@ -109,7 +130,7 @@ class TestDatabaseService(unittest.TestCase):
             iso=800,
             aperture="f/2.8",
             shutter_speed="1/48s",
-            notes="使用斯坦尼康"
+            notes="使用斯坦尼康",
         )
         result = self.db.create_shooting_log(log)
         self.assertEqual(result.scene, "S001")
@@ -123,9 +144,9 @@ class TestDatabaseService(unittest.TestCase):
             log = ShootingLog(
                 log_id=str(uuid.uuid4())[:8],
                 project_id=project.project_id,
-                scene=f"S{i+1:03d}",
-                shot=f"{i+1:03d}A",
-                take="01"
+                scene=f"S{i + 1:03d}",
+                shot=f"{i + 1:03d}A",
+                take="01",
             )
             self.db.create_shooting_log(log)
 
@@ -142,7 +163,7 @@ class TestDatabaseService(unittest.TestCase):
             scene="S001",
             shot="001A",
             take="01",
-            file_paths=["/path/to/file1.cr2", "/path/to/file2.cr2"]
+            file_paths=["/path/to/file1.cr2", "/path/to/file2.cr2"],
         )
         self.db.create_shooting_log(log)
 
@@ -163,7 +184,7 @@ class TestDatabaseService(unittest.TestCase):
             file_type=".cr2",
             checksum_value="abc123def456",
             scene="S001",
-            shot="001A"
+            shot="001A",
         )
         result = self.db.add_media_asset(asset)
         self.assertEqual(result.file_name, "IMG_001.cr2")
@@ -182,7 +203,7 @@ class TestDatabaseService(unittest.TestCase):
                 file_size=1024,
                 file_type=".cr2",
                 scene=scene,
-                shot=f"{i:03d}A"
+                shot=f"{i:03d}A",
             )
             self.db.add_media_asset(asset)
 
@@ -200,7 +221,7 @@ class TestDatabaseService(unittest.TestCase):
             file_name="DSC_0001.nef",
             file_size=1024,
             file_type=".nef",
-            scene="S001"
+            scene="S001",
         )
         self.db.add_media_asset(asset)
 
@@ -218,7 +239,7 @@ class TestDatabaseService(unittest.TestCase):
                 file_path=f"/path/file{ext}",
                 file_name=f"file{ext}",
                 file_size=1024,
-                file_type=ext
+                file_type=ext,
             )
             self.db.add_media_asset(asset)
 
@@ -260,7 +281,7 @@ class TestDatabaseService(unittest.TestCase):
             focal_length="50mm",
             video_metadata='{"codec":"h264"}',
             is_working_copy=True,
-            original_path="/original/path.cr2"
+            original_path="/original/path.cr2",
         )
         self.db.add_media_asset(asset)
 
@@ -286,7 +307,7 @@ class TestDatabaseService(unittest.TestCase):
             file_path="/path/to/file.jpg",
             file_name="file.jpg",
             file_size=1024,
-            file_type=".jpg"
+            file_type=".jpg",
         )
         self.db.add_media_asset(asset)
 
@@ -297,7 +318,7 @@ class TestDatabaseService(unittest.TestCase):
             lens_model="Canon 24-70",
             focal_length="35mm",
             duration_seconds=60.0,
-            video_metadata='{"duration":60}'
+            video_metadata='{"duration":60}',
         )
         self.assertTrue(ok)
 
@@ -345,11 +366,22 @@ class TestDatabaseService(unittest.TestCase):
 
         # 验证新字段已添加
         conn = sqlite3.connect(str(self.db.db_path))
-        cols = {row[1] for row in conn.execute("PRAGMA table_info(media_assets)").fetchall()}
+        cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(media_assets)").fetchall()
+        }
         conn.close()
 
-        for col in ["asset_type", "is_working_copy", "original_path", "width", "height",
-                    "duration_seconds", "lens_model", "focal_length", "video_metadata"]:
+        for col in [
+            "asset_type",
+            "is_working_copy",
+            "original_path",
+            "width",
+            "height",
+            "duration_seconds",
+            "lens_model",
+            "focal_length",
+            "video_metadata",
+        ]:
             self.assertIn(col, cols, f"迁移未补齐字段: {col}")
 
         # 验证迁移后可正常写入并读取
@@ -362,7 +394,7 @@ class TestDatabaseService(unittest.TestCase):
             file_size=1024,
             file_type=".jpg",
             asset_type="image",
-            width=800
+            width=800,
         )
         self.db.add_media_asset(asset)
         fetched = self.db.get_media_asset(asset.asset_id)
@@ -389,7 +421,7 @@ class TestDatabaseService(unittest.TestCase):
             project_id=project.project_id,
             scene="S001",
             shot="001A",
-            take="01"
+            take="01",
         )
         self.db.create_shooting_log(log)
 
@@ -401,7 +433,7 @@ class TestDatabaseService(unittest.TestCase):
                 file_name=f"file_{i}.cr2",
                 file_size=1024,
                 file_type=".cr2",
-                log_id="log001" if i < 3 else None
+                log_id="log001" if i < 3 else None,
             )
             self.db.add_media_asset(asset)
 
@@ -422,7 +454,7 @@ class TestDatabaseService(unittest.TestCase):
             project_id=project.project_id,
             scene="S002",
             shot="002A",
-            take="01"
+            take="01",
         )
         self.db.create_shooting_log(log)
 
@@ -434,7 +466,7 @@ class TestDatabaseService(unittest.TestCase):
                 file_name=f"f_{i}.cr2",
                 file_size=100,
                 file_type=".cr2",
-                log_id="log002"
+                log_id="log002",
             )
             self.db.add_media_asset(asset)
 
@@ -451,7 +483,7 @@ class TestDatabaseService(unittest.TestCase):
             project_id=project.project_id,
             scene="S003",
             shot="003A",
-            take="01"
+            take="01",
         )
         self.db.create_shooting_log(log)
 
@@ -461,7 +493,7 @@ class TestDatabaseService(unittest.TestCase):
             file_path="/p/link.cr2",
             file_name="link.cr2",
             file_size=100,
-            file_type=".cr2"
+            file_type=".cr2",
         )
         self.db.add_media_asset(asset)
 
@@ -490,7 +522,7 @@ class TestDatabaseService(unittest.TestCase):
             project_id=project.project_id,
             scene="S001",
             shot="001A",
-            take="01"
+            take="01",
         )
         self.db.create_shooting_log(log)
 
@@ -502,7 +534,7 @@ class TestDatabaseService(unittest.TestCase):
                 file_name=f"c_{i}.cr2",
                 file_size=100,
                 file_type=".cr2",
-                log_id="log_del"
+                log_id="log_del",
             )
             self.db.add_media_asset(asset)
 
@@ -535,7 +567,7 @@ class TestDatabaseService(unittest.TestCase):
             project_id=project.project_id,
             scene="S099",
             shot="099A",
-            take="02"
+            take="02",
         )
         # 用 create_log_with_assets 关联素材并同步 scene/shot
         asset_ids = ["ast_ss_1", "ast_ss_2"]
@@ -546,7 +578,7 @@ class TestDatabaseService(unittest.TestCase):
                 file_path=f"/p/{aid}.cr2",
                 file_name=f"{aid}.cr2",
                 file_size=100,
-                file_type=".cr2"
+                file_type=".cr2",
             )
             self.db.add_media_asset(asset)
 
@@ -580,7 +612,7 @@ class TestDatabaseService(unittest.TestCase):
             project_id=project.project_id,
             scene="S042",
             shot="042A",
-            take="01"
+            take="01",
         )
         asset = MediaAsset(
             asset_id="ast_unlink",
@@ -588,7 +620,7 @@ class TestDatabaseService(unittest.TestCase):
             file_path="/p/unlink.cr2",
             file_name="unlink.cr2",
             file_size=100,
-            file_type=".cr2"
+            file_type=".cr2",
         )
         self.db.add_media_asset(asset)
         self.db.create_log_with_assets(log, ["ast_unlink"], sync_scene_shot=True)
@@ -621,7 +653,7 @@ class TestDatabaseService(unittest.TestCase):
                 file_path=f"/p/ba_{i}.cr2",
                 file_name=f"ba_{i}.cr2",
                 file_size=100,
-                file_type=".cr2"
+                file_type=".cr2",
             )
             self.db.add_media_asset(asset)
             asset_ids.append(asset.asset_id)
@@ -631,7 +663,7 @@ class TestDatabaseService(unittest.TestCase):
             project_id=project.project_id,
             scene="S010",
             shot="010A",
-            take="01"
+            take="01",
         )
         self.db.create_log_with_assets(log, asset_ids, sync_scene_shot=False)
 
@@ -656,7 +688,7 @@ class TestDatabaseService(unittest.TestCase):
             file_size=100,
             file_type=".cr2",
             scene="OLD_SCENE",
-            shot="OLD_SHOT"
+            shot="OLD_SHOT",
         )
         self.db.add_media_asset(asset)
 
@@ -665,7 +697,7 @@ class TestDatabaseService(unittest.TestCase):
             project_id=project.project_id,
             scene="SNEW",
             shot="NEWA",
-            take="01"
+            take="01",
         )
         self.db.create_log_with_assets(log, ["ast_sync"], sync_scene_shot=True)
 
@@ -686,7 +718,7 @@ class TestDatabaseService(unittest.TestCase):
             file_size=100,
             file_type=".cr2",
             scene="KEEP_SCENE",
-            shot="KEEP_SHOT"
+            shot="KEEP_SHOT",
         )
         self.db.add_media_asset(asset)
 
@@ -695,7 +727,7 @@ class TestDatabaseService(unittest.TestCase):
             project_id=project.project_id,
             scene="SOTHER",
             shot="OTHER",
-            take="01"
+            take="01",
         )
         self.db.create_log_with_assets(log, ["ast_nosync"], sync_scene_shot=False)
 
@@ -713,7 +745,7 @@ class TestDatabaseService(unittest.TestCase):
             project_id=project.project_id,
             scene="S001",
             shot="001A",
-            take="01"
+            take="01",
         )
         self.db.create_log_with_assets(log, [], sync_scene_shot=True)
 
@@ -730,7 +762,7 @@ class TestDatabaseService(unittest.TestCase):
                 file_path=f"/p/f_{i}.cr2",
                 file_name=f"f_{i}.cr2",
                 file_size=100,
-                file_type=".cr2"
+                file_type=".cr2",
             )
             self.db.add_media_asset(asset)
         return project.project_id
@@ -772,7 +804,7 @@ class TestDatabaseService(unittest.TestCase):
                 file_name=f"lf_{i}.cr2",
                 file_size=100,
                 file_type=".cr2",
-                scene=scene
+                scene=scene,
             )
             self.db.add_media_asset(asset)
 
@@ -907,7 +939,9 @@ class TestDatabaseService(unittest.TestCase):
             old_cwd = os.getcwd()
             try:
                 os.chdir(tmp)
-                self.assertTrue(self.db.asset_exists_by_path(project.project_id, "IMG_001.cr2"))
+                self.assertTrue(
+                    self.db.asset_exists_by_path(project.project_id, "IMG_001.cr2")
+                )
             finally:
                 os.chdir(old_cwd)
 
@@ -1006,16 +1040,19 @@ class TestDatabaseService(unittest.TestCase):
             fp1.write_bytes(b"a")
             fp2 = Path(tmp) / "IMG_B.cr2"
             fp2.write_bytes(b"b")
-            self.db.add_media_asset(self._make_asset(project.project_id, str(fp1.resolve())))
-            self.db.add_media_asset(self._make_asset(project.project_id, str(fp2.resolve())))
+            self.db.add_media_asset(
+                self._make_asset(project.project_id, str(fp1.resolve()))
+            )
+            self.db.add_media_asset(
+                self._make_asset(project.project_id, str(fp2.resolve()))
+            )
 
             new_fp = Path(tmp) / "IMG_C.cr2"
             new_fp.write_bytes(b"c")
             # 混入相对路径与 .. 路径，验证规范化
             messy_fp2 = str(Path(tmp) / "sub" / ".." / "IMG_B.cr2")
             existing = self.db.existing_asset_paths(
-                project.project_id,
-                [str(fp1), messy_fp2, str(new_fp)]
+                project.project_id, [str(fp1), messy_fp2, str(new_fp)]
             )
             self.assertIn(str(fp1.resolve()), existing)
             self.assertIn(str(fp2.resolve()), existing)
@@ -1032,13 +1069,16 @@ class TestDatabaseService(unittest.TestCase):
                 # 生产流程（媒体导入）存的是 normalize_path() 规范化路径，
                 # 这里用 resolve() 后的形式保持一致
                 paths.append(str(fp.resolve()))
-                self.db.add_media_asset(self._make_asset(project.project_id, str(fp.resolve())))
+                self.db.add_media_asset(
+                    self._make_asset(project.project_id, str(fp.resolve()))
+                )
 
             target = "/backup/drive1"
             # 首次回写：3 个 asset 更新
             updated = self.db.add_backup_location_to_assets(
-                [paths[0], paths[0], paths[1], paths[2]], target,
-                project_id=project.project_id
+                [paths[0], paths[0], paths[1], paths[2]],
+                target,
+                project_id=project.project_id,
             )
             self.assertEqual(updated, 3)
 
@@ -1064,7 +1104,7 @@ class TestDatabaseService(unittest.TestCase):
 
     def test_close_all_then_reuse(self):
         """连接池关闭后应能自动重建连接，服务继续可用"""
-        project = self.db.create_project(name="连接池复用测试")
+        _project = self.db.create_project(name="连接池复用测试")
         self.db.close_all()
         project2 = self.db.create_project(name="连接池复用测试2")
         self.assertIsNotNone(project2.project_id)
@@ -1073,6 +1113,7 @@ class TestDatabaseService(unittest.TestCase):
     def test_concurrent_thread_access(self):
         """连接池并发安全：多线程同时读写不报错且数据完整"""
         import threading as _threading
+
         project = self.db.create_project(name="并发访问测试")
         errors = []
 
@@ -1110,7 +1151,9 @@ class TestWorkspaceManagement(unittest.TestCase):
 
     def test_create_workspace(self):
         """TR: 创建工作区"""
-        ws = self.db.create_workspace(name="2026春拍", path="/Volumes/Work/2026Spring", description="春季广告片")
+        ws = self.db.create_workspace(
+            name="2026春拍", path="/Volumes/Work/2026Spring", description="春季广告片"
+        )
         self.assertIsNotNone(ws.workspace_id)
         self.assertEqual(ws.name, "2026春拍")
         self.assertEqual(ws.path, "/Volumes/Work/2026Spring")
@@ -1250,12 +1293,16 @@ class TestWorkspaceManagement(unittest.TestCase):
 
         # 再次实例化 DatabaseService（模拟重启）
         db2 = DatabaseService(db_path=self.db.db_path)
-        default_ws_list = [w for w in db2.get_workspaces() if w.workspace_id == "default"]
+        default_ws_list = [
+            w for w in db2.get_workspaces() if w.workspace_id == "default"
+        ]
         self.assertEqual(len(default_ws_list), 1)  # 不会重复创建
 
         # 第三次启动
         db3 = DatabaseService(db_path=self.db.db_path)
-        default_ws_list = [w for w in db3.get_workspaces() if w.workspace_id == "default"]
+        default_ws_list = [
+            w for w in db3.get_workspaces() if w.workspace_id == "default"
+        ]
         self.assertEqual(len(default_ws_list), 1)
 
     def test_find_duplicate_assets_cross_project(self):
@@ -1298,14 +1345,16 @@ class TestWorkspaceManagement(unittest.TestCase):
     def test_find_duplicate_assets_none(self):
         """无重复校验和时返回空列表"""
         p1 = self.db.create_project(name="项目C")
-        self.db.add_media_asset(MediaAsset(
-            asset_id=str(uuid.uuid4())[:8],
-            project_id=p1.project_id,
-            file_path="/path/x.jpg",
-            file_name="x.jpg",
-            checksum_algorithm="xxhash64",
-            checksum_value="only",
-        ))
+        self.db.add_media_asset(
+            MediaAsset(
+                asset_id=str(uuid.uuid4())[:8],
+                project_id=p1.project_id,
+                file_path="/path/x.jpg",
+                file_name="x.jpg",
+                checksum_algorithm="xxhash64",
+                checksum_value="only",
+            )
+        )
         self.assertEqual(self.db.find_duplicate_assets(), [])
 
     def test_tags_notes_roundtrip(self):
@@ -1324,9 +1373,9 @@ class TestWorkspaceManagement(unittest.TestCase):
         self.assertEqual(loaded.tags, "日戏,主镜头")
         self.assertEqual(loaded.notes, "需要精修")
 
-        self.assertTrue(self.db.update_media_asset(
-            asset.asset_id, tags="夜戏", notes="新备注"
-        ))
+        self.assertTrue(
+            self.db.update_media_asset(asset.asset_id, tags="夜戏", notes="新备注")
+        )
         updated = self.db.get_media_asset(asset.asset_id)
         self.assertEqual(updated.tags, "夜戏")
         self.assertEqual(updated.notes, "新备注")
@@ -1335,12 +1384,18 @@ class TestWorkspaceManagement(unittest.TestCase):
         """按标签模糊搜索只返回匹配素材"""
         p = self.db.create_project(name="检索项目")
         a1 = MediaAsset(
-            asset_id=str(uuid.uuid4())[:8], project_id=p.project_id,
-            file_path="/a1.jpg", file_name="a1.jpg", tags="日戏,主镜头",
+            asset_id=str(uuid.uuid4())[:8],
+            project_id=p.project_id,
+            file_path="/a1.jpg",
+            file_name="a1.jpg",
+            tags="日戏,主镜头",
         )
         a2 = MediaAsset(
-            asset_id=str(uuid.uuid4())[:8], project_id=p.project_id,
-            file_path="/a2.jpg", file_name="a2.jpg", tags="夜戏",
+            asset_id=str(uuid.uuid4())[:8],
+            project_id=p.project_id,
+            file_path="/a2.jpg",
+            file_name="a2.jpg",
+            tags="夜戏",
         )
         self.db.add_media_assets_batch([a1, a2])
 
@@ -1357,9 +1412,12 @@ class TestWorkspaceManagement(unittest.TestCase):
             self.skipTest("当前 SQLite 未启用 FTS5")
         p = self.db.create_project(name="全文检索项目")
         asset = MediaAsset(
-            asset_id="fts_001", project_id=p.project_id,
-            file_path="/media/take_001.cr2", file_name="take_001.cr2",
-            notes="closeup hero", tags="hero,day",
+            asset_id="fts_001",
+            project_id=p.project_id,
+            file_path="/media/take_001.cr2",
+            file_name="take_001.cr2",
+            notes="closeup hero",
+            tags="hero,day",
         )
         self.db.add_media_asset(asset)
 
@@ -1369,9 +1427,11 @@ class TestWorkspaceManagement(unittest.TestCase):
         )
         self.assertEqual(self.db.count_assets(keyword="hero"), 1)
 
-        self.assertTrue(self.db.update_media_asset(
-            asset.asset_id, file_name="wide_002.cr2", notes="wide shot"
-        ))
+        self.assertTrue(
+            self.db.update_media_asset(
+                asset.asset_id, file_name="wide_002.cr2", notes="wide shot"
+            )
+        )
         self.assertEqual(self.db.search_assets(keyword="take"), [])
         self.assertEqual(
             [a.asset_id for a in self.db.search_assets(keyword="wide")],
@@ -1387,13 +1447,17 @@ class TestWorkspaceManagement(unittest.TestCase):
             self.skipTest("当前 SQLite 未启用 FTS5")
         p = self.db.create_project(name="重命名全文检索项目")
         asset = MediaAsset(
-            asset_id="fts_rename", project_id=p.project_id,
-            file_path="/media/old_name.cr2", file_name="old_name.cr2",
+            asset_id="fts_rename",
+            project_id=p.project_id,
+            file_path="/media/old_name.cr2",
+            file_name="old_name.cr2",
         )
         self.db.add_media_asset(asset)
-        self.assertTrue(self.db.update_asset_path(
-            asset.asset_id, "/media/new_name.cr2", "new_name.cr2"
-        ))
+        self.assertTrue(
+            self.db.update_asset_path(
+                asset.asset_id, "/media/new_name.cr2", "new_name.cr2"
+            )
+        )
         self.assertEqual(self.db.search_assets(keyword="old_name"), [])
         self.assertEqual(
             [a.asset_id for a in self.db.search_assets(keyword="new_name")],
@@ -1404,8 +1468,10 @@ class TestWorkspaceManagement(unittest.TestCase):
         """FTS 不可用时仍保留原 LIKE 搜索行为。"""
         p = self.db.create_project(name="LIKE 回退项目")
         asset = MediaAsset(
-            asset_id="like_001", project_id=p.project_id,
-            file_path="/media/中文镜头.cr2", file_name="中文镜头.cr2",
+            asset_id="like_001",
+            project_id=p.project_id,
+            file_path="/media/中文镜头.cr2",
+            file_name="中文镜头.cr2",
         )
         self.db.add_media_asset(asset)
         original = self.db._fts_available
@@ -1419,17 +1485,19 @@ class TestWorkspaceManagement(unittest.TestCase):
     def test_iter_search_assets_uses_batch_and_stable_order(self):
         """迭代查询按小批次返回，并使用 asset_id 作为同时间的稳定排序键。"""
         p = self.db.create_project(name="迭代查询项目")
-        imported_at = datetime(2026, 1, 1, 12, 0, 0)
+        imported_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
         for asset_id in ("iter_a", "iter_c", "iter_b"):
-            self.db.add_media_asset(MediaAsset(
-                asset_id=asset_id, project_id=p.project_id,
-                file_path=f"/media/{asset_id}.cr2", file_name=f"{asset_id}.cr2",
-                date_imported=imported_at,
-            ))
+            self.db.add_media_asset(
+                MediaAsset(
+                    asset_id=asset_id,
+                    project_id=p.project_id,
+                    file_path=f"/media/{asset_id}.cr2",
+                    file_name=f"{asset_id}.cr2",
+                    date_imported=imported_at,
+                )
+            )
 
-        rows = list(self.db.iter_search_assets(
-            project_id=p.project_id, batch_size=1
-        ))
+        rows = list(self.db.iter_search_assets(project_id=p.project_id, batch_size=1))
         self.assertEqual([a.asset_id for a in rows], ["iter_c", "iter_b", "iter_a"])
         page = self.db.search_assets(project_id=p.project_id, limit=2, offset=1)
         self.assertEqual([a.asset_id for a in page], ["iter_b", "iter_a"])
@@ -1437,26 +1505,38 @@ class TestWorkspaceManagement(unittest.TestCase):
     def test_project_and_search_keyset_pages_have_stable_order(self):
         """Keyset 页读取不使用 OFFSET，且不会遗漏同时间写入的素材。"""
         p = self.db.create_project(name="游标分页项目")
-        imported_at = datetime(2026, 1, 1, 12, 0, 0)
+        imported_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
         for asset_id in ("page_a", "page_b", "page_c", "page_d", "page_e"):
-            self.db.add_media_asset(MediaAsset(
-                asset_id=asset_id, project_id=p.project_id,
-                file_path=f"/media/{asset_id}.cr2", file_name=f"{asset_id}.cr2",
-                date_imported=imported_at,
-            ))
+            self.db.add_media_asset(
+                MediaAsset(
+                    asset_id=asset_id,
+                    project_id=p.project_id,
+                    file_path=f"/media/{asset_id}.cr2",
+                    file_name=f"{asset_id}.cr2",
+                    date_imported=imported_at,
+                )
+            )
 
         first, cursor = self.db.get_project_asset_page(p.project_id, page_size=2)
-        second, cursor = self.db.get_project_asset_page(p.project_id, page_size=2, cursor=cursor)
-        third, final_cursor = self.db.get_project_asset_page(p.project_id, page_size=2, cursor=cursor)
+        second, cursor = self.db.get_project_asset_page(
+            p.project_id, page_size=2, cursor=cursor
+        )
+        third, final_cursor = self.db.get_project_asset_page(
+            p.project_id, page_size=2, cursor=cursor
+        )
         self.assertEqual(
             [a.asset_id for a in first + second + third],
             ["page_e", "page_d", "page_c", "page_b", "page_a"],
         )
         self.assertIsNone(final_cursor)
 
-        first, cursor = self.db.get_search_asset_page(project_id=p.project_id, page_size=3)
+        first, cursor = self.db.get_search_asset_page(
+            project_id=p.project_id, page_size=3
+        )
         second, final_cursor = self.db.get_search_asset_page(
-            project_id=p.project_id, page_size=3, cursor=cursor,
+            project_id=p.project_id,
+            page_size=3,
+            cursor=cursor,
         )
         self.assertEqual(
             [a.asset_id for a in first + second],
@@ -1467,12 +1547,14 @@ class TestWorkspaceManagement(unittest.TestCase):
     def test_operation_log_record_and_query(self):
         """操作审计日志可写入并按时间倒序查询"""
         p = self.db.create_project(name="审计项目")
-        self.assertTrue(self.db.record_operation(
-            "导入素材", "成功 3 个", project_id=p.project_id
-        ))
-        self.assertTrue(self.db.record_operation(
-            "数据备份", "completed：3 个文件", project_id=p.project_id
-        ))
+        self.assertTrue(
+            self.db.record_operation("导入素材", "成功 3 个", project_id=p.project_id)
+        )
+        self.assertTrue(
+            self.db.record_operation(
+                "数据备份", "completed：3 个文件", project_id=p.project_id
+            )
+        )
         self.assertTrue(self.db.record_operation("文件重命名", "成功 2 个"))
 
         recent = self.db.get_recent_operations(limit=2)
@@ -1490,15 +1572,26 @@ class TestWorkspaceManagement(unittest.TestCase):
         """审计查看器的项目、事件、状态和对象筛选可组合使用。"""
         p = self.db.create_project(name="筛选项目")
         self.db.record_operation(
-            "数据备份", "失败", project_id=p.project_id, status="error",
-            object_type="backup_job", object_id="job-1",
+            "数据备份",
+            "失败",
+            project_id=p.project_id,
+            status="error",
+            object_type="backup_job",
+            object_id="job-1",
         )
         self.db.record_operation(
-            "数据备份", "成功", project_id=p.project_id, status="success",
-            object_type="backup_job", object_id="job-2",
+            "数据备份",
+            "成功",
+            project_id=p.project_id,
+            status="success",
+            object_type="backup_job",
+            object_id="job-2",
         )
         rows = self.db.get_recent_operations(
-            project_id=p.project_id, event="备份", status="error", object_type="backup_job",
+            project_id=p.project_id,
+            event="备份",
+            status="error",
+            object_type="backup_job",
         )
         self.assertEqual([row["object_id"] for row in rows], ["job-1"])
 
@@ -1506,7 +1599,7 @@ class TestWorkspaceManagement(unittest.TestCase):
         """历史清理删除过期审计日志，并按项目保留最新任务。"""
         from datetime import timedelta
 
-        now = datetime(2026, 1, 1, 12, 0, 0)
+        now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
         project = self.db.create_project(name="历史清理项目")
         self.db.record_operation("旧操作")
         self.db.record_operation("新操作")
@@ -1531,7 +1624,9 @@ class TestWorkspaceManagement(unittest.TestCase):
                 )
 
         deleted = self.db.cleanup_history(
-            now=now, operation_log_retention_days=180, task_history_limit_per_project=2,
+            now=now,
+            operation_log_retention_days=180,
+            task_history_limit_per_project=2,
         )
         self.assertEqual(deleted, {"operation_logs": 1, "task_history": 1})
         self.assertEqual(
@@ -1558,9 +1653,12 @@ class TestMissingFileDetection(unittest.TestCase):
 
     def _make_asset(self, asset_id, file_path):
         return MediaAsset(
-            asset_id=asset_id, project_id=self.project.project_id,
-            file_path=file_path, file_name=Path(file_path).name,
-            file_size=1024, file_type=".cr2",
+            asset_id=asset_id,
+            project_id=self.project.project_id,
+            file_path=file_path,
+            file_name=Path(file_path).name,
+            file_size=1024,
+            file_type=".cr2",
         )
 
     def test_get_missing_file_asset_ids_detects_missing_and_present(self):
@@ -1568,7 +1666,9 @@ class TestMissingFileDetection(unittest.TestCase):
         real = Path(self.temp_dir) / "real.cr2"
         real.write_text("data", encoding="utf-8")
         present = self.db.add_media_asset(self._make_asset("a_present", str(real)))
-        missing = self.db.add_media_asset(self._make_asset("a_missing", "/no/such/file.cr2"))
+        missing = self.db.add_media_asset(
+            self._make_asset("a_missing", "/no/such/file.cr2")
+        )
         empty = self.db.add_media_asset(self._make_asset("a_empty", ""))
 
         missing_ids = self.db.get_missing_file_asset_ids(self.project.project_id)
@@ -1585,7 +1685,9 @@ class TestMissingFileDetection(unittest.TestCase):
         """批量删除仅移除数据库记录，返回成功条数，不影响磁盘文件"""
         real = Path(self.temp_dir) / "real.cr2"
         real.write_text("data", encoding="utf-8")
-        missing = self.db.add_media_asset(self._make_asset("a_missing", "/no/such/file.cr2"))
+        missing = self.db.add_media_asset(
+            self._make_asset("a_missing", "/no/such/file.cr2")
+        )
         present = self.db.add_media_asset(self._make_asset("a_present", str(real)))
 
         deleted = self.db.delete_media_assets([missing.asset_id, present.asset_id])

@@ -1,24 +1,37 @@
 """Utils 层纯函数单元测试 - Phase 1.5"""
+
 import os
+import shutil
 import sys
 import tempfile
-import unittest
 import unicodedata
-import shutil
+import unittest
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from DITWorkstation.App import config
 from DITWorkstation.Utils.common import (
-    format_size, sanitize_filename, get_file_extension,
-    get_file_stem, calculate_speed, generate_timestamp, generate_log_message,
-    normalize_path, normalize_name_key, find_overwrite_conflicts,
-    add_recent_path, clear_recent_paths, count_recent_paths,
-    get_metadata_service, get_report_service, now_local, now_local_iso,
+    add_recent_path,
+    calculate_speed,
+    clear_recent_paths,
+    count_recent_paths,
+    find_overwrite_conflicts,
+    format_size,
+    generate_log_message,
+    generate_timestamp,
+    get_file_extension,
+    get_file_stem,
+    get_metadata_service,
+    get_report_service,
+    normalize_name_key,
+    normalize_path,
+    now_local,
+    now_local_iso,
+    sanitize_filename,
 )
 from DITWorkstation.Utils.scanner import scan_files
-from DITWorkstation.App import config
 
 
 class TestFormatSize(unittest.TestCase):
@@ -38,8 +51,8 @@ class TestFormatSize(unittest.TestCase):
         self.assertEqual(format_size(10 * 1024 * 1024), "10.0 MB")
 
     def test_gb(self):
-        self.assertEqual(format_size(1024 ** 3), "1.00 GB")
-        self.assertEqual(format_size(2.5 * 1024 ** 3), "2.50 GB")
+        self.assertEqual(format_size(1024**3), "1.00 GB")
+        self.assertEqual(format_size(2.5 * 1024**3), "2.50 GB")
 
 
 class TestScanner(unittest.TestCase):
@@ -75,8 +88,18 @@ class TestSanitizeFilename(unittest.TestCase):
 
     def test_windows_reserved_device_names(self):
         """Windows 保留设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）应被规避"""
-        for name in ("CON", "con", "CON.cr2", "NUL.txt", "COM1.jpg",
-                     "COM9.CR2", "LPT1.tar", "LPT9.dng", "PRN", "AUX.mov"):
+        for name in (
+            "CON",
+            "con",
+            "CON.cr2",
+            "NUL.txt",
+            "COM1.jpg",
+            "COM9.CR2",
+            "LPT1.tar",
+            "LPT9.dng",
+            "PRN",
+            "AUX.mov",
+        ):
             result = sanitize_filename(name)
             self.assertTrue(result.startswith("_"), f"{name} -> {result}")
 
@@ -262,9 +285,7 @@ class TestNormalizePath(unittest.TestCase):
                 str(Path(tmp) / unicodedata.normalize("NFD", "café.cr2"))
             )
             self.assertEqual(nfc_path, nfd_path)
-            self.assertEqual(
-                unicodedata.normalize("NFC", nfc_path), nfc_path
-            )
+            self.assertEqual(unicodedata.normalize("NFC", nfc_path), nfc_path)
 
 
 class TestFindOverwriteConflicts(unittest.TestCase):
@@ -277,9 +298,7 @@ class TestFindOverwriteConflicts(unittest.TestCase):
             target.mkdir()
             # 目标盘已有小写扩展名文件，源文件为大写扩展名
             (target / "IMG_001.cr2").write_bytes(b"x")
-            conflicts = find_overwrite_conflicts(
-                ["/src/IMG_001.CR2"], [str(target)]
-            )
+            conflicts = find_overwrite_conflicts(["/src/IMG_001.CR2"], [str(target)])
             self.assertEqual(conflicts[str(target)], ["IMG_001.CR2"])
 
     def test_no_conflict(self):
@@ -288,9 +307,7 @@ class TestFindOverwriteConflicts(unittest.TestCase):
             target = Path(tmp) / "target"
             target.mkdir()
             (target / "other.CR2").write_bytes(b"x")
-            conflicts = find_overwrite_conflicts(
-                ["/src/IMG_001.CR2"], [str(target)]
-            )
+            conflicts = find_overwrite_conflicts(["/src/IMG_001.CR2"], [str(target)])
             self.assertEqual(conflicts, {})
 
     def test_unicode_forms_conflict(self):
@@ -300,9 +317,7 @@ class TestFindOverwriteConflicts(unittest.TestCase):
             target.mkdir()
             (target / "café.cr2").write_bytes(b"x")
             nfd_name = unicodedata.normalize("NFD", "café.CR2")
-            conflicts = find_overwrite_conflicts(
-                [f"/src/{nfd_name}"], [str(target)]
-            )
+            conflicts = find_overwrite_conflicts([f"/src/{nfd_name}"], [str(target)])
             self.assertEqual(conflicts[str(target)], [nfd_name])
 
 
@@ -343,8 +358,10 @@ class TestMediainfoLibPaths(unittest.TestCase):
 
     @staticmethod
     def _with_meipass(path):
-        from DITWorkstation.Services.metadata_service import MetadataService
         import sys as _sys
+
+        from DITWorkstation.Services.metadata_service import MetadataService
+
         orig = getattr(_sys, "_MEIPASS", None)
         _sys._MEIPASS = path
         try:
@@ -362,14 +379,18 @@ class TestMediainfoLibPaths(unittest.TestCase):
             # 实现内使用 Path 拼接，Windows 下会规范化为反斜杠分隔符
             self.assertEqual(paths[0], str(Path("/fake/bundle") / "MediaInfo.dll"))
         elif sys.platform == "darwin":
-            self.assertEqual(paths[0], str(Path("/fake/bundle") / "libmediainfo.0.dylib"))
+            self.assertEqual(
+                paths[0], str(Path("/fake/bundle") / "libmediainfo.0.dylib")
+            )
         else:
             self.assertEqual(paths[0], str(Path("/fake/bundle") / "libmediainfo.so.0"))
 
     def test_dev_mode_has_no_bundle_path(self):
         """开发态（无 _MEIPASS）不应包含打包目录"""
-        from DITWorkstation.Services.metadata_service import MetadataService
         import sys as _sys
+
+        from DITWorkstation.Services.metadata_service import MetadataService
+
         orig = getattr(_sys, "_MEIPASS", None)
         if orig is not None:
             del _sys._MEIPASS

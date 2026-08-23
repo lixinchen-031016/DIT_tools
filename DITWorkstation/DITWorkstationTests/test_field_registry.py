@@ -1,10 +1,7 @@
-import logging
-
 import pytest
-
 from DITWorkstation.Services.repositories.field_registry import (
-    FieldSpec,
     PROJECT_FIELDS,
+    FieldSpec,
     build_update_clause,
     field_registry,
 )
@@ -25,10 +22,16 @@ def test_build_update_clause_skips_unregistered_fields(caplog):
 
 
 def test_build_update_clause_applies_serializer():
-    registry = field_registry(FieldSpec("tags", serializer=lambda value: "|".join(value)))
+    registry = field_registry(
+        FieldSpec("tags", serializer=lambda value: "|".join(value))
+    )
 
     sql, params = build_update_clause(
-        registry, "media_assets", "asset_id", "asset-1", touch_updated_at=False,
+        registry,
+        "media_assets",
+        "asset_id",
+        "asset-1",
+        touch_updated_at=False,
         tags=["a", "b"],
     )
 
@@ -47,8 +50,12 @@ def test_build_update_clause_returns_empty_for_no_registered_fields():
 
 def test_build_update_clause_can_skip_updated_at_for_tables_without_timestamp():
     sql, params = build_update_clause(
-        field_registry("rating"), "media_assets", "asset_id", "asset-1",
-        touch_updated_at=False, rating=5,
+        field_registry("rating"),
+        "media_assets",
+        "asset_id",
+        "asset-1",
+        touch_updated_at=False,
+        rating=5,
     )
 
     assert sql == "UPDATE media_assets SET rating = ? WHERE asset_id = ?"
@@ -57,7 +64,9 @@ def test_build_update_clause_can_skip_updated_at_for_tables_without_timestamp():
 
 def test_build_update_clause_rejects_unknown_table():
     with pytest.raises(ValueError, match="不允许更新的表名"):
-        build_update_clause(field_registry("name"), "items", "item_id", "item-1", name="x")
+        build_update_clause(
+            field_registry("name"), "items", "item_id", "item-1", name="x"
+        )
 
 
 def test_build_update_clause_rejects_wrong_id_column():

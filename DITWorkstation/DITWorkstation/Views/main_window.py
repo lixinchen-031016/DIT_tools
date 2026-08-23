@@ -222,8 +222,6 @@ class MainWindow(QMainWindow):
         # 完整性校验定时调度
         self._integrity_scheduler = None
         self._init_integrity_scheduler()
-        # 启动时检查更新（静默）
-        self._check_update_on_startup()
         self.card_automation_worker = None
         self.card_automation_source_path = None
 
@@ -729,31 +727,6 @@ class MainWindow(QMainWindow):
             logger.info(f"完整性校验调度已启动，间隔 {interval} 小时")
         except Exception as exc:
             logger.warning(f"启动完整性校验调度失败: {exc}")
-
-    def _check_update_on_startup(self):
-        """启动时静默检查更新（仅配置了 URL 时，后台线程执行避免阻塞 UI）。"""
-        from DITWorkstation.App.version import APP_VERSION
-        from DITWorkstation.Services.update_checker import check_for_update
-        from DITWorkstation.Utils.workers import WorkerThread
-
-        url = getattr(config, "auto_update_check_url", "") or ""
-        if not url:
-            return
-
-        worker = WorkerThread(check_for_update, url)
-
-        def _done(info):
-            if info.is_newer:
-                self.status_label_task.setText(f"🔄 发现新版本 {info.version}")
-                logger.info(f"发现新版本 {info.version}，当前 {APP_VERSION}")
-
-        def _err(exc):
-            logger.debug(f"启动时更新检查失败: {exc}")
-
-        worker.finished.connect(_done)
-        worker.error.connect(_err)
-        worker.thread_finished.connect(worker.deleteLater)
-        worker.start()
 
     def _apply_style(self):
         """应用样式（主窗口 + 侧栏）。全局 QSS 由 main.py 通过 theme.apply_global_style 注入。"""

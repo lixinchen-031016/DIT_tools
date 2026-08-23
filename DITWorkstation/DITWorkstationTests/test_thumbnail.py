@@ -3,13 +3,14 @@
 只测纯 Pillow 生成路径（_gen_image / _generate），不依赖 Qt 事件循环与 ffmpeg，
 保证在无 GUI 环境的 CI 中可运行。
 """
+
 import os
+import shutil
 import sys
 import tempfile
-import shutil
 import unittest
-from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -33,6 +34,7 @@ class TestThumbnailService(unittest.TestCase):
 
     def _make_jpeg(self, name="sample.jpg"):
         from PIL import Image
+
         path = Path(self.temp_dir) / name
         Image.new("RGB", (64, 64), color=(255, 0, 0)).save(path, format="JPEG")
         return path
@@ -82,6 +84,7 @@ class TestThumbnailService(unittest.TestCase):
     def test_embedded_preview_fallback(self):
         """Pillow 无法解码的 RAW 回退到 EXIF 内嵌 JPEG 预览"""
         import io
+
         from PIL import Image
 
         raw_path = self._make_fake_raw()
@@ -104,8 +107,10 @@ class TestThumbnailService(unittest.TestCase):
         # 显式把 rawpy 标记为"未安装"：rawpy 装上后真实 import 会引入
         # numpy，在 macOS 上 PySide6 退出阶段偶发 SIGSEGV（测试已通过但
         # 进程退出码 139，会中止打包脚本）；本测试场景本就是 rawpy 缺失
-        with mock.patch.dict(sys.modules, {"rawpy": None}), \
-             mock.patch("exifread.process_file", return_value={}):
+        with (
+            mock.patch.dict(sys.modules, {"rawpy": None}),
+            mock.patch("exifread.process_file", return_value={}),
+        ):
             data = self.service._gen_image(str(raw_path), 32)
         self.assertIsNone(data)
 
@@ -117,24 +122,29 @@ class TestThumbnailService(unittest.TestCase):
 
     def _png_bytes(self):
         from PIL import Image
+
         return self.service._to_png(Image.new("RGB", (32, 32), color=(1, 2, 3)), 32)
 
     def test_gen_video_chain_uses_available_fallback(self):
         """ffmpeg 缺失时回退链能使用下一个可用抽帧方案（PyAV）"""
         video = self._make_fake_video()
         png = self._png_bytes()
-        with mock.patch.object(self.service, "_ffmpeg_frame", return_value=None), \
-             mock.patch.object(self.service, "_qlmanage_frame", return_value=None), \
-             mock.patch.object(self.service, "_av_frame", return_value=png):
+        with (
+            mock.patch.object(self.service, "_ffmpeg_frame", return_value=None),
+            mock.patch.object(self.service, "_qlmanage_frame", return_value=None),
+            mock.patch.object(self.service, "_av_frame", return_value=png),
+        ):
             data = self.service._gen_video(str(video), 64)
         self.assertEqual(data, png)
 
     def test_gen_video_chain_all_unavailable_returns_none(self):
         """所有抽帧方案均不可用时返回 None（UI 显示占位图）"""
         video = self._make_fake_video()
-        with mock.patch.object(self.service, "_ffmpeg_frame", return_value=None), \
-             mock.patch.object(self.service, "_qlmanage_frame", return_value=None), \
-             mock.patch.object(self.service, "_av_frame", return_value=None):
+        with (
+            mock.patch.object(self.service, "_ffmpeg_frame", return_value=None),
+            mock.patch.object(self.service, "_qlmanage_frame", return_value=None),
+            mock.patch.object(self.service, "_av_frame", return_value=None),
+        ):
             data = self.service._gen_video(str(video), 64)
         self.assertIsNone(data)
 

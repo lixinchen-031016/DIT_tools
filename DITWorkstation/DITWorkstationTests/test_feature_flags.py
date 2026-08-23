@@ -8,21 +8,20 @@
 - 团队模式 9 项导航 / 个人模式 7 项导航（顺序正确）
 - 个人模式关闭团队特性，团队模式全部开启
 """
-import pytest
 
+import pytest
 from DITWorkstation.App import config
-from DITWorkstation.App import feature_flags
 from DITWorkstation.App.feature_flags import (
+    PERSONAL_NAV_KEYS,
     UsageMode,
+    get_active_nav_index,
+    get_active_nav_items,
     get_usage_mode,
-    set_usage_mode,
+    is_enabled,
+    is_nav_enabled,
     is_personal_mode,
     is_team_mode,
-    is_nav_enabled,
-    get_active_nav_items,
-    get_active_nav_index,
-    is_enabled,
-    PERSONAL_NAV_KEYS,
+    set_usage_mode,
 )
 from DITWorkstation.App.navigation import NAV_ITEMS, get_nav_index
 from DITWorkstation.Utils import common
@@ -39,6 +38,7 @@ def _isolate_usage_mode(monkeypatch, tmp_path):
 
 
 # ===== 模式读取与回退 =====
+
 
 def test_missing_usage_mode_defaults_to_team():
     assert get_usage_mode() == UsageMode.TEAM
@@ -63,6 +63,7 @@ def test_set_usage_mode_rejects_invalid_value():
 
 
 # ===== 持久化与恢复 =====
+
 
 def test_set_usage_mode_persists_to_app_config():
     set_usage_mode(UsageMode.PERSONAL)
@@ -95,6 +96,7 @@ def test_old_settings_without_usage_mode_stays_team():
 
 
 # ===== 导航过滤 =====
+
 
 def test_team_mode_activates_all_nav_items():
     active = get_active_nav_items()
@@ -140,12 +142,21 @@ def test_get_nav_index_uses_active_list(monkeypatch):
 
 # ===== 组件级特性开关 =====
 
+
 def test_team_mode_enables_all_features():
     for feature in (
-        "workspace_selector", "shooting_log", "ratings", "report",
-        "multi_target_backup", "backup_templates", "mhl_export",
-        "project_templates", "archive_restore", "audit_panel",
-        "sop_guide", "card_automation",
+        "workspace_selector",
+        "shooting_log",
+        "ratings",
+        "report",
+        "multi_target_backup",
+        "backup_templates",
+        "mhl_export",
+        "project_templates",
+        "archive_restore",
+        "audit_panel",
+        "sop_guide",
+        "card_automation",
     ):
         assert is_enabled(feature), f"团队模式下 {feature} 应为开启"
 
@@ -153,10 +164,18 @@ def test_team_mode_enables_all_features():
 def test_personal_mode_disables_team_only_features(monkeypatch):
     monkeypatch.setattr(config, "usage_mode", "personal")
     for feature in (
-        "ratings", "archive_restore", "card_automation",
-        "shooting_log", "report", "multi_target_backup",
-        "backup_templates", "mhl_export", "project_templates",
-        "audit_panel", "sop_guide", "workspace_selector",
+        "ratings",
+        "archive_restore",
+        "card_automation",
+        "shooting_log",
+        "report",
+        "multi_target_backup",
+        "backup_templates",
+        "mhl_export",
+        "project_templates",
+        "audit_panel",
+        "sop_guide",
+        "workspace_selector",
     ):
         assert not is_enabled(feature), f"个人模式下 {feature} 应为关闭"
 

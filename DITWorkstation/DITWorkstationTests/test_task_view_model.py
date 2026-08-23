@@ -1,10 +1,10 @@
 """统一后台任务协议测试。"""
-import time
 
-from PySide6.QtCore import QEventLoop, QTimer
+import time
 
 from DITWorkstation.Utils.workers import SimpleWorkerThread, TaskState, WorkerThread
 from DITWorkstation.ViewModels import TaskViewModel
+from PySide6.QtCore import QEventLoop, QTimer
 
 
 def _wait_for_signal(signal, start=None, timeout=3000):
@@ -80,7 +80,9 @@ def test_task_view_model_records_observability_baseline():
     _wait_for_signal(
         vm.finished,
         start=lambda: vm.start(
-            lambda: "done", task_name="csv_export", project_id="project-1",
+            lambda: "done",
+            task_name="csv_export",
+            project_id="project-1",
             recovery_info={"output_path": "/tmp/assets.csv"},
         ),
     )
@@ -98,7 +100,9 @@ def test_task_view_model_persists_history(db_service, project):
     _wait_for_signal(
         vm.finished,
         start=lambda: vm.start(
-            lambda: {"written": 2}, task_name="test_export", project_id=project.project_id,
+            lambda: {"written": 2},
+            task_name="test_export",
+            project_id=project.project_id,
             recovery_info={"output_path": "/tmp/test.csv"},
         ),
     )
@@ -136,12 +140,14 @@ def test_worker_cleanup_waits_for_native_thread_completion():
     worker.start()
     assert worker.wait(3000)
     from PySide6.QtWidgets import QApplication
+
     QApplication.processEvents()
     assert events == ["result", "thread"]
 
 
 def test_worker_survives_reference_drop_while_native_thread_running():
     import threading
+
     from PySide6.QtWidgets import QApplication
 
     entered = threading.Event()

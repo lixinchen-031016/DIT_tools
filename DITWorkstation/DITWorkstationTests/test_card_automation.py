@@ -1,4 +1,5 @@
 """相机卡自动化流程测试。"""
+
 from DITWorkstation.Models import ChecksumAlgorithm
 from DITWorkstation.Services.card_automation_service import CardAutomationService
 
@@ -18,8 +19,11 @@ def test_card_automation_import_and_backup(tmp_dir, db_service):
     )
 
     result = CardAutomationService(db_service).execute(
-        str(card), project.project_id, template=template,
-        do_import=True, do_backup=True,
+        str(card),
+        project.project_id,
+        template=template,
+        do_import=True,
+        do_backup=True,
     )
 
     assert result["import"]["imported"] == 1
@@ -40,7 +44,8 @@ def test_card_automation_custom_sop_runs_raw_and_rename_steps(tmp_dir, db_servic
     raw_output = tmp_dir / "raw-output"
 
     result = CardAutomationService(db_service).execute(
-        str(card), project.project_id,
+        str(card),
+        project.project_id,
         steps=["import", "raw_extract", "rename"],
         raw_config={"output_folder": str(raw_output)},
         rename_config={
@@ -66,8 +71,11 @@ def test_card_automation_report_step_uses_injected_report_service(tmp_dir, db_se
             return output_path or "default-report.pdf"
 
     result = CardAutomationService(db_service).execute(
-        str(tmp_dir), project.project_id,
-        steps=["report"], report_path="report.pdf", report_service=FakeReportService(),
+        str(tmp_dir),
+        project.project_id,
+        steps=["report"],
+        report_path="report.pdf",
+        report_service=FakeReportService(),
     )
 
     assert result["report"] == "report.pdf"

@@ -1,13 +1,13 @@
 """备份断点续传与失败重试测试"""
+
 import os
 import sqlite3
-import json
-from datetime import datetime
+from datetime import UTC, datetime
 
+from DITWorkstation.Models import BackupJob, BackupStatus, BackupTarget, CopyStatus
 from DITWorkstation.Services.backup_service import BackupService
 from DITWorkstation.Services.checksum_service import ChecksumService
 from DITWorkstation.Services.database_service import DatabaseService
-from DITWorkstation.Models import BackupStatus, CopyStatus, BackupJob, BackupTarget
 
 
 def _make_sources(tmp_path, count=3, size=10000):
@@ -65,12 +65,18 @@ def _backup_with_one_failure(tmp_path, monkeypatch):
     svc = BackupService(db_service=db, checksum_service=ChecksumService())
     original = svc.checksum_service.copy_file_with_checksum
 
-    def failing_copy(src_path, dest_path, algorithm=None,
-                     progress_callback=None, **kwargs):
+    def failing_copy(
+        src_path, dest_path, algorithm=None, progress_callback=None, **kwargs
+    ):
         if "f1.dat" in str(src_path):
-            raise IOError("模拟拷贝失败")
-        return original(src_path, dest_path, algorithm=algorithm,
-                        progress_callback=progress_callback, **kwargs)
+            raise OSError("模拟拷贝失败")
+        return original(
+            src_path,
+            dest_path,
+            algorithm=algorithm,
+            progress_callback=progress_callback,
+            **kwargs,
+        )
 
     monkeypatch.setattr(svc.checksum_service, "copy_file_with_checksum", failing_copy)
     job = svc.create_backup_job(str(src), [str(dst)])
@@ -132,7 +138,11 @@ def test_retry_uses_persisted_snapshot_without_rescanning_source(tmp_path, monke
     """重试有快照时不扫描整个介质，只检查失败文件当前是否仍可用。"""
     svc, _db, job, _dst, original = _backup_with_one_failure(tmp_path, monkeypatch)
     monkeypatch.setattr(svc.checksum_service, "copy_file_with_checksum", original)
-    monkeypatch.setattr(svc, "scan_source", lambda _path: (_ for _ in ()).throw(AssertionError("不应重扫")))
+    monkeypatch.setattr(
+        svc,
+        "scan_source",
+        lambda _path: (_ for _ in ()).throw(AssertionError("不应重扫")),
+    )
 
     result = svc.retry_failed_files(job.job_id, project_id="proj1")
     assert result.status == BackupStatus.COMPLETED
@@ -146,18 +156,24 @@ def test_incremental_backup_skips_unchanged_files(tmp_path, monkeypatch):
     db = DatabaseService(db_path=tmp_path / "incremental.db")
     project = db.create_project(name="增量")
     svc = BackupService(db_service=db, checksum_service=ChecksumService())
-    svc.execute_backup(svc.create_backup_job(str(src), [str(dst)]), project_id=project.project_id)
+    svc.execute_backup(
+        svc.create_backup_job(str(src), [str(dst)]), project_id=project.project_id
+    )
 
     changed = src / "f1.dat"
     changed.write_bytes(os.urandom(10000))
     calls = []
     original = svc.checksum_service.copy_file_with_checksum
+
     def tracking_copy(src_path, *args, **kwargs):
         calls.append(os.path.basename(src_path))
         return original(src_path, *args, **kwargs)
+
     monkeypatch.setattr(svc.checksum_service, "copy_file_with_checksum", tracking_copy)
 
-    job = svc.create_incremental_backup_job(str(src), [str(dst)], project_id=project.project_id)
+    job = svc.create_incremental_backup_job(
+        str(src), [str(dst)], project_id=project.project_id
+    )
     assert job.__dict__["_unchanged_files"] == 2
     result = svc.execute_backup(job, project_id=project.project_id)
     assert result.status == BackupStatus.COMPLETED
@@ -208,8 +224,9 @@ def test_migration_adds_failed_files_column(tmp_path):
 
     db = DatabaseService(db_path=db_path)
     with db._connection() as conn:
-        cols = [r["name"] for r in
-                conn.execute("PRAGMA table_info(backup_jobs)").fetchall()]
+        cols = [
+            r["name"] for r in conn.execute("PRAGMA table_info(backup_jobs)").fetchall()
+        ]
     assert "failed_files_json" in cols
 
 
@@ -226,7 +243,10 @@ def test_migration_creates_recovery_backup(tmp_path):
     backup = tmp_path / "old.db.pre-migration.bak"
     assert backup.exists()
     backup_conn = sqlite3.connect(str(backup))
-    assert backup_conn.execute("SELECT value FROM marker").fetchone()[0] == "before-migration"
+    assert (
+        backup_conn.execute("SELECT value FROM marker").fetchone()[0]
+        == "before-migration"
+    )
     backup_conn.close()
 
 
@@ -235,12 +255,19 @@ def test_running_backup_is_recovered_as_retryable(tmp_path):
     db_path = tmp_path / "test.db"
     db = DatabaseService(db_path=db_path)
     job = BackupJob(
-        job_id="running-1", source_path=str(tmp_path / "src"),
-        status=BackupStatus.RUNNING, created_at=datetime.now(),
-        targets=[BackupTarget(
-            path=str(tmp_path / "dst"), status=CopyStatus.COPYING,
-            pending_files=["unfinished.dat"], total_files=2,
-        )], total_files=2,
+        job_id="running-1",
+        source_path=str(tmp_path / "src"),
+        status=BackupStatus.RUNNING,
+        created_at=datetime.now(UTC),
+        targets=[
+            BackupTarget(
+                path=str(tmp_path / "dst"),
+                status=CopyStatus.COPYING,
+                pending_files=["unfinished.dat"],
+                total_files=2,
+            )
+        ],
+        total_files=2,
     )
     # 以不存在 project_id 验证外键兼容处理，并保证任务仍可恢复。
     assert db.save_backup_job(job, project_id="missing-project")
@@ -255,9 +282,10 @@ def test_running_backup_is_recovered_as_retryable(tmp_path):
 
 def test_backup_history_ui_shows_failed_files(tmp_path, monkeypatch):
     """备份历史表展示失败作业，选中后显示失败文件并启用重试按钮"""
-    svc, db, job, dst, _ = _backup_with_one_failure(tmp_path, monkeypatch)
+    _, db, _, _, _ = _backup_with_one_failure(tmp_path, monkeypatch)
 
     from DITWorkstation.Views.backup_view import BackupView
+
     view = BackupView(db_service=db)
     view.show()
     view._load_backup_history()

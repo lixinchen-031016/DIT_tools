@@ -1,9 +1,11 @@
 """素材标签关联表与检索测试"""
+
 from DITWorkstation.Services.database_service import DatabaseService
 
 
 def _make_asset(project_id, asset_id, tags=""):
     from DITWorkstation.Models import MediaAsset
+
     return MediaAsset(
         asset_id=asset_id,
         project_id=project_id,
@@ -20,10 +22,12 @@ def test_add_asset_syncs_tags(db_service, project):
 
 
 def test_batch_add_syncs_tags(db_service, project):
-    db_service.add_media_assets_batch([
-        _make_asset(project.project_id, "a1", "日戏"),
-        _make_asset(project.project_id, "a2", "夜景"),
-    ])
+    db_service.add_media_assets_batch(
+        [
+            _make_asset(project.project_id, "a1", "日戏"),
+            _make_asset(project.project_id, "a2", "夜景"),
+        ]
+    )
     assert set(db_service.get_all_tags()) == {"日戏", "夜景"}
 
 
@@ -56,19 +60,22 @@ def test_tag_search_substring_and_case_insensitive(db_service, project):
 
 def test_keyword_search_includes_notes(db_service, project):
     from DITWorkstation.Models import MediaAsset
+
     asset = MediaAsset(
-        asset_id="a1", project_id=project.project_id,
-        file_path="/p/a1.jpg", file_name="a1.jpg", notes="关键备用镜头",
+        asset_id="a1",
+        project_id=project.project_id,
+        file_path="/p/a1.jpg",
+        file_name="a1.jpg",
+        notes="关键备用镜头",
     )
     db_service.add_media_asset(asset)
     assert len(db_service.search_assets(keyword="备用")) == 1
 
 
 def test_count_and_pagination(db_service, project):
-    db_service.add_media_assets_batch([
-        _make_asset(project.project_id, f"a{i}", "日戏")
-        for i in range(25)
-    ])
+    db_service.add_media_assets_batch(
+        [_make_asset(project.project_id, f"a{i}", "日戏") for i in range(25)]
+    )
     assert db_service.count_assets(tag="日戏") == 25
     page1 = db_service.search_assets(tag="日戏", limit=10, offset=0)
     page3 = db_service.search_assets(tag="日戏", limit=10, offset=20)
@@ -80,10 +87,11 @@ def test_count_and_pagination(db_service, project):
 def test_legacy_tags_backfilled_on_migration(tmp_dir):
     """旧库（无 asset_tags 表但 tags 列有数据）迁移后应回填关联表"""
     import sqlite3
-    from datetime import datetime
+    from datetime import UTC, datetime
+
     db = DatabaseService(db_path=tmp_dir / "test.db")
     # 模拟旧数据：直接往 media_assets 写入带 tags 的行（绕过 add_media_asset）
-    now = datetime.now().isoformat()
+    now = datetime.now(UTC).isoformat()
     conn = sqlite3.connect(str(tmp_dir / "test.db"))
     conn.execute(
         "INSERT INTO media_assets "

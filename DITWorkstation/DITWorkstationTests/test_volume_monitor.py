@@ -1,8 +1,9 @@
 """存储卡自动识别测试"""
-from pathlib import Path
 
 from DITWorkstation.Services.volume_monitor import (
-    list_volume_roots, looks_like_card, VolumeMonitor,
+    VolumeMonitor,
+    list_volume_roots,
+    looks_like_card,
 )
 
 
@@ -38,7 +39,6 @@ def test_list_volume_roots_returns_list():
 
 def test_volume_monitor_seeds_known_volumes():
     """start() 时已存在的卷不触发挂载事件"""
-    import platform
     monitor = VolumeMonitor(interval_ms=1000)
     monitor.start()
     assert len(monitor._known) >= 0
@@ -47,7 +47,8 @@ def test_volume_monitor_seeds_known_volumes():
 
 def test_volume_monitor_emits_on_new_mount(tmp_dir, monkeypatch):
     from PySide6.QtCore import QCoreApplication
-    app = QCoreApplication.instance()
+
+    QCoreApplication.instance()
     monitor = VolumeMonitor(interval_ms=50)
     mounted = []
     monitor.volume_mounted.connect(lambda p: mounted.append(p))

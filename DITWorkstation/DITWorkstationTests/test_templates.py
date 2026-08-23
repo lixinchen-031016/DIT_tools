@@ -1,4 +1,5 @@
 """项目模板 CRUD 与应用测试"""
+
 from DITWorkstation.Services.database_service import DatabaseService
 
 

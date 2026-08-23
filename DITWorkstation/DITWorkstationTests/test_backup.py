@@ -1,16 +1,22 @@
 """备份服务测试 - 对应 TR-3.1, TR-3.2"""
+
 import os
+import shutil
 import sys
 import tempfile
-import shutil
 import unittest
 import uuid
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from DITWorkstation.Models import (
+    BackupStatus,
+    ChecksumAlgorithm,
+    CopyStatus,
+    MediaAsset,
+)
 from DITWorkstation.Services.backup_service import BackupService
-from DITWorkstation.Models import ChecksumAlgorithm, BackupStatus, CopyStatus, MediaAsset
 from DITWorkstation.Utils import normalize_path
 
 
@@ -53,8 +59,7 @@ class TestBackupService(unittest.TestCase):
     def test_create_backup_job(self):
         """创建备份作业"""
         job = self.service.create_backup_job(
-            self.source_dir,
-            [self.target1_dir, self.target2_dir]
+            self.source_dir, [self.target1_dir, self.target2_dir]
         )
         self.assertIsNotNone(job.job_id)
         self.assertEqual(len(job.targets), 2)
@@ -63,9 +68,7 @@ class TestBackupService(unittest.TestCase):
 
     def test_single_target_backup(self):
         """TR-3.1: 单目标备份成功"""
-        job = self.service.create_backup_job(
-            self.source_dir, [self.target1_dir]
-        )
+        job = self.service.create_backup_job(self.source_dir, [self.target1_dir])
         result = self.service.execute_backup(job)
 
         self.assertEqual(result.status, BackupStatus.COMPLETED)
@@ -81,8 +84,7 @@ class TestBackupService(unittest.TestCase):
     def test_multi_target_backup(self):
         """TR-3.1: 同时向2个以上目标位置备份成功"""
         job = self.service.create_backup_job(
-            self.source_dir,
-            [self.target1_dir, self.target2_dir]
+            self.source_dir, [self.target1_dir, self.target2_dir]
         )
         result = self.service.execute_backup(job)
 
@@ -97,12 +99,13 @@ class TestBackupService(unittest.TestCase):
         job = self.service.create_backup_job(
             self.source_dir,
             [self.target1_dir, self.target2_dir],
-            algorithm=ChecksumAlgorithm.XXHASH64
+            algorithm=ChecksumAlgorithm.XXHASH64,
         )
         result = self.service.execute_backup(job)
 
         # 验证每个目标的文件校验和
         from DITWorkstation.Services.checksum_service import ChecksumService
+
         checksum_svc = ChecksumService()
 
         source_files = sorted(Path(self.source_dir).rglob("*"))
@@ -137,9 +140,9 @@ class TestBackupService(unittest.TestCase):
         mhl = self.service.generate_mhl_report(job)
 
         self.assertIn('<?xml version="1.0"', mhl)
-        self.assertIn('<hashlist', mhl)
-        self.assertIn('<hashvalue>', mhl)
-        self.assertIn('xxhash64', mhl)
+        self.assertIn("<hashlist", mhl)
+        self.assertIn("<hashvalue>", mhl)
+        self.assertIn("xxhash64", mhl)
 
     def test_backup_continues_after_file_error(self):
         """单文件失败不中断整个目标：其余文件继续拷贝，目标标记 FAILED"""
@@ -147,11 +150,16 @@ class TestBackupService(unittest.TestCase):
         checksum_svc = service.checksum_service
         orig = checksum_svc.copy_file_with_checksum
 
-        def fake_copy(src_path, dest_path, algorithm=ChecksumAlgorithm.XXHASH64,
-                      progress_callback=None, cancel_check=None):
+        def fake_copy(
+            src_path,
+            dest_path,
+            algorithm=ChecksumAlgorithm.XXHASH64,
+            progress_callback=None,
+            cancel_check=None,
+        ):
             # 仅 target1 中名为 test_file_1 的源文件模拟损坏
             if "test_file_1" in str(src_path) and "target1" in str(dest_path):
-                raise IOError("模拟源文件损坏")
+                raise OSError("模拟源文件损坏")
             return orig(src_path, dest_path, algorithm, progress_callback, cancel_check)
 
         checksum_svc.copy_file_with_checksum = fake_copy
@@ -179,6 +187,7 @@ class TestBackupService(unittest.TestCase):
 
 # ===== 备份前空间预检 =====
 
+
 def test_check_target_space_sufficient(tmp_dir):
     """目标剩余空间足够时标记 sufficient=True"""
     service = BackupService()
@@ -196,7 +205,7 @@ def test_check_target_space_insufficient(tmp_dir):
     service = BackupService()
     target = tmp_dir / "target"
     target.mkdir()
-    huge = 10 ** 30  # 远超任何磁盘容量
+    huge = 10**30  # 远超任何磁盘容量
     results = service.check_target_space([str(target)], total_bytes=huge)
     assert len(results) == 1
     assert results[0]["sufficient"] is False
@@ -215,20 +224,24 @@ def test_check_target_space_missing_dir(tmp_dir):
 
 # ===== 备份完整性独立再校验 =====
 
+
 def _make_src_files(src_dir, count=3):
     """在 src 目录创建 count 个随机媒体文件，返回文件信息列表"""
     import os
+
     src_dir.mkdir(parents=True, exist_ok=True)
     files = []
     for i in range(count):
         p = src_dir / f"IMG_{i:03d}.jpg"
         p.write_bytes(b"\xff\xd8\xff\xe0" + os.urandom(1024))
-        files.append({
-            "path": str(p),
-            "size": p.stat().st_size,
-            "name": p.name,
-            "relative": p.name,
-        })
+        files.append(
+            {
+                "path": str(p),
+                "size": p.stat().st_size,
+                "name": p.name,
+                "relative": p.name,
+            }
+        )
     return files
 
 
@@ -244,17 +257,19 @@ def test_verify_backup_all_matched(db_service, tmp_dir):
     checksum_svc = ChecksumService()
     for f in files:
         cached = checksum_svc.compute_file_checksum(f["path"])
-        db_service.add_media_asset(MediaAsset(
-            asset_id=str(uuid.uuid4())[:8],
-            project_id=project.project_id,
-            file_path=normalize_path(f["path"]),
-            file_name=f["name"],
-            file_size=f["size"],
-            file_type=".jpg",
-            asset_type="image",
-            checksum_algorithm=cached.algorithm.value,
-            checksum_value=cached.hash_value,
-        ))
+        db_service.add_media_asset(
+            MediaAsset(
+                asset_id=str(uuid.uuid4())[:8],
+                project_id=project.project_id,
+                file_path=normalize_path(f["path"]),
+                file_name=f["name"],
+                file_size=f["size"],
+                file_type=".jpg",
+                asset_type="image",
+                checksum_algorithm=cached.algorithm.value,
+                checksum_value=cached.hash_value,
+            )
+        )
 
     service = BackupService(db_service=db_service)
     job = service.create_backup_job(str(src), [str(tgt)])
@@ -279,17 +294,19 @@ def test_verify_backup_detects_mismatch(db_service, tmp_dir):
     checksum_svc = ChecksumService()
     for f in files:
         cached = checksum_svc.compute_file_checksum(f["path"])
-        db_service.add_media_asset(MediaAsset(
-            asset_id=str(uuid.uuid4())[:8],
-            project_id=project.project_id,
-            file_path=normalize_path(f["path"]),
-            file_name=f["name"],
-            file_size=f["size"],
-            file_type=".jpg",
-            asset_type="image",
-            checksum_algorithm=cached.algorithm.value,
-            checksum_value=cached.hash_value,
-        ))
+        db_service.add_media_asset(
+            MediaAsset(
+                asset_id=str(uuid.uuid4())[:8],
+                project_id=project.project_id,
+                file_path=normalize_path(f["path"]),
+                file_name=f["name"],
+                file_size=f["size"],
+                file_type=".jpg",
+                asset_type="image",
+                checksum_algorithm=cached.algorithm.value,
+                checksum_value=cached.hash_value,
+            )
+        )
 
     service = BackupService(db_service=db_service)
     job = service.create_backup_job(str(src), [str(tgt)])
@@ -312,17 +329,19 @@ def test_verify_backup_detects_missing(db_service, tmp_dir):
     project = db_service.create_project(name="缺失项目")
 
     for f in files:
-        db_service.add_media_asset(MediaAsset(
-            asset_id=str(uuid.uuid4())[:8],
-            project_id=project.project_id,
-            file_path=normalize_path(f["path"]),
-            file_name=f["name"],
-            file_size=f["size"],
-            file_type=".jpg",
-            asset_type="image",
-            checksum_algorithm="xxhash64",
-            checksum_value="deadbeef",
-        ))
+        db_service.add_media_asset(
+            MediaAsset(
+                asset_id=str(uuid.uuid4())[:8],
+                project_id=project.project_id,
+                file_path=normalize_path(f["path"]),
+                file_name=f["name"],
+                file_size=f["size"],
+                file_type=".jpg",
+                asset_type="image",
+                checksum_algorithm="xxhash64",
+                checksum_value="deadbeef",
+            )
+        )
 
     service = BackupService(db_service=db_service)
     job = service.create_backup_job(str(src), [str(tgt)])
@@ -340,20 +359,27 @@ def test_verify_backup_detects_missing(db_service, tmp_dir):
 def test_verify_backup_requires_db():
     """未注入 db_service 时抛出 ValueError"""
     import pytest
+
     service = BackupService(db_service=None)
     with pytest.raises(ValueError):
         service.verify_backup("p1")
 
 
-def test_backup_destination_uses_persisted_snapshot_when_source_root_unavailable(tmp_dir):
+def test_backup_destination_uses_persisted_snapshot_when_source_root_unavailable(
+    tmp_dir,
+):
     """源根不可用时优先使用快照 relative，避免递归扫描备份盘。"""
     from DITWorkstation.Services.backup_service import BackupService
 
     source_file = tmp_dir / "removed-source" / "reel" / "clip.mov"
     target = tmp_dir / "backup"
     asset = MediaAsset(
-        asset_id="snapshot-asset", project_id="p1", file_path=str(source_file),
-        file_name="clip.mov", file_size=10, file_type=".mov",
+        asset_id="snapshot-asset",
+        project_id="p1",
+        file_path=str(source_file),
+        file_name="clip.mov",
+        file_size=10,
+        file_type=".mov",
     )
     service = BackupService()
 

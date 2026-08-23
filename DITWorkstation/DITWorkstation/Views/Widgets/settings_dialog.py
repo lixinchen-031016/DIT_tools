@@ -117,24 +117,6 @@ class SettingsDialog(QDialog):
         usage_layout.addWidget(usage_hint)
         layout.addWidget(usage_group)
 
-        # ===== 外观（深/浅色主题）=====
-        theme_group = QGroupBox("🎨 外观")
-        theme_layout = QHBoxLayout(theme_group)
-        theme_layout.addWidget(QLabel("界面主题:"))
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItem("浅色", "light")
-        self.theme_combo.addItem("深色", "dark")
-        self.theme_combo.setToolTip("切换深浅配色；重启应用后生效")
-        self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        theme_layout.addWidget(self.theme_combo)
-        theme_hint = QLabel("切换后重启应用生效")
-        theme_hint.setStyleSheet(
-            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
-        )
-        theme_layout.addWidget(theme_hint)
-        theme_layout.addStretch()
-        layout.addWidget(theme_group)
-
         # ===== 数据存储位置 =====
         dir_group = QGroupBox("📂 数据存储位置")
         dir_form = QFormLayout(dir_group)
@@ -379,24 +361,6 @@ class SettingsDialog(QDialog):
         integrity_layout.addWidget(integrity_hint)
         layout.addWidget(integrity_group)
 
-        # ===== 自动更新 =====
-        update_group = QGroupBox("🔄 自动更新")
-        update_layout = QVBoxLayout(update_group)
-        update_row = QHBoxLayout()
-        update_row.addWidget(QLabel("更新清单 URL（留空禁用）:"))
-        self.update_url_edit = QLineEdit()
-        self.update_url_edit.setPlaceholderText("https://example.com/dit_latest.json")
-        self.update_url_edit.setToolTip(
-            '指向返回 {"version":"alpha.YYYYMMDD","download_url":"..."} 的 JSON 文件'
-        )
-        self.update_url_edit.editingFinished.connect(self._on_update_url_changed)
-        update_row.addWidget(self.update_url_edit, 1)
-        self.check_update_btn = QPushButton("立即检查")
-        self.check_update_btn.clicked.connect(self._check_update_now)
-        update_row.addWidget(self.check_update_btn)
-        update_layout.addLayout(update_row)
-        layout.addWidget(update_group)
-
         settings_io_group = QGroupBox("设置迁移")
         settings_io_layout = QHBoxLayout(settings_io_group)
         settings_io_hint = QLabel("导入的设置将在重启应用后生效")
@@ -464,11 +428,6 @@ class SettingsDialog(QDialog):
         self.skip_processed_cards_check.setChecked(
             bool(getattr(config, "skip_processed_cards", True))
         )
-        self.theme_combo.blockSignals(True)
-        self.theme_combo.setCurrentIndex(
-            max(0, self.theme_combo.findData(config.theme_mode))
-        )
-        self.theme_combo.blockSignals(False)
         interval = int(getattr(config, "integrity_check_interval_hours", 0) or 0)
         self.integrity_enable_check.setChecked(interval > 0)
         self.integrity_interval_spin.setValue(interval if interval > 0 else 168)
@@ -476,7 +435,6 @@ class SettingsDialog(QDialog):
         idx = self.integrity_scope_combo.findData(config.integrity_check_scope)
         self.integrity_scope_combo.setCurrentIndex(max(0, idx))
         self.integrity_scope_combo.blockSignals(False)
-        self.update_url_edit.setText(getattr(config, "auto_update_check_url", "") or "")
         self._load_automation_options()
 
     def _load_automation_options(self):
@@ -754,13 +712,6 @@ class SettingsDialog(QDialog):
                 self, "导入失败", "文件不是有效的设置 JSON，或无法保存导入结果。"
             )
 
-    # ===== 外观主题 =====
-
-    def _on_theme_changed(self, index: int):
-        mode = self.theme_combo.currentData() or "light"
-        config.theme_mode = mode
-        save_app_settings(theme_mode=mode)
-
     # ===== 存储卡多卡去重 =====
 
     def _on_skip_processed_cards_toggled(self, checked: bool):
@@ -783,49 +734,6 @@ class SettingsDialog(QDialog):
         scope = self.integrity_scope_combo.currentData() or "all"
         config.integrity_check_scope = scope
         save_app_settings(integrity_check_scope=scope)
-
-    # ===== 自动更新 =====
-
-    def _on_update_url_changed(self):
-        url = self.update_url_edit.text().strip()
-        config.auto_update_check_url = url
-        save_app_settings(auto_update_check_url=url)
-
-    def _check_update_now(self):
-        from DITWorkstation.Services.update_checker import check_for_update
-
-        url = self.update_url_edit.text().strip()
-        if not url:
-            QMessageBox.information(self, "更新检查", "请先配置更新清单 URL。")
-            return
-        info = check_for_update(url)
-        if info.error:
-            QMessageBox.warning(self, "检查失败", info.error)
-            return
-        if info.is_newer:
-            text = f"发现新版本 {info.version}。"
-            if info.notes:
-                text += f"\n\n更新说明：\n{info.notes}"
-            if info.download_url:
-                ret = QMessageBox.question(
-                    self,
-                    "发现更新",
-                    text + "\n\n是否打开下载页面？",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes,
-                )
-                if ret == QMessageBox.Yes:
-                    import webbrowser
-
-                    webbrowser.open(info.download_url)
-            else:
-                QMessageBox.information(self, "发现更新", text)
-        else:
-            from DITWorkstation.App.version import APP_VERSION
-
-            QMessageBox.information(
-                self, "检查更新", f"当前 {APP_VERSION} 已是最新版本。"
-            )
 
     # ===== 运行参数 =====
 

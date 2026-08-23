@@ -20,14 +20,7 @@ from DITWorkstation.App.navigation import get_nav_index
 from DITWorkstation.App.version import APP_VERSION
 from DITWorkstation.Utils import apply_saved_config, get_db_service, logger
 
-# 在导入任何视图模块之前恢复已保存的主题设置。
-# 视图模块在 import 时会把 TITLE_QSS / SUBTITLE_QSS / PRIMARY_BUTTON_QSS 等字符串
-# 常量快照到模块命名空间；若在视图导入之后才 set_theme_mode，13 个视图文件将
-# 永久保留浅色调色板，导致深色主题失效（标题/按钮文字在深色背景下几乎不可读）。
 apply_saved_config()
-from DITWorkstation.Views.Styles.theme import set_theme_mode
-
-set_theme_mode(config.theme_mode)
 
 # 视图模块（保持模块级导入：UI 测试通过 monkeypatch app_main.MainWindow 等名称）
 from DITWorkstation.Views.first_run_wizard import maybe_show_wizard

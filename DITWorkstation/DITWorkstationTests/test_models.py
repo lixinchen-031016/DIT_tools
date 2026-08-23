@@ -5,6 +5,7 @@
 - RATING_LABELS 覆盖所有 AssetRating 成员，无悬空键值
 - MediaAsset.rating 默认值与 AssetRating.NONE.value 一致
 """
+
 import os
 import sys
 import unittest
@@ -12,7 +13,10 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from DITWorkstation.Models import (
-    AssetRating, RATING_LABELS, MediaAsset, AssetType,
+    RATING_LABELS,
+    AssetRating,
+    AssetType,
+    MediaAsset,
 )
 
 
@@ -38,15 +42,15 @@ class TestRatingLabels(unittest.TestCase):
     def test_labels_cover_all_ratings(self):
         """RATING_LABELS 必须覆盖所有 AssetRating 成员"""
         for member in AssetRating:
-            self.assertIn(member.value, RATING_LABELS,
-                          f"RATING_LABELS 缺少 {member.name} 的标签")
+            self.assertIn(
+                member.value, RATING_LABELS, f"RATING_LABELS 缺少 {member.name} 的标签"
+            )
 
     def test_labels_no_extra_keys(self):
         """RATING_LABELS 不应包含非枚举值的键"""
         valid_values = {m.value for m in AssetRating}
         for key in RATING_LABELS:
-            self.assertIn(key, valid_values,
-                          f"RATING_LABELS 包含非法键: {key}")
+            self.assertIn(key, valid_values, f"RATING_LABELS 包含非法键: {key}")
 
     def test_labels_non_empty(self):
         """每个评级标签必须非空字符串"""

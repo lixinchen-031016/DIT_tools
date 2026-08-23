@@ -1,4 +1,5 @@
 """应用设置持久化测试"""
+
 from pathlib import Path
 
 from DITWorkstation.Utils import common
@@ -50,7 +51,9 @@ def test_invalid_settings_shape_is_quarantined(tmp_path, monkeypatch):
     assert len(list(tmp_path.glob("settings.json.corrupt.*"))) == 1
 
 
-def test_invalid_known_config_values_fall_back_without_dropping_other_settings(tmp_path, monkeypatch):
+def test_invalid_known_config_values_fall_back_without_dropping_other_settings(
+    tmp_path, monkeypatch
+):
     target = _patch_settings_path(monkeypatch, tmp_path)
     target.write_text(
         '{"app_config": {"verify_after_copy": "yes", "search_page_size": 0, '
@@ -60,7 +63,8 @@ def test_invalid_known_config_values_fall_back_without_dropping_other_settings(t
     )
 
     assert common.load_app_settings() == {
-        "usage_mode": "personal", "future_field": {"enabled": True}
+        "usage_mode": "personal",
+        "future_field": {"enabled": True},
     }
 
 
@@ -70,6 +74,7 @@ def test_save_settings_uses_atomic_replacement(tmp_path, monkeypatch):
 
     assert common._save_settings({"app_config": {"verify_after_copy": False}}) is True
     import json
+
     assert json.loads(target.read_text(encoding="utf-8")) == {
         "app_config": {"verify_after_copy": False}
     }
@@ -81,6 +86,7 @@ def test_save_settings_does_not_clobber_recent_paths(tmp_path, monkeypatch):
     common.add_recent_path("/tmp/source", category="import_source")
     common.save_app_settings(verify_after_copy=False)
     import json
+
     raw = json.loads(target.read_text(encoding="utf-8"))
     assert "recent_directories_import_source" in raw
     assert raw["app_config"]["verify_after_copy"] is False
@@ -93,6 +99,7 @@ def test_export_settings_writes_validated_json(tmp_path, monkeypatch):
 
     assert common.export_settings(target)
     import json
+
     assert json.loads(target.read_text(encoding="utf-8")) == {
         "app_config": {"verify_after_copy": False}
     }
@@ -100,10 +107,12 @@ def test_export_settings_writes_validated_json(tmp_path, monkeypatch):
 
 def test_import_settings_deep_merge_preserves_local_values(tmp_path, monkeypatch):
     target = _patch_settings_path(monkeypatch, tmp_path)
-    common._save_settings({
-        "app_config": {"verify_after_copy": False, "auto_detect_volume": True},
-        "recent_directories_import_source": ["/local/source"],
-    })
+    common._save_settings(
+        {
+            "app_config": {"verify_after_copy": False, "auto_detect_volume": True},
+            "recent_directories_import_source": ["/local/source"],
+        }
+    )
     source = tmp_path / "import.json"
     source.write_text(
         '{"app_config": {"max_parallel_copies": 8}, "future_section": {"enabled": true}}',
@@ -112,6 +121,7 @@ def test_import_settings_deep_merge_preserves_local_values(tmp_path, monkeypatch
 
     assert common.import_settings(source, merge=True)
     import json
+
     assert json.loads(target.read_text(encoding="utf-8")) == {
         "app_config": {
             "verify_after_copy": False,
@@ -130,14 +140,20 @@ def test_invalid_import_does_not_overwrite_current_settings(tmp_path, monkeypatc
     source.write_text('{"app_config": ', encoding="utf-8")
 
     assert not common.import_settings(source)
-    assert target.read_text(encoding="utf-8") == '{\n  "app_config": {\n    "verify_after_copy": false\n  }\n}'
+    assert (
+        target.read_text(encoding="utf-8")
+        == '{\n  "app_config": {\n    "verify_after_copy": false\n  }\n}'
+    )
 
 
 def test_apply_saved_config_sets_known_fields(tmp_path, monkeypatch):
     _patch_settings_path(monkeypatch, tmp_path)
-    common.save_app_settings(verify_after_copy=False, auto_detect_volume=False, unknown_key=1)
+    common.save_app_settings(
+        verify_after_copy=False, auto_detect_volume=False, unknown_key=1
+    )
     common.apply_saved_config()
     from DITWorkstation.App import config
+
     assert config.verify_after_copy is False
     assert config.auto_detect_volume is False
     assert not hasattr(config, "unknown_key")
@@ -154,6 +170,7 @@ def test_apply_saved_card_automation_config(tmp_path, monkeypatch):
     )
     common.apply_saved_config()
     from DITWorkstation.App import config
+
     assert config.auto_card_automation_enabled is True
     assert config.auto_card_import is False
     assert config.auto_card_backup is True
@@ -167,6 +184,7 @@ def test_path_settings_roundtrip_as_path_objects(tmp_path, monkeypatch):
     target = tmp_path / "app_data"
     # 先注册原值以便测试后恢复，避免污染全局 config 影响其他测试
     from DITWorkstation.App import config as _config
+
     for field in ("db_dir", "report_dir", "log_dir", "thumbnail_cache_dir"):
         monkeypatch.setattr(_config, field, getattr(_config, field))
     common.save_app_settings(
@@ -186,6 +204,7 @@ def test_path_settings_roundtrip_as_path_objects(tmp_path, monkeypatch):
 def test_db_dir_change_survives_restart(tmp_path, monkeypatch):
     """更换数据库目录后，重启（重新读取配置）应仍使用新目录。"""
     from DITWorkstation.App import config as _config
+
     for field in ("db_dir", "settings_dir"):
         monkeypatch.setattr(_config, field, getattr(_config, field))
 
@@ -210,6 +229,7 @@ def test_db_dir_change_survives_restart(tmp_path, monkeypatch):
 def test_log_files_summary_and_delete(tmp_path, monkeypatch):
     """日志文件统计与删除功能（重设到临时日志目录）"""
     from DITWorkstation.App import config
+
     log_dir = tmp_path / "logs"
     monkeypatch.setattr(config, "log_dir", log_dir)
     common.logger.set_log_dir(log_dir)
@@ -228,16 +248,19 @@ def test_log_files_summary_and_delete(tmp_path, monkeypatch):
 
 def test_log_files_summary_missing_dir(tmp_path, monkeypatch):
     from DITWorkstation.App import config
+
     monkeypatch.setattr(config, "log_dir", tmp_path / "no_such_dir")
     assert common.log_files_summary() == (0, 0)
 
 
 # ===== 使用场景（功能模式开关）持久化 =====
 
+
 def test_apply_saved_config_restores_usage_mode(tmp_path, monkeypatch):
     """usage_mode 保存到 app_config 后，apply_saved_config 能恢复到 AppConfig。"""
     _patch_settings_path(monkeypatch, tmp_path)
     from DITWorkstation.App import config as _config
+
     monkeypatch.setattr(_config, "usage_mode", "team")
     common.save_app_settings(usage_mode="personal")
     common.apply_saved_config()
@@ -248,9 +271,11 @@ def test_invalid_usage_mode_falls_back_to_team_on_read(tmp_path, monkeypatch):
     """apply_saved_config 原样恢复存储值；非法值由 feature_flags 读取时回退团队模式。"""
     _patch_settings_path(monkeypatch, tmp_path)
     from DITWorkstation.App import config as _config
+
     monkeypatch.setattr(_config, "usage_mode", "team")
     common.save_app_settings(usage_mode="foo")
     common.apply_saved_config()
     assert _config.usage_mode == "foo"  # 持久化层不做校验，原样恢复
     from DITWorkstation.App import feature_flags
+
     assert feature_flags.get_usage_mode() == feature_flags.UsageMode.TEAM

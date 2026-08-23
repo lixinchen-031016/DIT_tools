@@ -1,40 +1,39 @@
 """报告服务测试 - CSV 素材清单导出"""
+
 import csv
 import os
 import sys
 import uuid
-from datetime import datetime
-from pathlib import Path
+from datetime import UTC, datetime
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from DITWorkstation.Models import MediaAsset, Project
 from DITWorkstation.Services.report_service import ReportService
-from DITWorkstation.Models import MediaAsset
-from DITWorkstation.Models import Project
 
 
 def _asset(**kwargs):
-    defaults = dict(
-        asset_id=str(uuid.uuid4())[:8],
-        project_id="p1",
-        file_path="/media/IMG_0001.cr2",
-        file_name="IMG_0001.cr2",
-        file_size=2048,
-        file_type=".cr2",
-        asset_type="raw",
-        checksum_algorithm="xxhash64",
-        checksum_value="abc123",
-        rating=2,
-        scene="S01",
-        shot="A",
-        take="02",
-        backup_locations=["/backup1", "/backup2"],
-        camera_model="RED V-RAPTOR",
-        width=6144,
-        height=3160,
-    )
+    defaults = {
+        "asset_id": str(uuid.uuid4())[:8],
+        "project_id": "p1",
+        "file_path": "/media/IMG_0001.cr2",
+        "file_name": "IMG_0001.cr2",
+        "file_size": 2048,
+        "file_type": ".cr2",
+        "asset_type": "raw",
+        "checksum_algorithm": "xxhash64",
+        "checksum_value": "abc123",
+        "rating": 2,
+        "scene": "S01",
+        "shot": "A",
+        "take": "02",
+        "backup_locations": ["/backup1", "/backup2"],
+        "camera_model": "RED V-RAPTOR",
+        "width": 6144,
+        "height": 3160,
+    }
     defaults.update(kwargs)
     return MediaAsset(**defaults)
 
@@ -120,13 +119,18 @@ def test_generate_asset_report_accepts_generator_and_honors_cancel(tmp_dir):
     ReportService().generate_asset_report(
         project,
         (_asset(file_name=f"report_{i}.cr2", scene="S01") for i in range(3)),
-        [], str(output), total=3,
+        [],
+        str(output),
+        total=3,
     )
     assert output.exists()
 
     with pytest.raises(InterruptedError):
         ReportService().generate_asset_report(
-            project, (_asset() for _ in range(1)), [], str(tmp_dir / "cancelled.pdf"),
+            project,
+            (_asset() for _ in range(1)),
+            [],
+            str(tmp_dir / "cancelled.pdf"),
             cancel_check=lambda: True,
         )
 
@@ -135,25 +139,42 @@ def test_generate_backup_report_from_persisted_job_shape(tmp_dir):
     """真实 backup_jobs 字典可直接生成交付报告，损坏历史时间会降级处理。"""
     output = tmp_dir / "backup.pdf"
     job = {
-        "job_id": "job-1", "source_path": "/media/card", "algorithm": "xxhash64",
-        "status": "completed", "total_files": 3, "total_bytes": 2048,
-        "created_at": "not-a-date", "completed_at": None,
-        "targets": [{
-            "path": "/backup/A", "name": "A", "status": "completed",
-            "total_files": 3, "completed_files": 3, "total_bytes": 2048,
-            "copied_bytes": 2048, "verified": True, "failed_files": [],
-        }],
+        "job_id": "job-1",
+        "source_path": "/media/card",
+        "algorithm": "xxhash64",
+        "status": "completed",
+        "total_files": 3,
+        "total_bytes": 2048,
+        "created_at": "not-a-date",
+        "completed_at": None,
+        "targets": [
+            {
+                "path": "/backup/A",
+                "name": "A",
+                "status": "completed",
+                "total_files": 3,
+                "completed_files": 3,
+                "total_bytes": 2048,
+                "copied_bytes": 2048,
+                "verified": True,
+                "failed_files": [],
+            }
+        ],
     }
-    ReportService().generate_backup_report(Project(project_id="p1", name="交付项目"), [job], str(output))
+    ReportService().generate_backup_report(
+        Project(project_id="p1", name="交付项目"), [job], str(output)
+    )
     assert output.exists() and output.stat().st_size > 0
 
 
 def test_generate_report_falls_back_to_builtin_cjk_font(tmp_dir, monkeypatch):
     """精简系统缺少字体文件时，报告仍通过 ReportLab CID 字体生成。"""
     service = ReportService()
-    monkeypatch.setattr(service, "_get_system_font_paths", lambda: [])
+    monkeypatch.setattr(service, "_get_system_font_paths", list)
     output = tmp_dir / "fallback-font.pdf"
-    service.generate_asset_report(Project(project_id="p1", name="中文项目"), [], [], str(output))
+    service.generate_asset_report(
+        Project(project_id="p1", name="中文项目"), [], [], str(output)
+    )
     assert service._chinese_font_name == "STSong-Light"
     assert output.exists() and output.stat().st_size > 0
 
@@ -162,13 +183,19 @@ def test_generate_audit_report_contains_summary_and_details(tmp_dir):
     output = tmp_dir / "audit.pdf"
     operations = [
         {
-            "created_at": datetime(2026, 8, 18, 10, 0), "event": "导入素材",
-            "status": "success", "object_type": "asset", "object_id": "a1",
+            "created_at": datetime(2026, 8, 18, 10, 0, tzinfo=UTC),
+            "event": "导入素材",
+            "status": "success",
+            "object_type": "asset",
+            "object_id": "a1",
             "detail": "导入 1 个",
         },
         {
-            "created_at": datetime(2026, 8, 18, 11, 0), "event": "数据备份",
-            "status": "error", "object_type": "backup", "object_id": "b1",
+            "created_at": datetime(2026, 8, 18, 11, 0, tzinfo=UTC),
+            "event": "数据备份",
+            "status": "error",
+            "object_type": "backup",
+            "object_id": "b1",
             "detail": "目标不可用",
         },
     ]

@@ -1,10 +1,10 @@
 """WorkspaceProjectSelector 新建项目/工作区交互测试"""
-from PySide6.QtWidgets import QInputDialog
 
 from DITWorkstation.Services.database_service import DatabaseService
 from DITWorkstation.Views.Widgets.workspace_project_selector import (
     WorkspaceProjectSelector,
 )
+from PySide6.QtWidgets import QInputDialog
 
 
 def _make_selector(db_service):

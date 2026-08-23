@@ -4,19 +4,17 @@
 这一数据闭环逻辑。对应 backup_view._on_finished 中的编排：
     execute_backup -> import_assets(引用模式) -> add_backup_location_to_assets(补写)
 """
+
 import os
 import sys
-import shutil
-import tempfile
-from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from DITWorkstation.Models import BackupStatus, CopyStatus
 from DITWorkstation.Services.backup_service import BackupService
 from DITWorkstation.Services.media_import_service import MediaImportService
-from DITWorkstation.Models import ChecksumAlgorithm, BackupStatus, CopyStatus
 
 
 @pytest.fixture
@@ -34,7 +32,9 @@ def fs_workspace(tmp_dir):
     return src, tgt1, tgt2
 
 
-def test_backup_then_import_creates_assets_with_backup_locations(db_service, fs_workspace):
+def test_backup_then_import_creates_assets_with_backup_locations(
+    db_service, fs_workspace
+):
     """场景 1：未入库源文件备份后，经「导入+补写」应进入项目并带 backup_locations
 
     这是用户报告 bug 的核心回归用例：备份只复制文件，没把文件信息导入项目。
@@ -54,7 +54,7 @@ def test_backup_then_import_creates_assets_with_backup_locations(db_service, fs_
     assert all(t.status == CopyStatus.COMPLETED for t in job.targets)
 
     # 2. 备份完成后，把未入库源文件登记到项目（引用模式）
-    files = getattr(job, '_files_cache')
+    files = job._files_cache
     source_paths = [f["path"] for f in files]
     result = import_service.import_assets(
         project_id=project.project_id,
@@ -85,7 +85,7 @@ def test_backup_then_import_creates_assets_with_backup_locations(db_service, fs_
 
 def test_backup_import_idempotent_no_duplicate(db_service, fs_workspace):
     """场景 2：先导入再备份+再导入，不应产生重复 asset，backup_locations 正确回写"""
-    src, tgt1, tgt2 = fs_workspace
+    src, tgt1, _tgt2 = fs_workspace
     project = db_service.create_project(name="幂等项目")
 
     backup_service = BackupService(db_service=db_service)
@@ -148,7 +148,9 @@ def test_backup_no_project_does_not_import(db_service, fs_workspace):
     assert len(assets) == 0
 
 
-def test_backup_partial_then_import_only_completed_targets_written(db_service, fs_workspace):
+def test_backup_partial_then_import_only_completed_targets_written(
+    db_service, fs_workspace
+):
     """场景 4：部分成功时，只对 completed 目标回写 backup_locations
 
     验证 _on_finished 中 `if t.status.value == "completed"` 的过滤逻辑。
@@ -169,7 +171,7 @@ def test_backup_partial_then_import_only_completed_targets_written(db_service, f
     job = backup_service.execute_backup(job, project_id=project.project_id)
 
     # 导入源文件
-    files = getattr(job, '_files_cache')
+    files = job._files_cache
     source_paths = [f["path"] for f in files]
     import_service.import_assets(
         project_id=project.project_id,
@@ -188,7 +190,9 @@ def test_backup_partial_then_import_only_completed_targets_written(db_service, f
     # 至少 tgt1 应被回写（execute_backup 正常完成则 tgt1=completed）
     assets = db_service.search_assets(project_id=project.project_id)
     assert len(assets) == 3
-    completed_targets = [t.path for t in job.targets if t.status == CopyStatus.COMPLETED]
+    completed_targets = [
+        t.path for t in job.targets if t.status == CopyStatus.COMPLETED
+    ]
     for a in assets:
         locations = a.backup_locations if a.backup_locations else []
         for ct in completed_targets:

@@ -1,5 +1,6 @@
 """Repository integration tests sharing the database facade's storage."""
-from datetime import datetime
+
+from datetime import UTC, datetime
 
 from DITWorkstation.Models import BackupJob, MediaAsset, ShootingLog
 
@@ -43,12 +44,15 @@ def test_log_repository_and_database_facade_share_storage(db_service):
     assert db_service.logs.create_shooting(log) == log
     assert db_service.get_shooting_log(log.log_id) == log
     assert db_service.logs.record("仓储测试", project_id=project.project_id)
-    assert db_service.get_recent_operations(project_id=project.project_id)[0]["event"] == "仓储测试"
+    assert (
+        db_service.get_recent_operations(project_id=project.project_id)[0]["event"]
+        == "仓储测试"
+    )
 
 
 def test_asset_repository_read_paths_and_facade_share_storage(db_service):
     project = db_service.create_project("素材仓储项目")
-    imported_at = datetime(2026, 1, 1, 12, 0, 0)
+    imported_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
     assets = [
         MediaAsset(
             asset_id=asset_id,
@@ -67,29 +71,47 @@ def test_asset_repository_read_paths_and_facade_share_storage(db_service):
     assert db_service.assets.get("asset-b") == db_service.get_media_asset("asset-b")
     assert db_service.get_media_asset("asset-b").tags == "夜戏"
     assert db_service.assets.count_project(project.project_id) == 3
-    assert [asset.asset_id for asset in db_service.assets.iter_project(project.project_id, 1)] == [
-        "asset-c", "asset-b", "asset-a",
+    assert [
+        asset.asset_id
+        for asset in db_service.assets.iter_project(project.project_id, 1)
+    ] == [
+        "asset-c",
+        "asset-b",
+        "asset-a",
     ]
     first, cursor = db_service.assets.get_page(project.project_id, page_size=2)
     second, final_cursor = db_service.get_project_asset_page(
-        project.project_id, page_size=2, cursor=cursor,
+        project.project_id,
+        page_size=2,
+        cursor=cursor,
     )
-    assert [asset.asset_id for asset in first + second] == ["asset-c", "asset-b", "asset-a"]
+    assert [asset.asset_id for asset in first + second] == [
+        "asset-c",
+        "asset-b",
+        "asset-a",
+    ]
     assert final_cursor is None
 
 
 def test_lifecycle_and_operation_repositories_share_facade_storage(db_service):
     project = db_service.create_project("生命周期仓储项目")
-    asset = MediaAsset("repo-lifecycle", project.project_id, "/media/clip.mov", "clip.mov")
+    asset = MediaAsset(
+        "repo-lifecycle", project.project_id, "/media/clip.mov", "clip.mov"
+    )
     db_service.assets.create(asset)
 
     deleted = db_service.assets.delete_result([asset.asset_id])
     assert deleted
-    assert db_service.recycle.list_items(project.project_id)[0]["recycle_id"] == deleted.recovery_id
+    assert (
+        db_service.recycle.list_items(project.project_id)[0]["recycle_id"]
+        == deleted.recovery_id
+    )
     assert db_service.recycle.restore_item(deleted.recovery_id)
     assert db_service.get_media_asset(asset.asset_id) is not None
 
-    rename = db_service.renames.create([("/media/clip.mov", "/media/clip-v2.mov")], project.project_id)
+    rename = db_service.renames.create(
+        [("/media/clip.mov", "/media/clip-v2.mov")], project.project_id
+    )
     assert db_service.get_rename_history(rename.recovery_id)
 
     task_id = db_service.tasks.create("仓储任务", project.project_id)

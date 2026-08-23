@@ -1,16 +1,17 @@
 """重命名服务测试 - 对应 TR-4.1, TR-4.2"""
+
 import os
+import shutil
 import sys
 import tempfile
-import shutil
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from DITWorkstation.Services.rename_service import RenameService
-from DITWorkstation.Services.metadata_service import MetadataService
 from DITWorkstation.Models import RenameRule
+from DITWorkstation.Services.metadata_service import MetadataService
+from DITWorkstation.Services.rename_service import RenameService
 
 
 class TestRenameService(unittest.TestCase):
@@ -39,7 +40,7 @@ class TestRenameService(unittest.TestCase):
             shot="001A",
             take="01",
             start_number=1,
-            padding=3
+            padding=3,
         )
         pairs = self.service.preview_rename(self.test_files, rule)
 
@@ -57,7 +58,7 @@ class TestRenameService(unittest.TestCase):
             scene="S002",
             shot="003B",
             start_number=1,
-            padding=4
+            padding=4,
         )
         results = self.service.execute_rename(self.test_files, rule)
 
@@ -103,7 +104,7 @@ class TestRenameService(unittest.TestCase):
             scene="A001",
             prefix="CAM_A",
             start_number=10,
-            padding=4
+            padding=4,
         )
         pairs = self.service.preview_rename(self.test_files[:1], rule)
         new_name = Path(pairs[0][1]).name
