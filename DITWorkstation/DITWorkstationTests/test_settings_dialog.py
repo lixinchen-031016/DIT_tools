@@ -129,3 +129,83 @@ def test_set_usage_mode_inside_dialog():
     # 恢复原始模式
     if original != UsageMode.TEAM:
         set_usage_mode(original)
+
+
+# ===== 极简模式：下拉项与保存目录设置项 =====
+
+
+def test_settings_dialog_has_minimal_mode_option():
+    """验证「界面模式」下拉包含极简模式选项。"""
+    dialog = SettingsDialog()
+    combo = dialog.findChild(QComboBox)
+    texts = [combo.itemText(i) for i in range(combo.count())]
+    datas = [combo.itemData(i) for i in range(combo.count())]
+    assert any("极简模式" in t for t in texts)
+    assert UsageMode.MINIMAL.value in datas
+    dialog.close()
+
+
+def test_settings_dialog_minimal_dir_item_visibility(monkeypatch):
+    """保存目录设置项仅在「界面模式」选中极简模式时可见。"""
+    from DITWorkstation.App import config
+
+    monkeypatch.setattr(config, "usage_mode", "team")
+    dialog = SettingsDialog()
+    combo = dialog.findChild(QComboBox)
+
+    combo.blockSignals(True)
+    combo.setCurrentIndex(combo.findData(UsageMode.TEAM.value))
+    combo.blockSignals(False)
+    dialog._sync_minimal_dir_visibility()
+    assert dialog.minimal_dir_widget.isVisibleTo(dialog) is False
+
+    combo.blockSignals(True)
+    combo.setCurrentIndex(combo.findData(UsageMode.MINIMAL.value))
+    combo.blockSignals(False)
+    dialog._sync_minimal_dir_visibility()
+    assert dialog.minimal_dir_widget.isVisibleTo(dialog) is True
+    dialog.close()
+
+
+def test_settings_dialog_minimal_dir_shows_and_clears_path(monkeypatch, tmp_path):
+    """保存目录设置项显示已保存路径，清除后回到未设置提示。"""
+    from DITWorkstation.App import config
+    from DITWorkstation.App.feature_flags import set_minimal_import_target_dir
+    from DITWorkstation.Utils import common
+
+    monkeypatch.setattr(
+        common, "_get_settings_path", lambda: tmp_path / "settings.json"
+    )
+    monkeypatch.setattr(config, "usage_mode", "minimal")
+    monkeypatch.setattr(config, "minimal_import_target_dir", "")
+
+    dialog = SettingsDialog()
+    try:
+        assert "未设置" in dialog.minimal_dir_label.text()
+
+        target = tmp_path / "minimal_out"
+        set_minimal_import_target_dir(target)
+        dialog._refresh_minimal_dir_label()
+        assert str(target) in dialog.minimal_dir_label.text()
+
+        set_minimal_import_target_dir("")
+        dialog._refresh_minimal_dir_label()
+        assert "未设置" in dialog.minimal_dir_label.text()
+    finally:
+        dialog.close()
+
+
+def test_settings_dialog_hides_backup_groups_in_minimal_mode(monkeypatch):
+    """极简模式隐藏备份/完整性等被禁用模块的设置分组。"""
+    from DITWorkstation.App import config
+
+    monkeypatch.setattr(config, "usage_mode", "minimal")
+    dialog = SettingsDialog()
+    try:
+        groups = {g.title(): g for g in dialog.findChildren(QGroupBox)}
+        assert groups["📦 备份默认选项"].isVisibleTo(dialog) is False
+        assert groups["🛡 完整性校验"].isVisibleTo(dialog) is False
+        # 使用场景分组必须保留：极简模式唯一的切换出口
+        assert groups["🧭 使用场景"].isVisibleTo(dialog) is True
+    finally:
+        dialog.close()

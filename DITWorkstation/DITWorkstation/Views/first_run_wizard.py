@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from DITWorkstation.App.feature_flags import (
     ensure_personal_default_workspace_path,
+    is_minimal_mode,
     is_team_mode,
 )
 from DITWorkstation.Utils import get_db_service, logger, pick_directory
@@ -105,6 +106,26 @@ _FINISH_TEXT_PERSONAL = (
     "点击「完成」进入主界面。"
 )
 
+# 极简模式：仅保留媒体导入，文案只提示导入这一条链路
+_WELCOME_TEXT_MINIMAL = (
+    "本向导将引导你完成项目初始化，约 1 分钟。\n\n"
+    "极简模式只保留「媒体导入」一项功能：\n"
+    "  ① 创建项目 → ② 选择素材目录 → ③ 导入（复制到本机指定保存目录）\n\n"
+    "项目用于归集本次导入的素材；导入的素材会复制到你设置的保存目录下\n"
+    "（<保存目录>/<项目名>/），原文件位置保持不动。\n\n"
+    "如需使用备份、检索、报告等完整功能，可在「设置 → 使用场景」中\n"
+    "切换到团队模式或个人模式。"
+)
+
+_FINISH_TEXT_MINIMAL = (
+    "✓ 项目初始化完成。\n\n"
+    "接下来：\n"
+    "  • 进入「媒体导入」选择素材所在目录并扫描\n"
+    "  • 在「保存位置」中确认或修改素材复制到本机的目标目录\n"
+    "  • 勾选要导入的文件后点击「开始导入」\n\n"
+    "点击「完成」进入主界面。"
+)
+
 # 合并后的 SOP 提示（原 3 页内容整合为 1 页，避免向导页数过多）
 SOP_GUIDE_TEXT = (
     "点击「下一步」后将自动跳转到「媒体导入」视图。\n\n"
@@ -169,7 +190,8 @@ class _WelcomePage(QWizardPage):
         super().__init__()
         self.setTitle("欢迎使用 DIT 工作站")
         layout = QVBoxLayout(self)
-        intro = QLabel(_WELCOME_TEXT)
+        # 极简模式只保留媒体导入，欢迎文案同步精简
+        intro = QLabel(_WELCOME_TEXT_MINIMAL if is_minimal_mode() else _WELCOME_TEXT)
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
@@ -319,8 +341,14 @@ class _FinishPage(QWizardPage):
         super().__init__()
         self.setTitle("完成")
         layout = QVBoxLayout(self)
-        # 个人模式不展示日志/报告等团队流程建议
-        text = QLabel(_FINISH_TEXT if is_team_mode() else _FINISH_TEXT_PERSONAL)
+        # 个人模式不展示日志/报告等团队流程建议；极简模式只提示导入链路
+        if is_team_mode():
+            finish_text = _FINISH_TEXT
+        elif is_minimal_mode():
+            finish_text = _FINISH_TEXT_MINIMAL
+        else:
+            finish_text = _FINISH_TEXT_PERSONAL
+        text = QLabel(finish_text)
         text.setWordWrap(True)
         layout.addWidget(text)
 
@@ -347,10 +375,10 @@ def maybe_show_wizard(parent=None) -> FirstRunWizard | None:
         return None
     wizard = FirstRunWizard(parent)
     wizard.exec()
-    # 个人模式跳过「创建工作区」步骤，default 工作区 path 初始为空；
-    # 在此统一补齐默认物理路径，保证「复制到工作区」开箱即用（兼容旧库）。
+    # 非团队模式跳过「创建工作区」步骤：个人模式在此补齐默认物理路径
+    # （保证「复制到工作区」开箱即用），极简模式仅确保 default 工作区存在。
     try:
         ensure_personal_default_workspace_path(get_db_service())
     except Exception as e:
-        logger.debug(f"首启向导后确保个人模式默认工作区路径失败: {e}")
+        logger.debug(f"首启向导后确保非团队模式默认工作区路径失败: {e}")
     return wizard

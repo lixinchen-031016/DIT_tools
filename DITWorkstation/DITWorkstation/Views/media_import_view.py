@@ -25,7 +25,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from DITWorkstation.App.feature_flags import is_enabled
+from DITWorkstation.App.feature_flags import (
+    get_minimal_import_target_dir,
+    is_enabled,
+    is_minimal_mode,
+    is_nav_enabled,
+    resolve_minimal_import_target_dir,
+    set_minimal_import_target_dir,
+)
 from DITWorkstation.App.navigation import get_nav_index
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import Project
@@ -345,6 +352,32 @@ class MediaImportView(RefreshOnShowView):
 
         options_layout.addLayout(opt_row1)
 
+        # 极简模式：媒体保存目录（自定义路径设置项）
+        # 复制目标不再是工作区目录，而是用户指定的本机保存目录
+        # （<保存目录>/<项目名>/）。仅极简模式可见。
+        self.minimal_dir_widget = QWidget()
+        minimal_dir_row = QHBoxLayout(self.minimal_dir_widget)
+        minimal_dir_row.setContentsMargins(0, 0, 0, 0)
+        minimal_dir_row.setSpacing(8)
+        self.minimal_dir_title = QLabel("保存位置:")
+        minimal_dir_row.addWidget(self.minimal_dir_title)
+        self.minimal_dir_label = QLabel("")
+        self.minimal_dir_label.setWordWrap(True)
+        self.minimal_dir_label.setStyleSheet(
+            f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+        )
+        minimal_dir_row.addWidget(self.minimal_dir_label, 1)
+        self.minimal_dir_btn = QPushButton("选择…")
+        self.minimal_dir_btn.setToolTip("选择导入素材复制到本机时的目标保存目录")
+        self.minimal_dir_btn.clicked.connect(self._on_pick_minimal_target)
+        minimal_dir_row.addWidget(self.minimal_dir_btn)
+        self.minimal_dir_open_btn = QPushButton("打开")
+        self.minimal_dir_open_btn.setToolTip("在文件管理器中打开保存目录")
+        self.minimal_dir_open_btn.clicked.connect(self._on_open_minimal_target)
+        minimal_dir_row.addWidget(self.minimal_dir_open_btn)
+        self.minimal_dir_widget.setVisible(is_minimal_mode())
+        options_layout.addWidget(self.minimal_dir_widget)
+
         opt_row2 = QHBoxLayout()
         self.log_label = QLabel("关联拍摄日志:")
         opt_row2.addWidget(self.log_label)
@@ -412,6 +445,27 @@ class MediaImportView(RefreshOnShowView):
         content_row.addWidget(right_panel, 1)
         layout.addLayout(content_row, 1)
 
+        self._apply_mode_defaults()
+
+    def _apply_mode_defaults(self):
+        """按当前功能模式调整导入选项的默认值与文案。
+
+        极简模式：复制目标改为用户自定义的保存目录，默认勾选复制并同步提示，
+        使「导入即复制到本机」的开箱流程成立；团队/个人模式保持原「复制到
+        工作区」语义不变。
+        """
+        if not is_minimal_mode():
+            return
+        self.copy_mode_check.setText("复制到保存目录")
+        self.copy_mode_check.setToolTip(
+            "勾选后将素材复制到「保存位置」指定的目录下（<保存目录>/<项目名>/），"
+            "原文件保持不动"
+        )
+        # 默认勾选：极简模式的核心诉求就是把素材汇总到本机指定目录
+        self.copy_mode_check.setChecked(True)
+        self._update_minimal_dir_label()
+        self._update_copy_dest_label()
+
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
         self.selector.refresh()
@@ -473,6 +527,10 @@ class MediaImportView(RefreshOnShowView):
         """
         if not hasattr(self, "copy_mode_check"):
             return
+        # 极简模式：复制目标由自定义保存目录决定，与工作区无关
+        if is_minimal_mode():
+            self._sync_minimal_copy_state()
+            return
         ws = self._get_current_workspace()
         if ws is None:
             self.copy_mode_check.setEnabled(False)
@@ -531,6 +589,98 @@ class MediaImportView(RefreshOnShowView):
             return
         self._choose_workspace_path(ws, "选择工作区目录")
 
+    def _sync_minimal_copy_state(self):
+        """极简模式：按保存目录是否已设置，同步复制复选框与目标提示。
+
+        与工作区模式不同，这里不依赖工作区 path：
+        - 已设置保存目录：启用复选框并提示实际目标 <目录>/<项目名>/
+        - 未设置：仍启用复选框（避免控件卡死），由「选择…」按钮补齐目录
+        """
+        target = get_minimal_import_target_dir()
+        self.copy_mode_check.setEnabled(True)
+        if target:
+            self.copy_mode_check.setToolTip(
+                f"勾选后将素材复制到：{target}/<项目名>/ 下，原文件保持不动"
+            )
+        else:
+            self.copy_mode_check.setToolTip(
+                "尚未设置保存目录，勾选后点击「选择…」指定复制目标根"
+            )
+        # 工作区专用「选择目录…」按钮在极简模式下不参与，统一隐藏
+        self._show_path_picker_button(False)
+        self._update_minimal_dir_label()
+        self._update_copy_dest_label()
+
+    def _update_minimal_dir_label(self):
+        """刷新极简模式保存位置标签（未设置时高亮提示）。"""
+        if not hasattr(self, "minimal_dir_label"):
+            return
+        target = get_minimal_import_target_dir()
+        if target:
+            self.minimal_dir_label.setText(target)
+            self.minimal_dir_label.setStyleSheet(
+                f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+            )
+        else:
+            self.minimal_dir_label.setText(
+                "（未设置，请点击右侧「选择…」指定保存目录）"
+            )
+            self.minimal_dir_label.setStyleSheet(
+                f"color: {COLOR.DANGER}; font-size: {FONT_SIZE.SM}px;"
+            )
+
+    def _choose_minimal_target(self) -> bool:
+        """弹窗选择并持久化极简模式保存目录；成功返回 True。
+
+        选择前校验目录可写性，失败时给出明确提示而非静默失败。
+        """
+        current = get_minimal_import_target_dir()
+        chosen = pick_directory(
+            self,
+            "选择媒体保存目录",
+            current or str(Path.home()),
+            category="minimal_import",
+        )
+        if not chosen:
+            return False
+        try:
+            saved = set_minimal_import_target_dir(chosen)
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法写入", f"所选目录不可用：\n{exc}")
+            return False
+        self._log(f"已设置媒体保存目录: {saved}")
+        self._update_minimal_dir_label()
+        self._update_copy_dest_label()
+        return True
+
+    def _on_pick_minimal_target(self):
+        """极简模式：选择本地保存目录（持久化，供后续导入复用）。"""
+        self._choose_minimal_target()
+
+    def _on_open_minimal_target(self):
+        """极简模式：在文件管理器中打开保存目录。"""
+        target = get_minimal_import_target_dir()
+        if not target:
+            QMessageBox.information(self, "提示", "尚未设置媒体保存目录。")
+            return
+        open_in_file_manager(target)
+
+    def _resolve_minimal_dest_dir(self) -> str | None:
+        """极简模式：解析本次导入的复制目标目录。
+
+        返回 ``<保存目录>/<项目名>/``；未设置或不可写时引导用户即时选择，
+        用户取消则返回 None（放弃本次导入，不影响其它操作）。
+        """
+        target = get_minimal_import_target_dir()
+        if not target or not is_writable_directory(target):
+            if not self._choose_minimal_target():
+                return None
+        target = get_minimal_import_target_dir()
+        if not target:
+            return None
+        project_name = self.current_project.name if self.current_project else ""
+        return resolve_minimal_import_target_dir(project_name)
+
     def _load_logs(self, project_id: str):
         self.log_combo.clear()
         self.log_combo.addItem("不关联", None)
@@ -573,6 +723,21 @@ class MediaImportView(RefreshOnShowView):
             return
         if not self.copy_mode_check.isChecked():
             self.copy_dest_label.setText("")
+            return
+        # 极简模式：目标为自定义保存目录 / 项目名
+        if is_minimal_mode():
+            target = get_minimal_import_target_dir()
+            if not target:
+                self.copy_dest_label.setText("（请点击「选择…」指定保存目录）")
+                self.copy_dest_label.setStyleSheet(
+                    f"color: {COLOR.DANGER}; font-size: {FONT_SIZE.SM}px;"
+                )
+                return
+            name = self.current_project.name if self.current_project else "<项目名>"
+            self.copy_dest_label.setText(f"→ {Path(target) / name}")
+            self.copy_dest_label.setStyleSheet(
+                f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+            )
             return
         ws = self._get_current_workspace()
         if ws is None or not ws.path:
@@ -852,19 +1017,27 @@ class MediaImportView(RefreshOnShowView):
         copy_to_workspace = self.copy_mode_check.isChecked()
         workspace_dir = None
         if copy_to_workspace:
-            # 复制目录自动基于当前工作区.path / 项目名
-            ws = self._get_current_workspace()
-            if ws is None:
-                QMessageBox.warning(self, "提示", "请先选择项目/工作区")
-                return
-            # 工作区未设置本地目录：在导入时直接弹目录选择（一次性补齐），
-            # 选择成功后继续；用户取消则放弃本次导入，不影响其他操作。
-            if not ws.path or not is_writable_directory(ws.path):
-                if not self._choose_workspace_path(ws, "选择工作区目录（复制到此处）"):
+            if is_minimal_mode():
+                # 极简模式：复制到用户自定义保存目录（<目录>/<项目名>/）
+                workspace_dir = self._resolve_minimal_dest_dir()
+                if workspace_dir is None:
                     return
-            workspace_dir = str(Path(ws.path) / self.current_project.name)
+            else:
+                # 复制目录自动基于当前工作区.path / 项目名
+                ws = self._get_current_workspace()
+                if ws is None:
+                    QMessageBox.warning(self, "提示", "请先选择项目/工作区")
+                    return
+                # 工作区未设置本地目录：在导入时直接弹目录选择（一次性补齐），
+                # 选择成功后继续；用户取消则放弃本次导入，不影响其他操作。
+                if not ws.path or not is_writable_directory(ws.path):
+                    if not self._choose_workspace_path(
+                        ws, "选择工作区目录（复制到此处）"
+                    ):
+                        return
+                workspace_dir = str(Path(ws.path) / self.current_project.name)
 
-            # 覆盖确认：检查工作区目标目录中是否已存在同名文件
+            # 覆盖确认：检查目标目录中是否已存在同名文件（两种模式共用）
             try:
                 source_names = [Path(p).name for p in selected_files]
                 conflicts = find_overwrite_conflicts(source_names, [workspace_dir])
@@ -879,7 +1052,7 @@ class MediaImportView(RefreshOnShowView):
                         QMessageBox.No,
                     )
                     if reply != QMessageBox.Yes:
-                        self._log("用户取消导入：工作区目录存在同名文件")
+                        self._log("用户取消导入：目标目录存在同名文件")
                         return
             except Exception as e:
                 self._log(f"（警告）覆盖冲突检测失败: {e}")
@@ -919,6 +1092,8 @@ class MediaImportView(RefreshOnShowView):
             },
         )
 
+        if workspace_dir:
+            self._log(f"复制目标: {workspace_dir}")
         self._log("开始导入...")
         self.status_label.setText("正在导入...")
 
@@ -985,11 +1160,16 @@ class MediaImportView(RefreshOnShowView):
         msg_box.setText(
             f"导入完成！\n\n成功: {imported} 个\n跳过: {skipped} 个\n失败: {failed} 个"
         )
-        goto_backup_btn = msg_box.addButton("去数据备份", QMessageBox.AcceptRole)
+        # 「去数据备份」入口仅在备份模块可用时提供（极简模式无备份页）
+        goto_backup_btn = (
+            msg_box.addButton("去数据备份", QMessageBox.AcceptRole)
+            if is_nav_enabled("backup")
+            else None
+        )
         ok_btn = msg_box.addButton("确定", QMessageBox.RejectRole)
         msg_box.setDefaultButton(ok_btn)
         msg_box.exec()
-        if msg_box.clickedButton() is goto_backup_btn:
+        if goto_backup_btn is not None and msg_box.clickedButton() is goto_backup_btn:
             try:
                 main_window = self.window()
                 backup_idx = get_nav_index("backup")

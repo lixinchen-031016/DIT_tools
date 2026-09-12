@@ -27,8 +27,11 @@ from PySide6.QtWidgets import (
 from DITWorkstation.App import config
 from DITWorkstation.App.feature_flags import (
     UsageMode,
+    get_minimal_import_target_dir,
     get_usage_mode,
     is_enabled,
+    is_minimal_mode,
+    set_minimal_import_target_dir,
     set_usage_mode,
 )
 from DITWorkstation.Utils import (
@@ -52,6 +55,13 @@ from DITWorkstation.Views.Styles.theme import (
     SUBTITLE_QSS,
     TITLE_QSS,
 )
+
+#: 使用模式值 → 展示名（模式切换提示文案用）
+_MODE_LABELS = {
+    UsageMode.TEAM: "团队模式",
+    UsageMode.PERSONAL: "个人模式",
+    UsageMode.MINIMAL: "极简模式",
+}
 
 
 class SettingsDialog(QDialog):
@@ -101,9 +111,12 @@ class SettingsDialog(QDialog):
         self.usage_mode_combo.addItem(
             "个人模式（独立创作者）", UsageMode.PERSONAL.value
         )
+        self.usage_mode_combo.addItem("极简模式（仅媒体导入）", UsageMode.MINIMAL.value)
         self.usage_mode_combo.setToolTip(
             "个人模式隐藏拍摄日志、素材评级、报告、模板、归档等团队功能，\n"
             "仅保留项目管理、导入、单目标备份、RAW 提取、重命名与检索。\n"
+            "极简模式仅保留「媒体导入」，其余模块全部隐藏，并可自定义\n"
+            "导入素材复制到本机时的保存目录。\n"
             "切换后重启应用生效；数据库数据不受影响，可随时切回。"
         )
         self.usage_mode_combo.currentIndexChanged.connect(self._on_usage_mode_changed)
@@ -115,6 +128,41 @@ class SettingsDialog(QDialog):
             f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
         )
         usage_layout.addWidget(usage_hint)
+
+        # ---- 极简模式专属：媒体保存目录（自定义路径设置项）----
+        # 仅当「界面模式」下拉选中极简模式时可见，便于切换后立即完成设置。
+        self.minimal_dir_widget = QWidget()
+        minimal_dir_box = QVBoxLayout(self.minimal_dir_widget)
+        minimal_dir_box.setContentsMargins(0, 4, 0, 0)
+        minimal_dir_box.setSpacing(6)
+
+        minimal_dir_title = QLabel("媒体保存目录（导入的素材复制到 <目录>/<项目名>/）:")
+        minimal_dir_title.setWordWrap(True)
+        minimal_dir_title.setStyleSheet(f"color: {COLOR.TEXT_PRIMARY};")
+        minimal_dir_box.addWidget(minimal_dir_title)
+
+        minimal_dir_row = QHBoxLayout()
+        self.minimal_dir_label = QLabel("")
+        self._style_path_label(self.minimal_dir_label)
+        minimal_dir_row.addWidget(self.minimal_dir_label, 1)
+        self.minimal_dir_change_btn = QPushButton("选择…")
+        self.minimal_dir_change_btn.setToolTip("选择导入素材在本机的目标保存目录")
+        self.minimal_dir_change_btn.clicked.connect(self._change_minimal_import_dir)
+        minimal_dir_row.addWidget(self.minimal_dir_change_btn)
+        self.minimal_dir_open_btn = QPushButton("打开")
+        self.minimal_dir_open_btn.setToolTip("在文件管理器中打开保存目录")
+        self.minimal_dir_open_btn.clicked.connect(self._open_minimal_import_dir)
+        minimal_dir_row.addWidget(self.minimal_dir_open_btn)
+        self.minimal_dir_clear_btn = QPushButton("清除")
+        self.minimal_dir_clear_btn.setToolTip(
+            "清除保存目录设置（导入时将重新提示选择）"
+        )
+        self.minimal_dir_clear_btn.clicked.connect(self._clear_minimal_import_dir)
+        minimal_dir_row.addWidget(self.minimal_dir_clear_btn)
+        minimal_dir_box.addLayout(minimal_dir_row)
+
+        self.minimal_dir_widget.setVisible(is_minimal_mode())
+        usage_layout.addWidget(self.minimal_dir_widget)
         layout.addWidget(usage_group)
 
         # ===== 数据存储位置 =====
@@ -216,6 +264,8 @@ class SettingsDialog(QDialog):
         )
         self.verify_after_copy_check.toggled.connect(self._on_verify_after_copy_toggled)
         backup_layout.addWidget(self.verify_after_copy_check)
+        # 极简模式无备份模块，隐藏其专属默认项
+        backup_group.setVisible(not is_minimal_mode())
         layout.addWidget(backup_group)
 
         # ===== 存储卡自动识别 =====
@@ -359,6 +409,8 @@ class SettingsDialog(QDialog):
             f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
         )
         integrity_layout.addWidget(integrity_hint)
+        # 极简模式无备份/校验模块，隐藏该分组
+        integrity_group.setVisible(not is_minimal_mode())
         layout.addWidget(integrity_group)
 
         settings_io_group = QGroupBox("设置迁移")
@@ -407,6 +459,10 @@ class SettingsDialog(QDialog):
             max(0, self.usage_mode_combo.findData(get_usage_mode().value))
         )
         self.usage_mode_combo.blockSignals(False)
+        # 保存目录可见性跟随下拉当前选择（而非已持久化模式），
+        # 保证用户切换到极简模式后可立即设置目录
+        self._sync_minimal_dir_visibility()
+        self._refresh_minimal_dir_label()
 
         self.db_dir_label.setText(str(config.effective_db_dir))
         self.report_dir_label.setText(str(config.report_dir))
@@ -486,6 +542,9 @@ class SettingsDialog(QDialog):
         except ValueError:
             logger.warning(f"非法使用模式值: {value!r}，忽略")
             return
+        # 无论是否发生实际切换，都同步保存目录设置项的可见性，
+        # 避免用户切到极简模式时看不到唯一的路径设置入口
+        self._sync_minimal_dir_visibility()
         if mode == get_usage_mode():
             return
         try:
@@ -493,14 +552,19 @@ class SettingsDialog(QDialog):
         except ValueError:
             logger.warning(f"写入使用模式失败: {value!r}")
             return
-        mode_text = "团队模式" if mode == UsageMode.TEAM else "个人模式"
+        mode_text = _MODE_LABELS.get(mode, mode.value)
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Information)
         box.setWindowTitle("使用场景已切换")
+        extra = ""
+        if mode == UsageMode.MINIMAL:
+            extra = (
+                "极简模式仅保留「媒体导入」，其余模块将全部隐藏。\n"
+                "请在下方「媒体保存目录」中指定素材复制到本机的位置。\n\n"
+            )
         box.setText(
             f"已切换为{mode_text}，重启应用后生效。\n"
-            "数据库数据不受影响，可随时切回。\n\n"
-            "是否立即重启？"
+            "数据库数据不受影响，可随时切回。\n\n" + extra + "是否立即重启？"
         )
         restart_btn = box.addButton("立即重启", QMessageBox.AcceptRole)
         later_btn = box.addButton("稍后重启", QMessageBox.RejectRole)
@@ -508,6 +572,76 @@ class SettingsDialog(QDialog):
         box.exec()
         if box.clickedButton() is restart_btn:
             self._restart_app()
+
+    # ===== 极简模式媒体保存目录 =====
+
+    def _sync_minimal_dir_visibility(self):
+        """按「界面模式」下拉的当前选择显示/隐藏保存目录设置项。"""
+        widget = getattr(self, "minimal_dir_widget", None)
+        if widget is None:
+            return
+        widget.setVisible(
+            self.usage_mode_combo.currentData() == UsageMode.MINIMAL.value
+        )
+
+    def _refresh_minimal_dir_label(self):
+        """刷新保存目录显示（未设置时给出明确提示）。"""
+        label = getattr(self, "minimal_dir_label", None)
+        if label is None:
+            return
+        target = get_minimal_import_target_dir()
+        if target:
+            label.setText(target)
+            label.setStyleSheet(
+                f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
+            )
+        else:
+            label.setText("（未设置，导入时会提示选择）")
+            label.setStyleSheet(f"color: {COLOR.WARNING}; font-size: {FONT_SIZE.SM}px;")
+
+    def _change_minimal_import_dir(self):
+        """选择并持久化极简模式媒体保存目录（校验可写，失败给出明确提示）。"""
+        current = get_minimal_import_target_dir()
+        new_dir = pick_directory(
+            self,
+            "选择极简模式媒体保存目录",
+            current or str(Path.home()),
+            category="minimal_import",
+        )
+        if not new_dir:
+            return
+        try:
+            saved = set_minimal_import_target_dir(new_dir)
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法使用", str(exc))
+            return
+        self._refresh_minimal_dir_label()
+        QMessageBox.information(
+            self,
+            "已更新",
+            "极简模式媒体保存目录已更新：\n"
+            f"{saved}\n\n"
+            "导入的素材将复制到 <该目录>/<项目名>/ 下。",
+        )
+
+    def _clear_minimal_import_dir(self):
+        """清除保存目录设置（导入时将重新提示选择）。"""
+        if not get_minimal_import_target_dir():
+            self._refresh_minimal_dir_label()
+            return
+        set_minimal_import_target_dir("")
+        self._refresh_minimal_dir_label()
+        QMessageBox.information(
+            self, "已清除", "已清除媒体保存目录，导入时将提示重新选择。"
+        )
+
+    def _open_minimal_import_dir(self):
+        """在文件管理器中打开保存目录。"""
+        target = get_minimal_import_target_dir()
+        if not target:
+            QMessageBox.information(self, "提示", "尚未设置媒体保存目录。")
+            return
+        open_in_file_manager(target)
 
     # ===== 存储位置重设 =====
 

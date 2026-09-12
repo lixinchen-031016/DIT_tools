@@ -279,3 +279,31 @@ def test_invalid_usage_mode_falls_back_to_team_on_read(tmp_path, monkeypatch):
     from DITWorkstation.App import feature_flags
 
     assert feature_flags.get_usage_mode() == feature_flags.UsageMode.TEAM
+
+
+# ===== 极简模式媒体保存目录持久化 =====
+
+
+def test_apply_saved_config_restores_minimal_import_target_dir(tmp_path, monkeypatch):
+    """minimal_import_target_dir 保存后可在重启时恢复到 AppConfig。"""
+    _patch_settings_path(monkeypatch, tmp_path)
+    from DITWorkstation.App import config as _config
+
+    monkeypatch.setattr(_config, "minimal_import_target_dir", "")
+    common.save_app_settings(minimal_import_target_dir="/tmp/dit_minimal_out")
+    common.apply_saved_config()
+    assert _config.minimal_import_target_dir == "/tmp/dit_minimal_out"
+
+
+def test_invalid_minimal_import_target_dir_type_is_dropped(tmp_path, monkeypatch):
+    """保存目录字段为非法类型（非字符串）时回退默认值，且不影响其它设置。"""
+    target = _patch_settings_path(monkeypatch, tmp_path)
+    target.write_text(
+        '{"app_config": {"minimal_import_target_dir": 123, '
+        '"usage_mode": "minimal", "future_field": {"enabled": true}}}',
+        encoding="utf-8",
+    )
+    assert common.load_app_settings() == {
+        "usage_mode": "minimal",
+        "future_field": {"enabled": True},
+    }

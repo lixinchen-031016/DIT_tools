@@ -7,7 +7,7 @@ from DITWorkstation.Services.database_service import DatabaseService
 from DITWorkstation.Views.Widgets.workspace_project_selector import (
     WorkspaceProjectSelector,
 )
-from PySide6.QtGui import QFont, QShortcut
+from PySide6.QtGui import QAction, QFont, QShortcut
 from PySide6.QtWidgets import QComboBox, QGridLayout, QPushButton, QWidget
 
 # ===== 工作区选择器：新建按钮置于下拉框下方 =====
@@ -1139,3 +1139,101 @@ def test_import_view_picker_sets_workspace_path(tmp_dir, monkeypatch):
     finally:
         reset_singletons()
         reset_session_state()
+
+
+# ===== 功能模式：极简模式主窗口构建 =====
+
+
+def test_main_window_minimal_mode_builds_single_nav(tmp_dir, monkeypatch):
+    """极简模式：仅 1 项导航（媒体导入），其余视图不实例化。"""
+    window = _build_main_window(tmp_dir, monkeypatch, "minimal")
+    try:
+        assert window.nav_list.count() == 1
+        assert window.stack.count() == 1
+        assert [k for k, _, _ in window.active_nav_items] == ["import"]
+        assert list(window.view_by_key) == ["import"]
+        assert type(window.import_view).__name__ == "MediaImportView"
+        # 其余视图全部为 None，避免无谓资源占用
+        for attr in (
+            "dashboard_view",
+            "backup_view",
+            "log_view",
+            "raw_view",
+            "rename_view",
+            "search_view",
+            "asset_info_view",
+            "report_view",
+        ):
+            assert getattr(window, attr) is None, f"{attr} 在极简模式应为 None"
+        # 依赖备份视图的后台服务不应创建
+        assert window.card_automation_service is None
+        assert window.card_batch_queue is None
+        assert window._integrity_scheduler is None
+    finally:
+        _teardown_main_window(window)
+
+
+def test_main_window_minimal_shortcuts_trimmed(tmp_dir, monkeypatch):
+    """极简模式：仅保留 import 相关快捷键，隐藏页面的快捷键不注册。"""
+    window = _build_main_window(tmp_dir, monkeypatch, "minimal")
+    try:
+        keys = [s.key().toString() for s in window.findChildren(QShortcut)]
+        assert "Ctrl+I" in keys
+        assert "Ctrl+1" in keys
+        assert "Ctrl+K" in keys
+        for key in ("Ctrl+F", "Ctrl+B", "Ctrl+L", "Ctrl+2", "Ctrl+9"):
+            assert key not in keys, f"极简模式不应注册 {key}"
+    finally:
+        _teardown_main_window(window)
+
+
+def test_main_window_minimal_navigation_safe(tmp_dir, monkeypatch):
+    """极简模式：跳转隐藏页面静默忽略，F5 刷新不越界、不抛异常。"""
+    window = _build_main_window(tmp_dir, monkeypatch, "minimal")
+    try:
+        for key in (
+            "dashboard",
+            "backup",
+            "raw",
+            "rename",
+            "search",
+            "asset_info",
+            "log",
+            "report",
+        ):
+            window._navigate_to(key)
+        window._refresh_current_view()
+        assert window.stack.currentIndex() == 0
+        assert window.nav_list.currentRow() == 0
+    finally:
+        _teardown_main_window(window)
+
+
+def test_main_window_minimal_hides_backup_menu_entries(tmp_dir, monkeypatch):
+    """极简模式：隐藏依赖备份模块的菜单入口，保留设置入口。"""
+    window = _build_main_window(tmp_dir, monkeypatch, "minimal")
+    try:
+        visible = {
+            a.text(): a.isVisible() for a in window.findChildren(QAction) if a.text()
+        }
+        assert visible.get("从备份恢复素材…") is False
+        assert visible.get("立即完整性校验…") is False
+        assert visible.get("回收站…") is False
+        assert visible.get("设置…") is True, "设置入口必须保留（切换模式的唯一出口）"
+    finally:
+        _teardown_main_window(window)
+
+
+def test_ensure_minimal_default_workspace_noop(tmp_dir, monkeypatch):
+    """极简模式：ensure 不绑定工作区路径，但保证 default 工作区存在。"""
+    from DITWorkstation.App import config
+    from DITWorkstation.App.feature_flags import (
+        ensure_personal_default_workspace_path,
+    )
+
+    monkeypatch.setattr(config, "usage_mode", "minimal")
+    db = DatabaseService(db_path=tmp_dir / "test.db")
+    assert ensure_personal_default_workspace_path(db) is None
+    ws = db.get_workspace("default")
+    assert ws is not None, "极简模式仍需 default 工作区以承载项目"
+    assert ws.path == ""

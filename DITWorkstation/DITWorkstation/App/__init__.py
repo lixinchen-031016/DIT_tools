@@ -148,8 +148,14 @@ class AppConfig:
     saved_search_limit: int = 20
 
     # 功能模式（设备级配置）：team=团队版（完整 DIT 工作流），personal=个人版
-    # （隐藏团队向入口）。修改后重启生效；读取/校验逻辑见 App/feature_flags.py。
+    # （隐藏团队向入口），minimal=极简版（仅保留媒体导入）。修改后重启生效；
+    # 读取/校验逻辑见 App/feature_flags.py。
     usage_mode: str = "team"
+
+    # 极简模式媒体保存目录：导入时把素材复制到本机该目录下（<目录>/<项目名>/）。
+    # 空字符串表示尚未设置，导入时会提示用户选择；持久化在 settings.json 的
+    # app_config.minimal_import_target_dir，读写逻辑见 App/feature_flags.py。
+    minimal_import_target_dir: str = ""
 
     # 个人模式默认工作区目录：应用数据目录下的 DIT_Projects 子文件夹。
     # 个人模式不显式创建带目录的工作区，default 工作区需要一个合法物理路径，

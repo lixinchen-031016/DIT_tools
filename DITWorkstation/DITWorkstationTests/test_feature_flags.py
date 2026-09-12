@@ -5,22 +5,28 @@
 - 非法 usage_mode 值回退团队模式
 - set_usage_mode 持久化到 app_config
 - apply_saved_config 后模式恢复
-- 团队模式 9 项导航 / 个人模式 7 项导航（顺序正确）
-- 个人模式关闭团队特性，团队模式全部开启
+- 团队模式 9 项导航 / 个人模式 7 项导航 / 极简模式 1 项导航（顺序正确）
+- 个人模式关闭团队特性，团队模式全部开启，极简模式仅开启白名单特性
+- 极简模式媒体保存目录的读写与持久化
 """
 
 import pytest
 from DITWorkstation.App import config
 from DITWorkstation.App.feature_flags import (
+    MINIMAL_NAV_KEYS,
     PERSONAL_NAV_KEYS,
     UsageMode,
     get_active_nav_index,
     get_active_nav_items,
+    get_minimal_import_target_dir,
     get_usage_mode,
     is_enabled,
+    is_minimal_mode,
     is_nav_enabled,
     is_personal_mode,
     is_team_mode,
+    resolve_minimal_import_target_dir,
+    set_minimal_import_target_dir,
     set_usage_mode,
 )
 from DITWorkstation.App.navigation import NAV_ITEMS, get_nav_index
@@ -29,11 +35,12 @@ from DITWorkstation.Utils import common
 
 @pytest.fixture(autouse=True)
 def _isolate_usage_mode(monkeypatch, tmp_path):
-    """每个测试使用独立 settings.json，并在结束后恢复 config.usage_mode。"""
+    """每个测试使用独立 settings.json，并在结束后恢复 config 相关字段。"""
     monkeypatch.setattr(
         common, "_get_settings_path", lambda: tmp_path / "settings.json"
     )
     monkeypatch.setattr(config, "usage_mode", "team")
+    monkeypatch.setattr(config, "minimal_import_target_dir", "")
     yield
 
 
@@ -185,3 +192,140 @@ def test_unknown_feature_defaults_to_enabled(monkeypatch):
     assert is_enabled("some_future_feature")
     monkeypatch.setattr(config, "usage_mode", "personal")
     assert is_enabled("some_future_feature")
+
+
+# ===== 极简模式 =====
+
+
+def test_minimal_mode_flag(monkeypatch):
+    monkeypatch.setattr(config, "usage_mode", "minimal")
+    assert is_minimal_mode()
+    assert not is_team_mode()
+    assert not is_personal_mode()
+    assert get_usage_mode() == UsageMode.MINIMAL
+
+
+def test_set_minimal_mode_persists(monkeypatch):
+    set_usage_mode(UsageMode.MINIMAL)
+    assert common.load_app_settings()["usage_mode"] == "minimal"
+    assert config.usage_mode == "minimal"
+    # 模拟重启后恢复
+    monkeypatch.setattr(config, "usage_mode", "team")
+    common.apply_saved_config()
+    assert is_minimal_mode()
+
+
+def test_minimal_mode_activates_only_import_nav(monkeypatch):
+    monkeypatch.setattr(config, "usage_mode", "minimal")
+    active = get_active_nav_items()
+    assert [k for k, _, _ in active] == list(MINIMAL_NAV_KEYS)
+    assert len(active) == 1
+    assert is_nav_enabled("import")
+    for key in (
+        "dashboard",
+        "backup",
+        "raw",
+        "rename",
+        "search",
+        "asset_info",
+        "log",
+        "report",
+    ):
+        assert not is_nav_enabled(key), f"极简模式下 {key} 不应可见"
+
+
+def test_minimal_mode_nav_index(monkeypatch):
+    """极简模式下 import 索引为 0，其余页面返回 None（调用方需容错）。"""
+    monkeypatch.setattr(config, "usage_mode", "minimal")
+    assert get_nav_index("import") == 0
+    assert get_nav_index("backup") is None
+    assert get_nav_index("dashboard") is None
+    assert get_active_nav_index("import") == 0
+    assert get_active_nav_index("report") is None
+
+
+def test_minimal_mode_disables_all_features(monkeypatch):
+    """极简模式采用白名单：任何已知或未知特性均为关闭。"""
+    monkeypatch.setattr(config, "usage_mode", "minimal")
+    for feature in (
+        "workspace_selector",
+        "shooting_log",
+        "ratings",
+        "report",
+        "multi_target_backup",
+        "backup_templates",
+        "mhl_export",
+        "project_templates",
+        "archive_restore",
+        "audit_panel",
+        "sop_guide",
+        "card_automation",
+        "task_history",
+        "some_future_feature",
+    ):
+        assert not is_enabled(feature), f"极简模式下 {feature} 应为关闭"
+
+
+def test_minimal_nav_order_matches_nav_items(monkeypatch):
+    """激活项顺序必须与 NAV_ITEMS 的相对顺序一致。"""
+    monkeypatch.setattr(config, "usage_mode", "minimal")
+    full_order = [k for k, _, _ in NAV_ITEMS]
+    active_order = [k for k, _, _ in get_active_nav_items()]
+    assert [k for k in full_order if k in MINIMAL_NAV_KEYS] == active_order
+
+
+# ===== 极简模式媒体保存目录 =====
+
+
+def test_minimal_import_target_dir_defaults_empty():
+    assert get_minimal_import_target_dir() == ""
+    assert resolve_minimal_import_target_dir("项目A") == ""
+
+
+def test_set_minimal_import_target_dir_persists(tmp_path):
+    target = tmp_path / "media_out"
+    saved = set_minimal_import_target_dir(target)
+    assert saved == str(target)
+    assert target.is_dir(), "设置保存目录时应按需创建目录"
+    assert get_minimal_import_target_dir() == str(target)
+    # 写入 settings.json 的 app_config
+    assert common.load_app_settings()["minimal_import_target_dir"] == str(target)
+
+
+def test_set_minimal_import_target_dir_accepts_string(tmp_path):
+    target = tmp_path / "out2"
+    set_minimal_import_target_dir(str(target))
+    assert get_minimal_import_target_dir() == str(target)
+
+
+def test_set_minimal_import_target_dir_rejects_unwritable(tmp_path):
+    """父路径是普通文件时无法创建目录，应抛 ValueError 且不写入。"""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x", encoding="utf-8")
+    with pytest.raises(ValueError):
+        set_minimal_import_target_dir(blocker / "child")
+    assert get_minimal_import_target_dir() == ""
+
+
+def test_clear_minimal_import_target_dir(tmp_path):
+    set_minimal_import_target_dir(tmp_path / "media")
+    assert set_minimal_import_target_dir("") == ""
+    assert get_minimal_import_target_dir() == ""
+    assert common.load_app_settings()["minimal_import_target_dir"] == ""
+
+
+def test_resolve_minimal_import_target_dir_joins_project(tmp_path):
+    base = tmp_path / "media"
+    set_minimal_import_target_dir(base)
+    assert resolve_minimal_import_target_dir("项目A") == str(base / "项目A")
+    # 未传项目名时仅返回根目录
+    assert resolve_minimal_import_target_dir() == str(base)
+
+
+def test_minimal_import_target_dir_restored_after_reload(tmp_path, monkeypatch):
+    """保存目录经 apply_saved_config 可在重启后恢复。"""
+    target = tmp_path / "media_reload"
+    set_minimal_import_target_dir(target)
+    monkeypatch.setattr(config, "minimal_import_target_dir", "")
+    common.apply_saved_config()
+    assert get_minimal_import_target_dir() == str(target)

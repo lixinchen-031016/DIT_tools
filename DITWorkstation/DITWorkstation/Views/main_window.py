@@ -18,10 +18,12 @@ from PySide6.QtWidgets import (
 
 from DITWorkstation.App import config
 
-# 功能模式开关：主窗口按「当前激活导航列表」构建（个人模式隐藏 log/report）
+# 功能模式开关：主窗口按「当前激活导航列表」构建
+# （个人模式隐藏 log/report；极简模式仅保留 import）
 from DITWorkstation.App.feature_flags import (
     get_active_nav_items,
     is_enabled,
+    is_minimal_mode,
     is_nav_enabled,
 )
 
@@ -97,7 +99,8 @@ class MainWindow(QMainWindow):
 
     def _build_navigation(self):
         """创建左侧导航列表。"""
-        # 左侧导航栏（顺序由「当前激活导航列表」决定：个人模式隐藏 log/report）
+        # 左侧导航栏（顺序由「当前激活导航列表」决定：
+        # 团队 9 项 / 个人 7 项 / 极简 1 项）
         self.active_nav_items = get_active_nav_items()
         self.nav_list = QListWidget()
         self.nav_list.setFixedWidth(200)
@@ -116,43 +119,53 @@ class MainWindow(QMainWindow):
     def _build_view_stack(self):
         """实例化视图并按当前功能模式填充内容栈。
 
-        个人模式下 ShootingLogView 和 ReportView 不会被实例化，
-        避免不必要的数据库连接、后台线程等资源占用。
+        只实例化「当前激活导航列表」中出现的视图：
+        - 团队模式：全部 9 个视图；
+        - 个人模式：7 个（跳过 ShootingLogView / ReportView）；
+        - 极简模式：仅 MediaImportView。
+        未实例化的视图属性统一置为 None，避免不必要的数据库连接与后台线程；
+        其余引用这些视图的逻辑（后台服务、菜单、快捷键、关闭检查）均已按
+        None 安全兜底。
         """
-        self.stack = QStackedWidget()
-        # 始终实例化的视图（所有模式下均需要）
-        self.dashboard_view = ProjectDashboardView()
-        self.import_view = MediaImportView()
-        self.backup_view = BackupView()
-        self.raw_view = RawExtractionView()
-        self.rename_view = RenameView()
-        self.search_view = SearchView()
-        self.asset_info_view = AssetInfoView()
-
-        # 按当前激活导航列表条件实例化（个人模式隐藏 log/report）
-        active_keys = {k for k, _, _ in self.active_nav_items}
-        self.log_view = ShootingLogView() if "log" in active_keys else None
-        self.report_view = ReportView() if "report" in active_keys else None
-
-        # key → 视图映射：F5 刷新、视图栈填充等索引逻辑统一经由此映射
-        self.view_by_key = {
-            "dashboard": self.dashboard_view,
-            "import": self.import_view,
-            "backup": self.backup_view,
-            "raw": self.raw_view,
-            "rename": self.rename_view,
-            "search": self.search_view,
-            "asset_info": self.asset_info_view,
+        factories = {
+            "dashboard": ProjectDashboardView,
+            "import": MediaImportView,
+            "backup": BackupView,
+            "log": ShootingLogView,
+            "raw": RawExtractionView,
+            "rename": RenameView,
+            "search": SearchView,
+            "asset_info": AssetInfoView,
+            "report": ReportView,
         }
-        if self.log_view is not None:
-            self.view_by_key["log"] = self.log_view
-        if self.report_view is not None:
-            self.view_by_key["report"] = self.report_view
+        # key → 实例属性名（供测试与外部代码按名称访问）
+        attr_by_key = {
+            "dashboard": "dashboard_view",
+            "import": "import_view",
+            "backup": "backup_view",
+            "log": "log_view",
+            "raw": "raw_view",
+            "rename": "rename_view",
+            "search": "search_view",
+            "asset_info": "asset_info_view",
+            "report": "report_view",
+        }
 
-        # 统一用 QScrollArea 包裹视图，保证内容超出窗口时出现滚动条。
-        # addWidget 顺序与 active_nav_items 顺序保持一致（索引即导航行号）。
+        self.stack = QStackedWidget()
+        # 先统一置空，避免新模式遗漏某个属性导致 AttributeError
+        for attr in attr_by_key.values():
+            setattr(self, attr, None)
+        self.view_by_key = {}
+
+        # addWidget 顺序与 active_nav_items 一致（索引即导航行号）
         for key, _text, _tooltip in self.active_nav_items:
-            self.stack.addWidget(self._wrap_scrollable(self.view_by_key[key]))
+            factory = factories.get(key)
+            if factory is None:
+                continue
+            view = factory()
+            setattr(self, attr_by_key[key], view)
+            self.view_by_key[key] = view
+            self.stack.addWidget(self._wrap_scrollable(view))
 
     def _build_shortcuts(self):
         """注册全局导航、刷新和取消快捷键。"""
@@ -161,13 +174,16 @@ class MainWindow(QMainWindow):
             shortcut = QShortcut(QKeySequence(sequence), self)
             shortcut.activated.connect(callback)
 
-        add_shortcut("Ctrl+F", self._focus_search)
         add_shortcut("Ctrl+I", self._focus_import)
-        add_shortcut("Ctrl+B", self._focus_backup)
-        # Ctrl+L 跳拍摄日志仅团队模式注册（个人模式无日志页）
+        # Ctrl+F / Ctrl+B 仅目标页在当前模式激活时注册，避免访问未实例化视图
+        if is_nav_enabled("search"):
+            add_shortcut("Ctrl+F", self._focus_search)
+        if is_nav_enabled("backup"):
+            add_shortcut("Ctrl+B", self._focus_backup)
+        # Ctrl+L 跳拍摄日志仅团队模式注册（个人/极简模式无日志页）
         if is_nav_enabled("log"):
             add_shortcut("Ctrl+L", self._focus_log)
-        # Ctrl+1~N 切换到对应导航页（N = 激活导航项数量，个人模式为 7）
+        # Ctrl+1~N 切换到对应导航页（N = 激活导航项数量：团队 9 / 个人 7 / 极简 1）
         for i in range(1, len(self.active_nav_items) + 1):
             add_shortcut(
                 f"Ctrl+{i}", lambda idx=i - 1: self.nav_list.setCurrentRow(idx)
@@ -208,22 +224,29 @@ class MainWindow(QMainWindow):
         self._status_timer.start()
         self._update_task_status()
 
+        # 存储卡监控保留全部模式：极简模式下「检测到存储卡→跳转导入」是核心辅助能力
         self.volume_monitor = VolumeMonitor(self)
         self.volume_monitor.volume_mounted.connect(self._on_volume_mounted)
         self.volume_monitor.start()
-        self.card_automation_service = CardAutomationService(
-            self.backup_view.db_service
-        )
-        # 多卡批处理队列
-        self.card_batch_queue = CardBatchQueue(
-            start_cb=self._start_card_from_queue,
-            dedupe=bool(getattr(config, "skip_processed_cards", True)),
-        )
+
+        self.card_automation_worker = None
+        self.card_automation_source_path = None
+        # 相机卡自动化依赖备份视图（项目/备份方案模板查询），且受特性开关约束。
+        # 极简模式无备份视图且禁用 card_automation，此处安全跳过。
+        self.card_automation_service = None
+        self.card_batch_queue = None
+        if is_enabled("card_automation") and self.backup_view is not None:
+            self.card_automation_service = CardAutomationService(
+                self.backup_view.db_service
+            )
+            # 多卡批处理队列
+            self.card_batch_queue = CardBatchQueue(
+                start_cb=self._start_card_from_queue,
+                dedupe=bool(getattr(config, "skip_processed_cards", True)),
+            )
         # 完整性校验定时调度
         self._integrity_scheduler = None
         self._init_integrity_scheduler()
-        self.card_automation_worker = None
-        self.card_automation_source_path = None
 
     def _setup_menu(self):
         """创建菜单栏 — 提供帮助入口与新手向导重启"""
@@ -239,6 +262,8 @@ class MainWindow(QMainWindow):
         recycle_action = settings_menu.addAction("回收站…")
         recycle_action.setToolTip("查看并恢复保留期内删除的项目和素材记录")
         recycle_action.triggered.connect(self._show_recycle_bin)
+        # 极简模式仅保留媒体导入，回收站属于管理类入口，一并隐藏
+        recycle_action.setVisible(not is_minimal_mode())
 
         log_viewer_action = settings_menu.addAction("日志查看器…")
         log_viewer_action.setToolTip("在应用内查看日志文件内容")
@@ -247,10 +272,14 @@ class MainWindow(QMainWindow):
         restore_action = settings_menu.addAction("从备份恢复素材…")
         restore_action.setToolTip("把已备份素材从备份卷复制回工作盘（回拷）")
         restore_action.triggered.connect(self._show_restore_wizard)
+        # 依赖备份视图：备份页未激活时（极简模式）隐藏入口。
+        # 菜单构建早于视图栈实例化，故按导航可用性判断而非视图实例。
+        restore_action.setVisible(is_nav_enabled("backup"))
 
         verify_action = settings_menu.addAction("立即完整性校验…")
         verify_action.setToolTip("手动触发一次备份完整性校验")
         verify_action.triggered.connect(self._trigger_integrity_check)
+        verify_action.setVisible(is_nav_enabled("backup"))
 
         task_history_action = settings_menu.addAction("任务中心…")
         task_history_action.setToolTip("查看后台任务历史、错误摘要和可恢复任务")
@@ -306,9 +335,13 @@ class MainWindow(QMainWindow):
         lines = [
             "全局快捷键：",
             f"• Ctrl+1~{nav_count}：切换到对应导航页",
-            "• Ctrl+F：跳转到素材检索",
             "• Ctrl+I：跳转到媒体导入",
-            "• Ctrl+B：跳转到数据备份",
+        ]
+        if is_nav_enabled("search"):
+            lines.append("• Ctrl+F：跳转到素材检索")
+        if is_nav_enabled("backup"):
+            lines.append("• Ctrl+B：跳转到数据备份")
+        lines += [
             "• Ctrl+,：打开设置对话框",
             "• Ctrl+K：打开命令面板（运行路径/URL/搜索跳转）",
         ]
@@ -355,12 +388,16 @@ class MainWindow(QMainWindow):
 
     def _show_restore_wizard(self):
         """打开「从备份恢复素材」向导。"""
+        if self.backup_view is None:
+            return
         from DITWorkstation.Views.Widgets.restore_wizard import RestoreWizard
 
         RestoreWizard(self, db_service=self.backup_view.db_service).exec()
 
     def _trigger_integrity_check(self):
         """手动触发一次完整性校验（立即执行，走任务线程避免卡 UI）。"""
+        if self.backup_view is None:
+            return
         from DITWorkstation.Services.integrity_scheduler import IntegrityScheduler
 
         integrity = IntegrityScheduler(
@@ -413,6 +450,8 @@ class MainWindow(QMainWindow):
 
     def _focus_search(self):
         """Ctrl+F: 跳转到素材检索并聚焦搜索框"""
+        if self.search_view is None:
+            return
         self._navigate_to("search")
         self.search_view.keyword_edit.setFocus()
 
@@ -463,7 +502,8 @@ class MainWindow(QMainWindow):
 
         用于关闭窗口前判断是否有未完成的长耗时操作（备份/导入/RAW提取/重命名/报告/批量EXIF），
         避免强杀 QThread 导致 DB 写半截或文件拷贝残留。
-        个人模式下隐藏的视图（log/report）为 None，getattr 安全跳过。
+        个人模式隐藏 log/report，极简模式仅实例化媒体导入视图，
+        其余视图为 None，此处 getattr/None 判断安全跳过。
         """
         candidates = []
         for view, attr in (
@@ -595,6 +635,9 @@ class MainWindow(QMainWindow):
 
     def _start_card_automation(self, source_path: str):
         """按设置启动一次相机卡自动任务；同一时间只允许一个自动任务。"""
+        # 极简模式：相机卡自动化不可用（无备份视图、无自动化服务）
+        if self.card_automation_service is None or self.backup_view is None:
+            return
         if self.card_automation_worker and self.card_automation_worker.isRunning():
             self.status_label_task.setText("⚠ 已有相机卡自动任务正在执行")
             return
@@ -669,22 +712,26 @@ class MainWindow(QMainWindow):
         self._start_card_automation(path)
 
     def _on_volume_mounted(self, path: str):
-        """检测到新存储卡：入多卡队列（去重/防重复处理）。"""
+        """检测到新存储卡：跳转导入视图，并按需入多卡自动队列。"""
         if getattr(config, "auto_detect_volume", True):
             self.status_label_task.setText(
                 f"💾 检测到存储卡: {Path(path).name or path}"
             )
             self._navigate_to("import")
-            self.import_view.set_source_folder(path, auto_scan=True)
-        if getattr(config, "auto_card_automation_enabled", False) and is_enabled(
-            "card_automation"
+            if self.import_view is not None:
+                self.import_view.set_source_folder(path, auto_scan=True)
+        # 队列仅在相机卡自动化可用时创建（极简模式为 None）
+        if (
+            self.card_batch_queue is not None
+            and getattr(config, "auto_card_automation_enabled", False)
+            and is_enabled("card_automation")
         ):
             self.card_batch_queue.enqueue(path)
 
     def _on_card_automation_finished(self, result):
         self.card_automation_worker = None
         # 多卡队列：记录指纹并派发下一张
-        if self.card_automation_source_path:
+        if self.card_automation_source_path and self.card_batch_queue is not None:
             fp = compute_card_fingerprint(self.card_automation_source_path)
             self.card_batch_queue.on_finished(fingerprint=fp)
         backup = result.get("backup") if isinstance(result, dict) else None
@@ -704,13 +751,18 @@ class MainWindow(QMainWindow):
 
     def _on_card_automation_error(self, error: str):
         self.card_automation_worker = None
-        if self.card_automation_source_path:
+        if self.card_automation_source_path and self.card_batch_queue is not None:
             self.card_batch_queue.on_failed()
         self.status_label_task.setText(f"❌ 相机卡自动处理失败: {error}")
         logger.error(f"相机卡自动处理失败: {error}")
 
     def _init_integrity_scheduler(self):
-        """启动完整性校验定时调度（按配置间隔）。"""
+        """启动完整性校验定时调度（按配置间隔）。
+
+        依赖备份视图；极简模式未实例化备份视图时安全跳过。
+        """
+        if self.backup_view is None:
+            return
         interval = int(getattr(config, "integrity_check_interval_hours", 0) or 0)
         if interval <= 0:
             return
