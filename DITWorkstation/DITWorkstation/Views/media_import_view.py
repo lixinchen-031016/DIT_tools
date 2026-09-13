@@ -52,11 +52,16 @@ from DITWorkstation.ViewModels import TaskViewModel
 from DITWorkstation.Views.Styles.theme import (
     COLOR,
     FONT_SIZE,
+    PRIMARY_BUTTON_QSS,
     RADIUS,
-    SUBTITLE_QSS,
-    TITLE_QSS,
+    SECONDARY_BUTTON_QSS,
 )
-from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
+from DITWorkstation.Views.Widgets import (
+    PageHeader,
+    RefreshOnShowView,
+    StatusBanner,
+    WorkspaceProjectSelector,
+)
 from DITWorkstation.Views.Widgets.empty_state import (
     attach_empty_state,
     sync_empty_state,
@@ -101,13 +106,15 @@ class MediaImportView(RefreshOnShowView):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
-        title = QLabel("媒体导入")
-        title.setStyleSheet(TITLE_QSS)
-        layout.addWidget(title)
+        # 页面头（§8.2）：标题 + 副标题 + 右侧主操作区（开始导入按钮加入其中）
+        self.page_header = PageHeader(
+            "媒体导入", "将图片、视频、RAW文件导入项目，原文件位置保持不动"
+        )
+        layout.addWidget(self.page_header)
 
-        subtitle = QLabel("将图片、视频、RAW文件导入项目，原文件位置保持不动")
-        subtitle.setStyleSheet(SUBTITLE_QSS)
-        layout.addWidget(subtitle)
+        # 页内状态横幅（§8.2/§7.2）：扫描 / 导入结果的非模态反馈
+        self.status_banner = StatusBanner()
+        layout.addWidget(self.status_banner)
 
         # 左侧：工作区/项目选择（固定宽度，不参与拖动）
         left_panel = QWidget()
@@ -141,6 +148,7 @@ class MediaImportView(RefreshOnShowView):
         self.source_edit.setPlaceholderText("选择要导入的文件夹...")
         self.source_edit.setReadOnly(True)
         browse_btn = QPushButton("浏览…")
+        browse_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         browse_btn.clicked.connect(self._select_folder)
         source_row.addWidget(self.source_edit, 1)
         source_row.addWidget(browse_btn)
@@ -167,8 +175,10 @@ class MediaImportView(RefreshOnShowView):
         scan_row.addWidget(self.include_raw)
 
         scan_row.addStretch()
-        scan_btn = QPushButton("🔍 扫描")
+        # 扫描：导入流程的辅助动作 → 次按钮（§7.1；主操作是「开始导入」）
+        scan_btn = QPushButton("扫描")
         scan_btn.setToolTip("扫描源目录中的媒体文件")
+        scan_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         scan_btn.clicked.connect(self._scan_folder)
         scan_row.addWidget(scan_btn)
         source_layout.addLayout(scan_row)
@@ -224,14 +234,17 @@ class MediaImportView(RefreshOnShowView):
         # 选择工具行：全选 / 全不选 / 反选 + 已选计数
         select_row = QHBoxLayout()
         select_row.setSpacing(8)
-        self.select_all_btn = QPushButton("☑ 全选")
+        self.select_all_btn = QPushButton("全选")
         self.select_all_btn.setToolTip("勾选全部文件")
+        self.select_all_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         self.select_all_btn.clicked.connect(lambda: self._set_all_checked(True))
-        self.select_none_btn = QPushButton("☐ 全不选")
+        self.select_none_btn = QPushButton("全不选")
         self.select_none_btn.setToolTip("取消勾选全部文件")
+        self.select_none_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         self.select_none_btn.clicked.connect(lambda: self._set_all_checked(False))
-        self.select_invert_btn = QPushButton("⇄ 反选")
+        self.select_invert_btn = QPushButton("反选")
         self.select_invert_btn.setToolTip("反转勾选状态")
+        self.select_invert_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         self.select_invert_btn.clicked.connect(self._invert_selection)
         select_row.addWidget(self.select_all_btn)
         select_row.addWidget(self.select_none_btn)
@@ -398,26 +411,17 @@ class MediaImportView(RefreshOnShowView):
         bottom_layout.addWidget(options_group)
 
         action_row = QHBoxLayout()
-        self.import_btn = QPushButton("📥 开始导入")
+        # 唯一主操作「开始导入」（§7.1）：置入页面头右侧操作区，底部保留取消
+        self.import_btn = QPushButton("开始导入")
         self.import_btn.setToolTip("开始导入选中的文件到当前项目")
-        self.import_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLOR.PRIMARY};
-                color: white;
-                padding: 10px 32px;
-                border-radius: {RADIUS.BUTTON}px;
-                font-size: {FONT_SIZE.MD}px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: {COLOR.PRIMARY_HOVER}; }}
-            QPushButton:disabled {{ background-color: {COLOR.DISABLED}; }}
-        """)
+        self.import_btn.setStyleSheet(PRIMARY_BUTTON_QSS)
         self.import_btn.clicked.connect(self._start_import)
         self.import_btn.setEnabled(False)
-        action_row.addWidget(self.import_btn)
+        self.page_header.add_action(self.import_btn)
 
         self.cancel_btn = QPushButton("取消")
         self.cancel_btn.setToolTip("取消正在进行的导入任务")
+        self.cancel_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self._cancel_import)
         action_row.addWidget(self.cancel_btn)
@@ -773,12 +777,17 @@ class MediaImportView(RefreshOnShowView):
             self._all_scanned_files = files
             self._apply_time_filter()
             total_size = sum(f.stat().st_size for f in files if f.exists())
+            self.status_banner.set_status(
+                "success",
+                f"扫描完成：发现 {len(files)} 个媒体文件，总大小 {format_size(total_size)}",
+            )
             self._log(
                 f"扫描完成: 发现 {len(files)} 个媒体文件, 总大小 {format_size(total_size)}"
             )
         except Exception as e:
             import traceback
 
+            self.status_banner.set_status("error", f"扫描失败: {e}")
             show_error(
                 title="扫描错误",
                 description=str(e),
@@ -1011,7 +1020,7 @@ class MediaImportView(RefreshOnShowView):
 
         selected_files = self._selected_files()
         if not selected_files:
-            QMessageBox.warning(self, "提示", "请先勾选要导入的文件（☑ 列）")
+            QMessageBox.warning(self, "提示", "请先勾选要导入的文件（第一列勾选框）")
             return
 
         copy_to_workspace = self.copy_mode_check.isChecked()
@@ -1118,7 +1127,8 @@ class MediaImportView(RefreshOnShowView):
 
         # 防御 result 为 None 或非 dict
         if not isinstance(result, dict):
-            self.status_label.setText("❌ 导入返回异常结果")
+            self.status_label.setText("导入返回异常结果")
+            self.status_banner.set_status("error", "导入返回异常结果，请重试")
             self._log(f"导入返回异常: {result!r}")
             QMessageBox.warning(self, "导入异常", "导入任务返回了异常结果，请重试。")
             return
@@ -1130,14 +1140,33 @@ class MediaImportView(RefreshOnShowView):
 
         if cancelled:
             self.status_label.setText(
-                f"⚠️ 已取消: 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个"
+                f"已取消: 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个"
+            )
+            self.status_banner.set_status(
+                "warning",
+                f"导入已取消：成功 {imported} 个，跳过 {skipped} 个，失败 {failed} 个",
             )
             self._log(
                 f"导入已取消: 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个"
             )
+        elif failed > 0:
+            self.status_label.setText(
+                f"部分失败: 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个"
+            )
+            self.status_banner.set_status(
+                "warning",
+                f"导入部分失败：成功 {imported} 个，跳过 {skipped} 个，失败 {failed} 个（详情见日志）",
+            )
+            self._log(
+                f"导入完成: 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个"
+            )
         else:
             self.status_label.setText(
-                f"✅ 导入完成: 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个"
+                f"导入完成: 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个"
+            )
+            self.status_banner.set_status(
+                "success",
+                f"导入完成：成功 {imported} 个，跳过 {skipped} 个",
             )
             self._log(
                 f"导入完成: 成功 {imported} 个, 跳过 {skipped} 个, 失败 {failed} 个"
@@ -1183,7 +1212,8 @@ class MediaImportView(RefreshOnShowView):
     def _on_import_error(self, error: str):
         self.import_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
-        self.status_label.setText(f"❌ 错误: {error}")
+        self.status_label.setText(f"错误: {error}")
+        self.status_banner.set_status("error", f"导入失败: {error}")
         self._log(f"导入错误: {error}")
         show_error(
             title="导入错误",

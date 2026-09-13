@@ -103,7 +103,7 @@ class ReportView(RefreshOnShowView):
 
         # 生成按钮
         btn_layout = QHBoxLayout()
-        self.generate_btn = QPushButton("📊 生成报告")
+        self.generate_btn = QPushButton("生成报告")
         self.generate_btn.setToolTip("生成 PDF 报告")
         self.generate_btn.setStyleSheet(f"""
             QPushButton {{
@@ -226,7 +226,8 @@ class ReportView(RefreshOnShowView):
     def _on_finished(self, result):
         self.generate_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
-        self.status_label.setText(f"✅ 报告已生成: {result}")
+        self.status_label.setText(f"报告已生成: {result}")
+        self.status_label.setStyleSheet(f"color: {COLOR.SUCCESS};")
         self._log(f"报告生成成功: {result}")
         QMessageBox.information(self, "完成", f"报告已生成:\n{result}")
 
@@ -234,7 +235,8 @@ class ReportView(RefreshOnShowView):
     def _on_error(self, error: str):
         self.generate_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
-        self.status_label.setText(f"❌ 生成失败: {error}")
+        self.status_label.setText(f"生成失败: {error}")
+        self.status_label.setStyleSheet(f"color: {COLOR.DANGER};")
         self._log(f"错误: {error}")
         show_error(
             title="报告生成失败",

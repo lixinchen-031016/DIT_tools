@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import QSize, QTimer, Slot
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import QSettings, QSize, Qt, QTimer, Slot
+from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -11,8 +11,12 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QScrollArea,
     QStackedWidget,
+    QStyle,
+    QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -27,9 +31,10 @@ from DITWorkstation.App.feature_flags import (
     is_nav_enabled,
 )
 
-# 导航配置（NAV_ITEMS / get_nav_index）已抽离到 App/navigation.py 作为单一事实源，
-# 消除 Views ↔ main_window 的循环依赖。视图跳转请直接从 App.navigation 导入。
-from DITWorkstation.App.navigation import get_nav_index
+# 导航配置（NAV_ITEMS / NAV_GROUPS / get_nav_index）已抽离到 App/navigation.py
+# 作为单一事实源，消除 Views ↔ main_window 的循环依赖。
+# 视图跳转请直接从 App.navigation 导入。
+from DITWorkstation.App.navigation import NAV_GROUPS, get_nav_index
 
 # 会话上下文（EventBus + 全局项目/工作区状态）已抽离到 App/session_context.py
 # [DEPRECATED] 此处 re-export 仅为向后兼容；新代码应直接从 App.session_context 导入，
@@ -64,6 +69,26 @@ from DITWorkstation.Views.search_view import SearchView
 from DITWorkstation.Views.shooting_log_view import ShootingLogView
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS
 
+# ===== 导航壳层布局常量（对应报告 §4.1 / §8.4）=====
+NAV_WIDTH_EXPANDED = 220  # 完整导航宽度（显示文字）
+NAV_WIDTH_COLLAPSED = 64  # 折叠后图标栏宽度（仅图标 + 单字占位）
+NAV_AUTO_COLLAPSE_WIDTH = 1100  # 窗口窄于此宽度时自动折叠导航（§8.4）
+CONTEXT_BAR_HEIGHT = 40  # 顶部上下文条高度
+
+# 各导航项在列表中的图标：全部使用 Qt 内置标准图标（§5.4 不用 emoji），
+# 折叠模式下作为图标占位显示。
+_NAV_ICON_BY_KEY = {
+    "dashboard": QStyle.StandardPixmap.SP_DesktopIcon,
+    "import": QStyle.StandardPixmap.SP_DirOpenIcon,
+    "backup": QStyle.StandardPixmap.SP_DriveHDIcon,
+    "log": QStyle.StandardPixmap.SP_FileDialogDetailedView,
+    "raw": QStyle.StandardPixmap.SP_FileIcon,
+    "rename": QStyle.StandardPixmap.SP_DialogResetButton,
+    "search": QStyle.StandardPixmap.SP_FileDialogContentsView,
+    "asset_info": QStyle.StandardPixmap.SP_FileDialogInfoView,
+    "report": QStyle.StandardPixmap.SP_DialogSaveButton,
+}
+
 
 class MainWindow(QMainWindow):
     """主窗口"""
@@ -71,11 +96,19 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"DIT工作站 {APP_VERSION} - 专业摄影数据管理")
-        self.setMinimumSize(1200, 800)
+        # 最小 1024x720（§8.4：适配小屏幕与系统缩放，不再固定 1200x800）
+        self.setMinimumSize(1024, 720)
         self.resize(1400, 900)
+
+        # 导航折叠状态（§8.4）：_nav_manually_toggled 记录用户是否手动切换过，
+        # 手动折叠后窗口 resize 不再自动展开；折叠偏好持久化到 QSettings。
+        self._nav_collapsed = False
+        self._nav_manually_toggled = False
+        self._nav_settings = QSettings("DITWorkstation", "mainwindow")
 
         self._setup_ui()
         self._apply_style()
+        self._restore_nav_state()
 
     def _setup_ui(self):
         """设置界面"""
@@ -83,7 +116,16 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QHBoxLayout(central)
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # 顶部上下文条（§4.1）：折叠开关 + 工作区/项目上下文 + 任务中心/命令面板
+        self._build_context_bar()
+
+        # 下方内容区：左侧导航 + 视图栈
+        content = QWidget()
+        layout = QHBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
@@ -92,29 +134,115 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.nav_list)
         layout.addWidget(self.stack, 1)
 
+        outer.addWidget(self.context_bar)
+        outer.addWidget(content, 1)
+
         bus = get_data_bus()
         self._build_shortcuts()
         self._build_status_bar(bus)
         self._build_background_services()
 
     def _build_navigation(self):
-        """创建左侧导航列表。"""
+        """创建左侧导航列表：分组标题行 + 导航项（§4.1）。
+
+        - 按 NAV_GROUPS 在组与组之间插入不可选中的分组标题行
+          （Qt.NoItemFlags、12px 次要色）；未登记分组的 key 直接渲染。
+        - 维护 self._row_to_stack_index / self._stack_index_to_row 映射：
+          列表控件行号（含标题行）↔ 视图栈索引（= get_nav_index 语义）。
+          所有 setCurrentRow 调用方一律经由映射转换，行为与改造前一致。
+        """
         # 左侧导航栏（顺序由「当前激活导航列表」决定：
         # 团队 9 项 / 个人 7 项 / 极简 1 项）
         self.active_nav_items = get_active_nav_items()
         self.nav_list = QListWidget()
-        self.nav_list.setFixedWidth(200)
-        self.nav_list.setIconSize(QSize(24, 24))
-        self.nav_list.setSpacing(4)
+        self.nav_list.setFixedWidth(NAV_WIDTH_EXPANDED)
+        self.nav_list.setIconSize(QSize(20, 20))
+        self.nav_list.setSpacing(2)
 
-        for _key, text, tooltip in self.active_nav_items:
+        self._row_to_stack_index: dict[int, int] = {}
+        self._stack_index_to_row: dict[int, int] = {}
+        self._header_rows: list[int] = []
+
+        current_group: str | None = None
+        for stack_index, (key, text, tooltip) in enumerate(self.active_nav_items):
+            # 组名变化时插入分组标题行（§4.1）
+            group = next(
+                (name for name, keys in NAV_GROUPS.items() if key in keys), ""
+            )
+            if group and group != current_group:
+                header = QListWidgetItem(group)
+                # 不可选中、不可聚焦：点击无效果，currentRow 不会落在标题行
+                header.setFlags(Qt.ItemFlag.NoItemFlags)
+                header_font = QFont()
+                header_font.setPixelSize(FONT_SIZE.SM)
+                header.setFont(header_font)
+                header.setForeground(QColor(COLOR.TEXT_SECONDARY))
+                header.setSizeHint(QSize(NAV_WIDTH_EXPANDED, 36))
+                self._header_rows.append(self.nav_list.count())
+                self.nav_list.addItem(header)
+            current_group = group
+
             item = QListWidgetItem(text)
+            item.setIcon(self.style().standardIcon(_NAV_ICON_BY_KEY.get(key, QStyle.StandardPixmap.SP_FileIcon)))
             item.setToolTip(tooltip)
-            item.setSizeHint(QSize(180, 44))
+            item.setSizeHint(QSize(NAV_WIDTH_EXPANDED - 24, 40))
+            item.setForeground(QColor(COLOR.SIDEBAR_TEXT))
+            row = self.nav_list.count()
+            self._row_to_stack_index[row] = stack_index
+            self._stack_index_to_row[stack_index] = row
             self.nav_list.addItem(item)
 
-        self.nav_list.setCurrentRow(0)
+        # 默认选中第一个可选中的导航行（栈索引 0 对应的行）
+        self.nav_list.setCurrentRow(self._stack_index_to_row.get(0, 0))
         self.nav_list.currentRowChanged.connect(self._on_nav_changed)
+
+    def _build_context_bar(self):
+        """创建顶部上下文条（§4.1）：折叠开关 + 工作区/项目 + 任务中心/命令面板。
+
+        - 左侧：导航折叠开关（QToolButton + Qt 标准图标）、「工作区：XXX · 项目：XXX」
+          （与状态栏标签由同一事件处理器同步更新）。
+        - 右侧：任务中心入口（仅 is_enabled("task_history") 时显示）与命令面板按钮。
+        - 版本号不放上下文条（已由「关于」对话框承载，§4.1）。
+        """
+        self.context_bar = QWidget()
+        self.context_bar.setObjectName("contextBar")
+        self.context_bar.setFixedHeight(CONTEXT_BAR_HEIGHT)
+
+        # 导航折叠开关（§8.4）：Qt 内置标准图标 + tooltip
+        self.nav_toggle_btn = QToolButton(self.context_bar)
+        self.nav_toggle_btn.setAutoRaise(True)
+        self.nav_toggle_btn.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView)
+        )
+        self.nav_toggle_btn.setToolTip("折叠 / 展开导航栏")
+        self.nav_toggle_btn.setMinimumSize(28, 28)
+        self.nav_toggle_btn.clicked.connect(self._toggle_nav_collapsed)
+
+        # 工作区 / 项目上下文（与状态栏标签同步更新）
+        self.context_label_workspace = QLabel("工作区: 未选择", self.context_bar)
+        self.context_label_project = QLabel("项目: 未选择", self.context_bar)
+
+        # 右侧：任务中心 + 命令面板（低干扰文字按钮，§7.1 工具层级）
+        self.context_task_btn = QPushButton("任务中心", self.context_bar)
+        self.context_task_btn.setToolTip("查看后台任务历史、错误摘要和可恢复任务")
+        self.context_task_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.context_task_btn.clicked.connect(self._show_task_center)
+        self.context_task_btn.setVisible(is_enabled("task_history"))
+
+        self.context_palette_btn = QPushButton("命令面板", self.context_bar)
+        self.context_palette_btn.setToolTip("全局命令面板（Ctrl+K）")
+        self.context_palette_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.context_palette_btn.clicked.connect(self._show_command_palette)
+
+        bar_layout = QHBoxLayout(self.context_bar)
+        bar_layout.setContentsMargins(8, 4, 12, 4)
+        bar_layout.setSpacing(8)
+        bar_layout.addWidget(self.nav_toggle_btn)
+        bar_layout.addWidget(self.context_label_workspace)
+        bar_layout.addWidget(self.context_label_project)
+        bar_layout.addStretch(1)
+        bar_layout.addWidget(self.context_task_btn)
+        bar_layout.addWidget(self.context_palette_btn)
 
     def _build_view_stack(self):
         """实例化视图并按当前功能模式填充内容栈。
@@ -184,9 +312,10 @@ class MainWindow(QMainWindow):
         if is_nav_enabled("log"):
             add_shortcut("Ctrl+L", self._focus_log)
         # Ctrl+1~N 切换到对应导航页（N = 激活导航项数量：团队 9 / 个人 7 / 极简 1）
+        # 索引为「激活导航列表中的位置」（栈索引），经映射转换为列表控件行号
         for i in range(1, len(self.active_nav_items) + 1):
             add_shortcut(
-                f"Ctrl+{i}", lambda idx=i - 1: self.nav_list.setCurrentRow(idx)
+                f"Ctrl+{i}", lambda idx=i - 1: self._select_stack_index(idx)
             )
         add_shortcut("F5", self._refresh_current_view)
         add_shortcut("Ctrl+K", self._show_command_palette)
@@ -208,11 +337,10 @@ class MainWindow(QMainWindow):
         self.status_label_workspace = QLabel("工作区: 未选择")
         self.status_label_project = QLabel("项目: 未选择")
         self.status_label_task = QLabel("就绪")
-        self.status_label_version = QLabel(APP_VERSION)
+        # 版本号已从状态栏移除（§4.1）：由「帮助 → 关于」对话框承载
         self.status_bar.addWidget(self.status_label_workspace)
         self.status_bar.addWidget(self.status_label_project)
         self.status_bar.addPermanentWidget(self.status_label_task)
-        self.status_bar.addPermanentWidget(self.status_label_version)
         bus.project_focus_changed.connect(self._on_project_focus_changed)
         bus.workspace_focus_changed.connect(self._on_workspace_focus_changed)
 
@@ -323,7 +451,7 @@ class MainWindow(QMainWindow):
             # get_nav_index 在目标页未激活时返回 None，禁止直接传给 setCurrentRow
             import_idx = get_nav_index("import")
             if import_idx is not None:
-                self.nav_list.setCurrentRow(import_idx)
+                self._select_stack_index(import_idx)
 
     def _show_sop_guide(self):
         """弹出 SOP 操作链说明对话框"""
@@ -407,7 +535,7 @@ class MainWindow(QMainWindow):
         self._integrity_worker = worker
 
         def _done(results):
-            self.status_label_task.setText("✅ 完整性校验完成")
+            self._set_task_status("完整性校验完成", COLOR.SUCCESS)
             total = len(results) if isinstance(results, dict) else 0
             QMessageBox.information(
                 self,
@@ -422,7 +550,7 @@ class MainWindow(QMainWindow):
         worker.error.connect(_err)
         worker.thread_finished.connect(worker.deleteLater)
         worker.start()
-        self.status_label_task.setText("⚙ 正在执行完整性校验…")
+        self._set_task_status("正在执行完整性校验…", COLOR.WARNING)
 
     def _show_task_center(self):
         """打开后台任务历史中心。"""
@@ -444,9 +572,22 @@ class MainWindow(QMainWindow):
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
         return scroll
 
-    def _on_nav_changed(self, index: int):
-        """导航切换"""
-        self.stack.setCurrentIndex(index)
+    def _on_nav_changed(self, row: int):
+        """导航切换：列表行号 → 视图栈索引（分组标题行无映射，安全忽略）。"""
+        stack_index = self._row_to_stack_index.get(row)
+        if stack_index is None:
+            return
+        self.stack.setCurrentIndex(stack_index)
+
+    def _select_stack_index(self, stack_index: int):
+        """按「激活导航列表中的位置」（栈索引）选中导航行。
+
+        get_nav_index 返回的索引即栈索引；经 _stack_index_to_row 转换为
+        列表控件行号后再 setCurrentRow，确保含分组标题行时行号正确。
+        """
+        row = self._stack_index_to_row.get(stack_index)
+        if row is not None:
+            self.nav_list.setCurrentRow(row)
 
     def _focus_search(self):
         """Ctrl+F: 跳转到素材检索并聚焦搜索框"""
@@ -471,7 +612,7 @@ class MainWindow(QMainWindow):
         """按 key 跳转到对应导航页"""
         idx = get_nav_index(key)
         if idx is not None:
-            self.nav_list.setCurrentRow(idx)
+            self._select_stack_index(idx)
 
     def _refresh_current_view(self):
         """F5: 刷新当前视图（索引基于激活导航列表，不会访问隐藏页面）"""
@@ -522,43 +663,61 @@ class MainWindow(QMainWindow):
         return candidates
 
     def _on_project_focus_changed(self, project_id):
-        """当前项目切换时更新状态栏"""
+        """当前项目切换时更新状态栏与顶部上下文条"""
         if not project_id:
-            self.status_label_project.setText("项目: 未选择")
+            text = "项目: 未选择"
+            self.status_label_project.setText(text)
+            self.context_label_project.setText(text)
             return
         try:
             db = get_db_service()
             project = db.get_project(project_id)
             name = project.name if project else "未知"
-            self.status_label_project.setText(f"项目: {name}")
+            text = f"项目: {name}"
         except Exception:
-            self.status_label_project.setText("项目: ?")
+            text = "项目: ?"
+        self.status_label_project.setText(text)
+        self.context_label_project.setText(text)
 
     def _on_workspace_focus_changed(self, workspace_id):
-        """当前工作区切换时更新状态栏"""
+        """当前工作区切换时更新状态栏与顶部上下文条"""
         if not workspace_id:
-            self.status_label_workspace.setText("工作区: 未选择")
+            text = "工作区: 未选择"
+            self.status_label_workspace.setText(text)
+            self.context_label_workspace.setText(text)
             return
         try:
             db = get_db_service()
             ws = db.get_workspace(workspace_id)
             name = ws.name if ws else "未知"
-            self.status_label_workspace.setText(f"工作区: {name}")
+            text = f"工作区: {name}"
         except Exception:
-            self.status_label_workspace.setText("工作区: ?")
+            text = "工作区: ?"
+        self.status_label_workspace.setText(text)
+        self.context_label_workspace.setText(text)
 
     def _update_task_status(self):
         """定时更新后台任务数指示（由 _status_timer 每 2 秒触发）"""
         running = self._running_workers()
         count = len(running)
         if count > 0:
-            self.status_label_task.setText(f"⚙ 后台任务: {count} 个")
-            self.status_label_task.setStyleSheet(
-                f"color: {COLOR.WARNING}; font-weight: 600;"
-            )
+            self._set_task_status(f"后台任务: {count} 个", COLOR.WARNING, bold=True)
         else:
-            self.status_label_task.setText("就绪")
-            self.status_label_task.setStyleSheet(f"color: {COLOR.TEXT_SECONDARY};")
+            self._set_task_status("就绪")
+
+    def _set_task_status(self, text: str, color: str | None = None, bold: bool = False):
+        """更新状态栏任务指示：纯文字 + 颜色语义（§5.4/§9 不用 emoji）。
+
+        Args:
+            text: 状态文字。
+            color: 语义色（WARNING/SUCCESS/DANGER），None 时用次要文本色。
+            bold: 是否加粗（运行中状态）。
+        """
+        self.status_label_task.setText(text)
+        weight = "600" if bold else "400"
+        self.status_label_task.setStyleSheet(
+            f"color: {color or COLOR.TEXT_SECONDARY}; font-weight: {weight};"
+        )
 
     def closeEvent(self, event):
         """关闭窗口前检查后台 worker，避免强杀线程导致数据写半截。
@@ -639,7 +798,7 @@ class MainWindow(QMainWindow):
         if self.card_automation_service is None or self.backup_view is None:
             return
         if self.card_automation_worker and self.card_automation_worker.isRunning():
-            self.status_label_task.setText("⚠ 已有相机卡自动任务正在执行")
+            self._set_task_status("已有相机卡自动任务正在执行", COLOR.WARNING)
             return
         project_id = getattr(config, "auto_card_project_id", "")
         template_id = getattr(config, "auto_card_template_id", "")
@@ -654,14 +813,14 @@ class MainWindow(QMainWindow):
         if not project_id or (
             (do_backup or (steps and "backup" in steps)) and template is None
         ):
-            self.status_label_task.setText("⚠ 相机卡自动化配置不完整，请检查设置")
+            self._set_task_status("相机卡自动化配置不完整，请检查设置", COLOR.WARNING)
             logger.warning(
                 f"相机卡自动化配置不完整: project={project_id} template={template_id}"
             )
             return
         project = self.backup_view.db_service.get_project(project_id)
         if project is None:
-            self.status_label_task.setText("⚠ 自动化项目不存在，请检查设置")
+            self._set_task_status("自动化项目不存在，请检查设置", COLOR.WARNING)
             return
         set_current_project(project_id)
         self.card_automation_source_path = source_path
@@ -694,11 +853,11 @@ class MainWindow(QMainWindow):
             self.card_automation_worker.deleteLater
         )
         self.card_automation_worker.start()
-        self.status_label_task.setText(f"⚙ 自动处理相机卡: {Path(source_path).name}")
+        self._set_task_status(f"自动处理相机卡: {Path(source_path).name}", COLOR.WARNING)
 
     @Slot(str, float, str)
     def _on_card_automation_progress(self, target: str, progress: float, message: str):
-        self.status_label_task.setText(f"⚙ {message} ({int(progress * 100)}%)")
+        self._set_task_status(f"{message} ({int(progress * 100)}%)", COLOR.WARNING)
 
     def _show_command_palette(self):
         """打开 Ctrl+K 全局命令面板。"""
@@ -714,8 +873,8 @@ class MainWindow(QMainWindow):
     def _on_volume_mounted(self, path: str):
         """检测到新存储卡：跳转导入视图，并按需入多卡自动队列。"""
         if getattr(config, "auto_detect_volume", True):
-            self.status_label_task.setText(
-                f"💾 检测到存储卡: {Path(path).name or path}"
+            self._set_task_status(
+                f"检测到存储卡: {Path(path).name or path}", COLOR.WARNING
             )
             self._navigate_to("import")
             if self.import_view is not None:
@@ -743,8 +902,8 @@ class MainWindow(QMainWindow):
         backup_text = ""
         if backup is not None:
             backup_text = f"，备份状态 {backup.status.value}"
-        self.status_label_task.setText(
-            f"✅ 相机卡自动处理完成：导入 {imported} 个{backup_text}"
+        self._set_task_status(
+            f"相机卡自动处理完成：导入 {imported} 个{backup_text}", COLOR.SUCCESS
         )
         if imported:
             get_data_bus().emit_data_changed("assets_changed")
@@ -753,7 +912,7 @@ class MainWindow(QMainWindow):
         self.card_automation_worker = None
         if self.card_automation_source_path and self.card_batch_queue is not None:
             self.card_batch_queue.on_failed()
-        self.status_label_task.setText(f"❌ 相机卡自动处理失败: {error}")
+        self._set_task_status(f"相机卡自动处理失败: {error}", COLOR.DANGER)
         logger.error(f"相机卡自动处理失败: {error}")
 
     def _init_integrity_scheduler(self):
@@ -780,8 +939,67 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             logger.warning(f"启动完整性校验调度失败: {exc}")
 
+    # ===== 导航折叠（§8.4 响应式）=====
+
+    def _toggle_nav_collapsed(self):
+        """折叠开关点击：切换导航宽度并标记为用户手动操作（不再自动展开）。"""
+        self._nav_manually_toggled = True
+        self._set_nav_collapsed(not self._nav_collapsed, persist=True)
+
+    def _set_nav_collapsed(self, collapsed: bool, persist: bool = False):
+        """切换导航折叠状态。
+
+        - 完整模式：宽度 220px，显示完整文字与分组标题行；
+        - 折叠模式：宽度 64px，导航项仅显示首字占位（配合 Qt 标准图标），
+          分组标题行隐藏（setRowHidden）。
+        - persist=True 时写入 QSettings（用户手动切换才持久化；
+          窗口过窄触发的自动折叠为临时状态，不写配置）。
+        """
+        if collapsed == self._nav_collapsed and persist is False:
+            return
+        self._nav_collapsed = collapsed
+        self.nav_list.setFixedWidth(
+            NAV_WIDTH_COLLAPSED if collapsed else NAV_WIDTH_EXPANDED
+        )
+        for row in self._header_rows:
+            self.nav_list.setRowHidden(row, collapsed)
+        for row, stack_index in self._row_to_stack_index.items():
+            item = self.nav_list.item(row)
+            if item is None:
+                continue
+            text = self.active_nav_items[stack_index][1]
+            # 折叠时仅显示首字占位（§8.4：不用 emoji，配合标准图标）
+            item.setText(text[0] if collapsed else text)
+        if persist:
+            try:
+                self._nav_settings.setValue("nav_collapsed", collapsed)
+            except Exception as exc:
+                logger.debug(f"持久化导航折叠状态失败: {exc}")
+
+    def _restore_nav_state(self):
+        """启动时从 QSettings 恢复上次的导航折叠状态。"""
+        try:
+            collapsed = self._nav_settings.value("nav_collapsed", False, type=bool)
+        except Exception:
+            collapsed = False
+        if collapsed:
+            self._set_nav_collapsed(True)
+
+    def resizeEvent(self, event):
+        """窗口尺寸变化（§8.4）：宽度 <1100 自动折叠；恢复宽度且用户未手动
+        操作过折叠时自动展开。"""
+        super().resizeEvent(event)
+        # __init__ 早期 resize 触发时导航尚未构建，安全跳过
+        if getattr(self, "nav_list", None) is None:
+            return
+        if self.width() < NAV_AUTO_COLLAPSE_WIDTH:
+            if not self._nav_collapsed:
+                self._set_nav_collapsed(True)
+        elif self._nav_collapsed and not self._nav_manually_toggled:
+            self._set_nav_collapsed(False)
+
     def _apply_style(self):
-        """应用样式（主窗口 + 侧栏）。全局 QSS 由 main.py 通过 theme.apply_global_style 注入。"""
+        """应用样式（主窗口 + 侧栏 + 上下文条）。全局 QSS 由 main.py 通过 theme.apply_global_style 注入。"""
         self.setStyleSheet(f"""
             QMainWindow {{
                 background-color: {COLOR.BG_APP};
@@ -792,20 +1010,56 @@ class MainWindow(QMainWindow):
                 padding-top: 20px;
                 font-size: {FONT_SIZE.MD}px;
             }}
+            /* 分组标题行由 item 级 ForegroundRole 控制次要色，
+               故基础规则不设 color（避免 QSS 覆盖标题行颜色） */
             QListWidget::item {{
-                color: {COLOR.SIDEBAR_TEXT};
-                padding: 10px 16px;
+                padding: 9px 14px;
                 border-radius: {RADIUS.BUTTON}px;
                 margin: 2px 8px;
+                border-left: 3px solid transparent;
             }}
             QListWidget::item:selected {{
-                background-color: {COLOR.PRIMARY};
+                background-color: {COLOR.SIDEBAR_HOVER};
                 color: {COLOR.SIDEBAR_TEXT};
+                border-left: 3px solid {COLOR.PRIMARY};
             }}
             QListWidget::item:hover:!selected {{
                 background-color: {COLOR.SIDEBAR_HOVER};
             }}
             QStackedWidget {{
                 background-color: {COLOR.BG_CARD};
+            }}
+        """)
+        # 顶部上下文条（§4.1）：卡片底色 + 底部 1px 分隔，右侧为低干扰文字按钮
+        self.context_bar.setStyleSheet(f"""
+            QWidget#contextBar {{
+                background-color: {COLOR.BG_CARD};
+                border-bottom: 1px solid {COLOR.BORDER};
+            }}
+            QWidget#contextBar QLabel {{
+                color: {COLOR.TEXT_SECONDARY};
+                font-size: {FONT_SIZE.SM}px;
+                background: transparent;
+            }}
+            QWidget#contextBar QToolButton {{
+                background: transparent;
+                border: none;
+                border-radius: {RADIUS.INPUT}px;
+                padding: 4px;
+            }}
+            QWidget#contextBar QToolButton:hover {{
+                background-color: {COLOR.BG_GROUP};
+            }}
+            QWidget#contextBar QPushButton {{
+                background: transparent;
+                border: none;
+                border-radius: {RADIUS.INPUT}px;
+                color: {COLOR.TEXT_SECONDARY};
+                font-size: {FONT_SIZE.SM}px;
+                padding: 4px 10px;
+            }}
+            QWidget#contextBar QPushButton:hover {{
+                background-color: {COLOR.BG_GROUP};
+                color: {COLOR.TEXT_PRIMARY};
             }}
         """)

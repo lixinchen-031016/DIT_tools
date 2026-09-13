@@ -1,6 +1,7 @@
 """JPG筛选后RAW提取页面"""
 
 from PySide6.QtCore import Signal, Slot
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QFormLayout,
@@ -260,11 +261,16 @@ class RawExtractionView(RefreshOnShowView):
                 self.result_table.setItem(i, 0, QTableWidgetItem(jpg.name))
                 if raw:
                     self.result_table.setItem(i, 1, QTableWidgetItem(raw.name))
-                    self.result_table.setItem(i, 2, QTableWidgetItem("✅ 已匹配"))
+                    # 状态列纯文字 + 语义色（§5.4 不用 emoji）
+                    self.result_table.setItem(
+                        i, 2, self._make_status_item("已匹配", COLOR.SUCCESS)
+                    )
                     matched_count += 1
                 else:
                     self.result_table.setItem(i, 1, QTableWidgetItem("-"))
-                    self.result_table.setItem(i, 2, QTableWidgetItem("❌ 未找到"))
+                    self.result_table.setItem(
+                        i, 2, self._make_status_item("未找到", COLOR.DANGER)
+                    )
 
             self.match_label.setText(
                 f"共 {len(matches)} 个JPG文件，成功匹配 {matched_count} 个RAW文件"
@@ -347,6 +353,13 @@ class RawExtractionView(RefreshOnShowView):
         self.cancel_btn.setEnabled(False)
         self.status_label.setText("正在取消...")
 
+    @staticmethod
+    def _make_status_item(text: str, color) -> QTableWidgetItem:
+        """构造状态列单元格：纯文字 + 语义色（§5.4 状态不用 emoji）。"""
+        item = QTableWidgetItem(text)
+        item.setForeground(QColor(color))
+        return item
+
     @Slot(object)
     def _on_finished(self, result):
         self.extract_btn.setEnabled(True)
@@ -358,13 +371,17 @@ class RawExtractionView(RefreshOnShowView):
         not_found = result["not_found"]
         failed = result["failed"]
 
-        status_text = f"✅ 提取完成: 成功 {success} 个"
+        status_text = f"提取完成: 成功 {success} 个"
         if not_found > 0:
             status_text += f", 未找到 {not_found} 个"
         if failed > 0:
             status_text += f", 失败 {failed} 个"
 
         self.status_label.setText(status_text)
+        # 语义色：全部成功=SUCCESS，否则 WARNING（§5.4 不用 emoji）
+        self.status_label.setStyleSheet(
+            f"color: {COLOR.SUCCESS if (not_found == 0 and failed == 0) else COLOR.WARNING};"
+        )
 
         # 数据闭环：提取后自动入库到所选项目，并继承原 JPG 的 log_id
         project_id = self.selector.get_current_project_id()
@@ -494,7 +511,8 @@ class RawExtractionView(RefreshOnShowView):
         self.extract_btn.setEnabled(True)
         self.scan_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
-        self.status_label.setText(f"❌ 错误: {error}")
+        self.status_label.setText(f"错误: {error}")
+        self.status_label.setStyleSheet(f"color: {COLOR.DANGER};")
         show_error(
             title="提取错误",
             description=error,

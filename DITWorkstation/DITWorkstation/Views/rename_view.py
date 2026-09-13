@@ -161,7 +161,7 @@ class RenameView(RefreshOnShowView):
         self.rename_btn.setStyleSheet(PRIMARY_BUTTON_QSS)
         self.rename_btn.clicked.connect(self._execute_rename)
         self.rename_btn.setEnabled(False)
-        self.undo_btn = QPushButton("↩ 回退上次重命名")
+        self.undo_btn = QPushButton("回退上次重命名")
         self.undo_btn.setToolTip("仅在文件未被后续修改且原路径未被占用时可安全回退")
         self.undo_btn.clicked.connect(self._undo_last_rename)
         self.undo_btn.setEnabled(False)

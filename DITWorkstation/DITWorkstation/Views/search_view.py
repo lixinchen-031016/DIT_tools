@@ -303,22 +303,22 @@ class SearchView(RefreshOnShowView):
 
         # 搜索按钮
         btn_layout = QHBoxLayout()
-        self.search_btn = QPushButton("🔍 搜索")
+        self.search_btn = QPushButton("搜索")
         self.search_btn.setToolTip("按条件检索素材")
         self.search_btn.setStyleSheet(PRIMARY_BUTTON_QSS)
         self.search_btn.clicked.connect(self._search)
         reset_btn = QPushButton("重置")
         reset_btn.clicked.connect(self._reset)
-        export_btn = QPushButton("📤 导出 CSV")
+        export_btn = QPushButton("导出 CSV")
         export_btn.setToolTip("把当前搜索结果导出为 CSV 素材清单（Excel 可直接打开）")
         export_btn.clicked.connect(self._export_csv)
-        dup_btn = QPushButton("🔁 跨项目查重")
+        dup_btn = QPushButton("跨项目查重")
         dup_btn.setToolTip("按校验和聚合跨项目重复入库的素材")
         dup_btn.clicked.connect(self._find_duplicates)
-        save_btn = QPushButton("💾 保存搜索")
+        save_btn = QPushButton("保存搜索")
         save_btn.setToolTip("把当前检索条件保存为命名搜索（智能集合）")
         save_btn.clicked.connect(self._save_current_search)
-        manage_btn = QPushButton("🗂 保存的搜索")
+        manage_btn = QPushButton("保存的搜索")
         manage_btn.setToolTip("管理已保存的搜索条件")
         manage_btn.clicked.connect(self._manage_saved_searches)
         btn_layout.addWidget(QLabel("视图:"))
@@ -426,7 +426,7 @@ class SearchView(RefreshOnShowView):
         if event in ("assets_changed", "logs_changed", "all"):
             if self.result_table.rowCount() > 0:
                 self.stale_banner.setText(
-                    "⚠ 数据已变更，当前结果可能过期。点击此处或「🔍 搜索」按钮重新搜索。"
+                    "⚠ 数据已变更，当前结果可能过期。点击此处或「搜索」按钮重新搜索。"
                 )
                 self.stale_banner.setVisible(True)
 
@@ -972,7 +972,7 @@ class SearchView(RefreshOnShowView):
         """跨项目按校验和查重，结果在独立对话框展示。"""
         duplicates = self.db_service.find_duplicate_assets()
         if not duplicates:
-            QMessageBox.information(self, "跨项目查重", "未发现重复入库的素材 ✅")
+            QMessageBox.information(self, "跨项目查重", "未发现重复入库的素材")
             return
         dialog = DuplicateResultsDialog(duplicates, self.db_service, parent=self)
         dialog.exec()

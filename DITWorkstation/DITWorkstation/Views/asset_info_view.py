@@ -54,6 +54,7 @@ from DITWorkstation.Views.Styles.theme import (
     COLOR,
     FONT_SIZE,
     RADIUS,
+    SECONDARY_BUTTON_QSS,
     SUBTITLE_QSS,
     TITLE_QSS,
 )
@@ -279,26 +280,15 @@ class AssetInfoView(RefreshOnShowView):
         header.addStretch()
 
         # 一键重新读取 EXIF 按钮
-        self.batch_exif_btn = QPushButton("🔄 一键重新读取全部 EXIF")
-        self.batch_exif_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLOR.PRIMARY};
-                color: white;
-                border: none;
-                border-radius: {RADIUS.BUTTON}px;
-                padding: 8px 16px;
-                font-size: {FONT_SIZE.BASE}px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{ background-color: {COLOR.PRIMARY_HOVER}; }}
-            QPushButton:disabled {{ background-color: {COLOR.DISABLED}; }}
-        """)
+        self.batch_exif_btn = QPushButton("一键重新读取全部 EXIF")
+        # 次按钮（§12.1 同页唯一实心主操作为「保存标签与备注」）
+        self.batch_exif_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         self.batch_exif_btn.clicked.connect(self._batch_refresh_exif)
         self.batch_exif_btn.setEnabled(False)
         header.addWidget(self.batch_exif_btn)
 
         # 导出素材清单 CSV
-        self.export_csv_btn = QPushButton("📤 导出素材清单 CSV")
+        self.export_csv_btn = QPushButton("导出素材清单 CSV")
         self.export_csv_btn.setToolTip(
             "把当前项目的全部素材元数据导出为 CSV（Excel 可直接打开）"
         )
@@ -316,7 +306,7 @@ class AssetInfoView(RefreshOnShowView):
         self.export_csv_btn.clicked.connect(self._export_csv)
         header.addWidget(self.export_csv_btn)
 
-        self.relink_missing_btn = QPushButton("🔗 重新链接丢失素材")
+        self.relink_missing_btn = QPushButton("重新链接丢失素材")
         self.relink_missing_btn.setToolTip(
             "选择新根目录，预览并回写可唯一匹配的移动后素材路径"
         )
@@ -325,7 +315,7 @@ class AssetInfoView(RefreshOnShowView):
         header.addWidget(self.relink_missing_btn)
 
         # 批量清理已丢失文件对应的素材记录
-        self.cleanup_missing_btn = QPushButton("🧹 清理丢失素材")
+        self.cleanup_missing_btn = QPushButton("清理丢失素材")
         self.cleanup_missing_btn.setToolTip(
             "一键删除数据库中所有「文件已丢失」的素材记录（不删除磁盘文件）"
         )
@@ -450,7 +440,7 @@ class AssetInfoView(RefreshOnShowView):
             btn.clicked.connect(lambda checked, v=value: self._batch_set_rating(v))
             self.batch_rating_buttons.append(btn)
             batch_row.addWidget(btn)
-        self.batch_delete_btn = QPushButton("🗑 删除选中")
+        self.batch_delete_btn = QPushButton("删除选中")
         self.batch_delete_btn.setToolTip("从项目移除选中的素材记录（不删除磁盘文件）")
         self.batch_delete_btn.setEnabled(False)
         self.batch_delete_btn.setStyleSheet(f"""
@@ -480,7 +470,7 @@ class AssetInfoView(RefreshOnShowView):
             for btn in self.batch_rating_buttons:
                 btn.setVisible(False)
 
-        refresh_btn = QPushButton("🔄 刷新列表")
+        refresh_btn = QPushButton("刷新列表")
         refresh_btn.clicked.connect(self._load_assets)
         left_layout.addWidget(refresh_btn)
 
@@ -637,7 +627,7 @@ class AssetInfoView(RefreshOnShowView):
         form.addRow("备注:", self.notes_edit)
 
         save_row = QHBoxLayout()
-        self.save_tags_btn = QPushButton("💾 保存标签与备注")
+        self.save_tags_btn = QPushButton("保存标签与备注")
         self.save_tags_btn.setEnabled(False)
         self.save_tags_btn.setStyleSheet(f"""
             QPushButton {{
@@ -1799,7 +1789,10 @@ class AssetInfoView(RefreshOnShowView):
 
     def _on_batch_error(self, error_msg: str):
         """批量任务异常时恢复 UI 状态"""
-        self.batch_status_label.setText(f"❌ 出错：{error_msg}")
+        self.batch_status_label.setText(f"出错：{error_msg}")
+        self.batch_status_label.setStyleSheet(
+            f"font-size: {FONT_SIZE.SM}px; color: {COLOR.DANGER};"
+        )
         self.batch_exif_btn.setEnabled(True)
         if self.current_asset:
             self.refresh_exif_btn.setEnabled(True)

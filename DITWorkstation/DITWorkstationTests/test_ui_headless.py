@@ -494,7 +494,8 @@ def test_dashboard_has_template_buttons(tmp_dir, monkeypatch):
         view = ProjectDashboardView()
         assert hasattr(view, "btn_template")
         assert hasattr(view, "btn_save_template")
-        assert view.btn_template.text().startswith("🧩")
+        # emoji 图标已移除（§5.4），按钮为纯文字
+        assert view.btn_template.text() == "从模板新建项目…"
         # 回归：_setup_ui 必须完整创建全部控件（recent_ops_label / task_progress）
         assert hasattr(view, "recent_ops_label")
         assert hasattr(view, "task_progress")
@@ -543,7 +544,8 @@ def test_main_window_team_mode_builds_all_nav(tmp_dir, monkeypatch):
     """团队模式：导航 9 项且与视图栈一一对应"""
     window = _build_main_window(tmp_dir, monkeypatch, "team")
     try:
-        assert window.nav_list.count() == 9
+        # 导航行数 = 9 个导航项 + 3 个分组标题行（工作台/工作流/输出与管理）
+        assert window.nav_list.count() == 9 + 3
         assert window.stack.count() == 9
         assert [k for k, _, _ in window.active_nav_items] == [
             "dashboard",
@@ -568,7 +570,8 @@ def test_main_window_personal_mode_builds_trimmed_nav(tmp_dir, monkeypatch):
     """个人模式：导航 7 项（无日志/报告），视图栈与导航数量一致"""
     window = _build_main_window(tmp_dir, monkeypatch, "personal")
     try:
-        assert window.nav_list.count() == 7
+        # 导航行数 = 7 个导航项 + 2 个分组标题行（工作台/工作流；无报告组）
+        assert window.nav_list.count() == 7 + 2
         assert window.stack.count() == 7
         assert [k for k, _, _ in window.active_nav_items] == [
             "dashboard",
@@ -603,7 +606,11 @@ def test_main_window_personal_f5_and_navigation_safe(tmp_dir, monkeypatch):
         # 跳转到隐藏页面：get_nav_index 返回 None，静默忽略不越界
         window._navigate_to("log")
         window._navigate_to("report")
-        assert window.stack.currentIndex() == window.nav_list.currentRow()
+        # 分组标题行存在后，列表行号 ≠ 栈索引；经映射比较
+        assert (
+            window._stack_index_to_row[window.stack.currentIndex()]
+            == window.nav_list.currentRow()
+        )
         # 跨视图跳转入口（概览 SOP 按钮）不应抛异常
         window.dashboard_view._jump_to(None)
     finally:
@@ -1148,7 +1155,8 @@ def test_main_window_minimal_mode_builds_single_nav(tmp_dir, monkeypatch):
     """极简模式：仅 1 项导航（媒体导入），其余视图不实例化。"""
     window = _build_main_window(tmp_dir, monkeypatch, "minimal")
     try:
-        assert window.nav_list.count() == 1
+        # 导航行数 = 1 个导航项 + 1 个分组标题行（工作流）
+        assert window.nav_list.count() == 1 + 1
         assert window.stack.count() == 1
         assert [k for k, _, _ in window.active_nav_items] == ["import"]
         assert list(window.view_by_key) == ["import"]
@@ -1204,7 +1212,8 @@ def test_main_window_minimal_navigation_safe(tmp_dir, monkeypatch):
             window._navigate_to(key)
         window._refresh_current_view()
         assert window.stack.currentIndex() == 0
-        assert window.nav_list.currentRow() == 0
+        # 首项（媒体导入）位于「工作流」分组标题行之后，行号经映射获取
+        assert window.nav_list.currentRow() == window._stack_index_to_row[0]
     finally:
         _teardown_main_window(window)
 

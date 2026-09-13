@@ -248,25 +248,25 @@ class ProjectDashboardView(RefreshOnShowView):
 
         manage_layout = QHBoxLayout()
         manage_layout.setSpacing(8)
-        self.btn_archive = QPushButton("🗜 归档当前项目…")
+        self.btn_archive = QPushButton("归档当前项目…")
         self.btn_archive.setToolTip(
             "把当前项目（信息 + 日志 + 素材元数据，可选素材文件）打包为 zip"
         )
         self.btn_archive.clicked.connect(self._archive_project)
 
-        self.btn_restore = QPushButton("↩ 恢复项目…")
+        self.btn_restore = QPushButton("恢复项目…")
         self.btn_restore.setToolTip(
             "从归档 zip 恢复项目到当前工作区（可选还原素材文件）"
         )
         self.btn_restore.clicked.connect(self._restore_project)
 
-        self.btn_template = QPushButton("🧩 从模板新建项目…")
+        self.btn_template = QPushButton("从模板新建项目…")
         self.btn_template.setToolTip(
             "基于项目模板快速创建新项目（名称/描述/工作目录自动预填）"
         )
         self.btn_template.clicked.connect(self._create_from_template)
 
-        self.btn_save_template = QPushButton("💾 保存当前项目为模板…")
+        self.btn_save_template = QPushButton("保存当前项目为模板…")
         self.btn_save_template.setToolTip(
             "把当前项目的名称/描述/工作目录保存为模板，供后续复用"
         )

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QStyle,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -40,14 +41,16 @@ from DITWorkstation.Utils import (
 from DITWorkstation.ViewModels import TaskViewModel
 from DITWorkstation.Views.Styles.theme import (
     COLOR,
+    DANGER_BUTTON_QSS,
     FONT_SIZE,
     PRIMARY_BUTTON_QSS,
     RADIUS,
-    SUBTITLE_QSS,
-    TITLE_QSS,
+    SECONDARY_BUTTON_QSS,
 )
 from DITWorkstation.Views.Widgets import (
+    PageHeader,
     RefreshOnShowView,
+    StatusBanner,
     WorkspaceProjectSelector,
     edit_backup_template,
 )
@@ -95,14 +98,11 @@ class BackupView(RefreshOnShowView):
         layout.addWidget(self._build_result_panel(), 1)
 
     def _build_header(self, layout):
-        """创建页面标题。"""
-        title = QLabel("数据备份")
-        title.setStyleSheet(TITLE_QSS)
-        layout.addWidget(title)
-
-        subtitle = QLabel("从存储卡安全拷贝素材，支持多目标并行备份与校验和验证")
-        subtitle.setStyleSheet(SUBTITLE_QSS)
-        layout.addWidget(subtitle)
+        """创建页面头（§8.2 PageHeader：标题 + 副标题 + 分隔线）。"""
+        self.page_header = PageHeader(
+            "数据备份", "从存储卡安全拷贝素材，支持多目标并行备份与校验和验证"
+        )
+        layout.addWidget(self.page_header)
 
     def _build_configuration(self):
         """创建项目、路径、模板和备份执行配置区。"""
@@ -172,11 +172,13 @@ class BackupView(RefreshOnShowView):
         target_layout.addWidget(self.target_empty_label)
 
         target_btn_layout = QHBoxLayout()
-        self.add_target_btn = QPushButton("+ 添加目标")
+        self.add_target_btn = QPushButton("添加目标")
         self.add_target_btn.setToolTip("添加一个备份目标目录")
+        self.add_target_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         self.add_target_btn.clicked.connect(self._add_target)
         clear_target_btn = QPushButton("清空全部")
         clear_target_btn.setToolTip("清空所有备份目标")
+        clear_target_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         clear_target_btn.clicked.connect(self._clear_targets)
         target_btn_layout.addWidget(self.add_target_btn)
         target_btn_layout.addWidget(clear_target_btn)
@@ -196,9 +198,12 @@ class BackupView(RefreshOnShowView):
         self.save_template_btn.setToolTip(
             "把当前备份目标、校验算法和验证选项保存为可复用模板"
         )
+        self.save_template_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         self.save_template_btn.clicked.connect(self._save_backup_template)
         template_row.addWidget(self.save_template_btn)
         self.delete_template_btn = QPushButton("删除方案")
+        self.delete_template_btn.setToolTip("删除当前选中的备份方案（不可恢复）")
+        self.delete_template_btn.setStyleSheet(DANGER_BUTTON_QSS)
         self.delete_template_btn.clicked.connect(self._delete_backup_template)
         template_row.addWidget(self.delete_template_btn)
         template_row.addStretch()
@@ -241,28 +246,31 @@ class BackupView(RefreshOnShowView):
         config_row.addStretch()
         config_layout.addLayout(config_row)
 
-        # 操作按钮
+        # 操作按钮（§7.1：开始备份=主操作；其余为次操作）
         btn_layout = QHBoxLayout()
-        self.start_btn = QPushButton("📦 开始备份")
+        self.start_btn = QPushButton("开始备份")
         self.start_btn.setToolTip("开始备份（将文件复制到所有目标目录）")
         self.start_btn.setStyleSheet(PRIMARY_BUTTON_QSS)
         self.start_btn.clicked.connect(self._start_backup)
 
         self.cancel_btn = QPushButton("取消")
         self.cancel_btn.setToolTip("取消正在进行的备份任务")
+        self.cancel_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self._cancel_backup)
 
-        self.mhl_btn = QPushButton("📄 导出 MHL 校验清单")
+        self.mhl_btn = QPushButton("导出 MHL 校验清单")
         self.mhl_btn.setToolTip("把本次备份的源文件哈希列表导出为 ASC MHL XML 文件")
+        self.mhl_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         self.mhl_btn.setEnabled(False)
         self.mhl_btn.clicked.connect(self._export_mhl)
 
-        self.verify_backup_btn = QPushButton("🔍 校验已有备份")
+        self.verify_backup_btn = QPushButton("校验已有备份")
         self.verify_backup_btn.setToolTip(
             "对已关联项目素材的 backup_locations 做完整性校验："
             "检查备份文件是否存在，并与入库时的校验和比对，检测位错误/丢失"
         )
+        self.verify_backup_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         self.verify_backup_btn.clicked.connect(self._verify_existing_backup)
 
         btn_layout.addWidget(self.start_btn)
@@ -290,6 +298,10 @@ class BackupView(RefreshOnShowView):
         # 执行状态与日志（合并进度条 + 状态标签 + 日志输出）
         status_group = QGroupBox("执行状态")
         status_layout = QVBoxLayout(status_group)
+
+        # 预检 / 任务结果状态横幅（§8.2）：预检通过=success、空间不足=error 等
+        self.status_banner = StatusBanner()
+        status_layout.addWidget(self.status_banner)
 
         self.status_panel = StatusPanel(progress_range=(0, 1000), log_min_height=80)
         status_layout.addWidget(self.status_panel)
@@ -333,11 +345,12 @@ class BackupView(RefreshOnShowView):
             f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
         )
         history_detail.addWidget(self.history_failed_label, 1)
-        self.retry_btn = QPushButton("↻ 重试失败文件")
+        self.retry_btn = QPushButton("重试失败文件")
         self.retry_btn.setToolTip(
             "只重新拷贝选中作业中上次失败的文件到对应目标；"
             "目标中已存在且校验一致的文件自动跳过（断点续传）"
         )
+        self.retry_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         self.retry_btn.setEnabled(False)
         self.retry_btn.clicked.connect(self._retry_failed_files)
         history_detail.addWidget(self.retry_btn)
@@ -450,10 +463,10 @@ class BackupView(RefreshOnShowView):
             return
         self.history_table.setRowCount(0)
         status_text = {
-            "completed": "✅ 完成",
-            "partial": "⚠️ 部分",
-            "failed": "❌ 失败",
-            "running": "🔄 进行中",
+            "completed": "完成",
+            "partial": "部分完成",
+            "failed": "失败",
+            "running": "进行中",
         }
         for raw in jobs[:20]:
             row = self.history_table.rowCount()
@@ -675,8 +688,10 @@ class BackupView(RefreshOnShowView):
             )
             row_layout.addWidget(space_label)
 
-            del_btn = QPushButton("✕")
+            del_btn = QPushButton()
             del_btn.setFixedSize(24, 24)
+            # Qt 内置标准图标替代 ✕ 字形（§5.4）
+            del_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCloseButton))
             del_btn.setToolTip("移除此目标")
             del_btn.setStyleSheet(f"""
                 QPushButton {{
@@ -808,6 +823,10 @@ class BackupView(RefreshOnShowView):
                     f"  · {r['path']}: 需要 {format_size(r['needed'])}，"
                     f"剩余 {format_size(r['free'])} {error_note}"
                 )
+            self.status_banner.set_status(
+                "error",
+                f"预检未通过：{len(insufficient)} 个备份目标剩余空间不足，已取消备份",
+            )
             QMessageBox.warning(
                 self,
                 "目标磁盘空间不足",
@@ -817,6 +836,12 @@ class BackupView(RefreshOnShowView):
             )
             self._log("备份已取消：目标磁盘空间不足")
             return
+
+        # 预检通过（§6.3）：空间校验全部通过后再启动后台拷贝
+        self.status_banner.set_status(
+            "success",
+            f"预检通过：{len(targets)} 个目标空间充足，共 {self.current_job.total_files} 个文件待备份",
+        )
 
         # 启动后台线程
         self.start_btn.setEnabled(False)
@@ -885,7 +910,16 @@ class BackupView(RefreshOnShowView):
         self.cancel_btn.setEnabled(False)
         self.verify_backup_btn.setEnabled(True)
         self.progress_bar.setValue(1000)
-        self.status_label.setText("✅ 备份校验完成")
+        self.status_label.setText("备份校验完成")
+        if stats["mismatch"] or stats["missing"]:
+            self.status_banner.set_status(
+                "warning",
+                f"备份校验完成：不一致 {stats['mismatch']} 个，缺失 {stats['missing']} 个",
+            )
+        else:
+            self.status_banner.set_status(
+                "success", f"备份校验完成：{stats['matched']} 个文件校验一致"
+            )
         self._log(
             f"备份校验完成: 检查 {stats['checked']}，一致 {stats['matched']}，"
             f"不一致 {stats['mismatch']}，缺失 {stats['missing']}"
@@ -893,13 +927,13 @@ class BackupView(RefreshOnShowView):
 
         parts = [
             f"共检查 {stats['checked']} 个备份文件",
-            f"✅ 校验和一致：{stats['matched']}",
-            f"❌ 校验和不一致：{stats['mismatch']}",
-            f"🕳 文件缺失：{stats['missing']}",
-            f"ℹ️ 无校验和（仅检查存在）：{stats['unhashable']}",
+            f"校验和一致：{stats['matched']}",
+            f"校验和不一致：{stats['mismatch']}",
+            f"文件缺失：{stats['missing']}",
+            f"无校验和（仅检查存在）：{stats['unhashable']}",
         ]
         if stats["errors"]:
-            parts.append(f"⚠️ 其他异常：{len(stats['errors'])} 条")
+            parts.append(f"其他异常：{len(stats['errors'])} 条")
         QMessageBox.information(self, "备份校验结果", "\n".join(parts))
 
     @safe_slot("导出 MHL 失败")
@@ -948,13 +982,18 @@ class BackupView(RefreshOnShowView):
 
         job = result
         if job.status.value == "completed":
-            self.status_label.setText("✅ 备份完成，所有目标验证通过")
+            self.status_label.setText("备份完成，所有目标验证通过")
+            self.status_banner.set_status("success", "备份完成：所有目标验证通过")
             self._log(f"备份完成! 状态: {job.status.value}")
         elif job.status.value == "partial":
-            self.status_label.setText("⚠️ 部分备份完成")
+            self.status_label.setText("部分备份完成")
+            self.status_banner.set_status(
+                "warning", "部分目标备份失败，可在「备份历史」重试失败文件"
+            )
             self._log("部分完成，请检查失败目标")
         else:
-            self.status_label.setText("❌ 备份失败")
+            self.status_label.setText("备份失败")
+            self.status_banner.set_status("error", "备份失败，请查看日志定位原因")
             self._log(f"备份失败: {job.status.value}")
 
         # 失败/部分完成时，历史区提供断点续传入口
@@ -1056,7 +1095,8 @@ class BackupView(RefreshOnShowView):
         self.start_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.verify_backup_btn.setEnabled(True)
-        self.status_label.setText(f"❌ 错误: {error}")
+        self.status_label.setText(f"错误: {error}")
+        self.status_banner.set_status("error", f"备份执行出错: {error}")
         self._log(f"错误: {error}")
         show_error(
             title="备份错误",

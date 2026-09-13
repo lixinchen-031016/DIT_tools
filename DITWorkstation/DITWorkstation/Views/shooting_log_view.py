@@ -205,7 +205,7 @@ class ShootingLogView(RefreshOnShowView):
 
         # 从代表素材填充 EXIF：选择项目内一个素材，自动带出相机/镜头/ISO/光圈/快门
         exif_row = QHBoxLayout()
-        self.fill_exif_btn = QPushButton("📷 从代表素材填充 EXIF")
+        self.fill_exif_btn = QPushButton("从代表素材填充 EXIF")
         self.fill_exif_btn.setToolTip(
             "选择项目内一个素材，自动带出相机/镜头/ISO/光圈/快门"
         )
@@ -267,14 +267,14 @@ class ShootingLogView(RefreshOnShowView):
         del_log_btn.clicked.connect(self._delete_log)
         ctrl_row.addWidget(del_log_btn)
 
-        export_csv_btn = QPushButton("📤 导出 CSV")
+        export_csv_btn = QPushButton("导出 CSV")
         export_csv_btn.setToolTip(
             "把当前项目的拍摄日志导出为 CSV 镜头清单（Excel 可直接打开）"
         )
         export_csv_btn.clicked.connect(self._export_logs_csv)
         ctrl_row.addWidget(export_csv_btn)
 
-        import_csv_btn = QPushButton("📥 导入 CSV")
+        import_csv_btn = QPushButton("导入 CSV")
         import_csv_btn.setToolTip(
             "从 CSV 场记单导入拍摄日志（按 场景/镜头/镜次 自动去重更新）"
         )

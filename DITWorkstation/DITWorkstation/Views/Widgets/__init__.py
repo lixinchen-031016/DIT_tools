@@ -6,7 +6,10 @@ from .base_views import RefreshOnShowView
 from .capacity_trend import CapacityTrendWidget
 from .capture_timeline import CaptureTimelineWidget
 from .error_dialog import ErrorDialog, show_error
+from .page_header import PageHeader
+from .path_field import PathField
 from .recycle_bin_dialog import RecycleBinDialog
+from .status_banner import StatusBanner
 from .task_history_dialog import TaskHistoryDialog
 from .workspace_dialog import WorkspaceDialog
 from .workspace_project_selector import WorkspaceProjectSelector
@@ -17,8 +20,11 @@ __all__ = [
     "CapacityTrendWidget",
     "CaptureTimelineWidget",
     "ErrorDialog",
+    "PageHeader",
+    "PathField",
     "RecycleBinDialog",
     "RefreshOnShowView",
+    "StatusBanner",
     "TaskHistoryDialog",
     "WorkspaceDialog",
     "WorkspaceProjectSelector",
