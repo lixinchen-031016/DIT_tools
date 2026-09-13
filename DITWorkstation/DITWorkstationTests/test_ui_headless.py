@@ -1148,6 +1148,131 @@ def test_import_view_picker_sets_workspace_path(tmp_dir, monkeypatch):
         reset_session_state()
 
 
+def test_import_view_syncs_project_state_on_show(tmp_dir, monkeypatch):
+    """回归：跨页选择项目后进入导入页，项目状态与复制目标正确同步。
+
+    根因场景：在项目概览页 set_current_project 时导入页不可见，
+    WorkspaceProjectSelector._on_global_project_changed 因 isVisible()
+    为 False 提前返回，project_changed 信号不发射；进入导入页后
+    selector.refresh() 又以 blockSignals 重载下拉，同样不触发联动。
+    结果视图 current_project 停留 None：复制目标提示停留 <项目名>
+    占位符，导入按钮被禁用，导入无法执行。
+    """
+    from DITWorkstation.App import config
+    from DITWorkstation.App.session_context import (
+        reset_session_state,
+        set_current_project,
+        set_current_workspace,
+    )
+    from DITWorkstation.Utils import common, reset_singletons
+    from DITWorkstation.Views.media_import_view import MediaImportView
+
+    reset_singletons()
+    reset_session_state()
+    monkeypatch.setattr(config, "usage_mode", "team")
+    db = DatabaseService(db_path=tmp_dir / "test.db")
+    common._shared_db_service = db
+    try:
+        ws = db.create_workspace(name="WS", path=str(tmp_dir / "ws"))
+        project = db.create_project(name="跨页项目", workspace_id=ws.workspace_id)
+        view = MediaImportView()
+        # 模拟：在项目概览页选择项目（此时导入页尚未显示）
+        set_current_workspace(ws.workspace_id)
+        set_current_project(project.project_id)
+        # 缺陷 precondition：导入页不可见期间 project_changed 不联动
+        assert view.current_project is None
+        # 进入导入页：showEvent 节流刷新后应同步项目状态
+        view.show()
+        view._on_show_refresh()
+        assert view.current_project is not None
+        assert view.current_project.project_id == project.project_id
+        # 勾选「复制到工作区」：目标提示应为真实路径，而非 <项目名> 占位符
+        assert view.copy_mode_check.isEnabled()
+        view.copy_mode_check.setChecked(True)
+        label_text = view.copy_dest_label.text()
+        assert "<项目名>" not in label_text
+        assert str(tmp_dir / "ws") in label_text
+        assert "跨页项目" in label_text
+        view.close()
+        view.deleteLater()
+    finally:
+        reset_singletons()
+        reset_session_state()
+
+
+def test_import_view_e2e_copy_to_workspace_after_cross_page_select(
+    tmp_dir, monkeypatch
+):
+    """回归 E2E：概览页选项目 → 进入导入页 → 勾选复制到工作区 → 导入成功。
+
+    覆盖完整用户流程：跨页选择项目后，导入页地址提示显示真实工作区路径，
+    勾选「复制到工作区」后导入按钮可用，导入执行成功且文件已复制到
+    <工作区目录>/<项目名>/ 下。
+    """
+    from DITWorkstation.App import config
+    from DITWorkstation.App.session_context import (
+        reset_session_state,
+        set_current_project,
+        set_current_workspace,
+    )
+    from DITWorkstation.Utils import common, reset_singletons
+    from DITWorkstation.Views.media_import_view import MediaImportView
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    reset_singletons()
+    reset_session_state()
+    monkeypatch.setattr(config, "usage_mode", "team")
+    db = DatabaseService(db_path=tmp_dir / "test.db")
+    common._shared_db_service = db
+    try:
+        ws = db.create_workspace(name="WS", path=str(tmp_dir / "ws"))
+        # 工作区目录必须真实存在且可写，否则 _start_import 会按设计弹
+        # 「选择工作区目录」对话框等待用户选择（offscreen 下无法交互）
+        (tmp_dir / "ws").mkdir(parents=True, exist_ok=True)
+        project = db.create_project(name="E2E项目", workspace_id=ws.workspace_id)
+        source = tmp_dir / "card"
+        source.mkdir()
+        (source / "a.jpg").write_bytes(b"fake jpeg data")
+
+        view = MediaImportView()
+        # 第 1 步：在项目概览页选择项目（导入页此时不可见）
+        set_current_workspace(ws.workspace_id)
+        set_current_project(project.project_id)
+        # 第 2 步：进入媒体导入页，节流刷新同步项目状态
+        view.show()
+        view._on_show_refresh()
+        assert view.current_project is not None
+        # 第 3 步：选择源目录并扫描（默认全勾选）
+        view.set_source_folder(str(source), auto_scan=True)
+        assert view._selected_files(), "扫描后文件应默认勾选"
+        # 第 4 步：勾选「复制到工作区」，地址提示显示真实路径、导入按钮可用
+        view.copy_mode_check.setChecked(True)
+        assert "<项目名>" not in view.copy_dest_label.text()
+        assert view.import_btn.isEnabled()
+        # 第 5 步：执行导入并等待后台任务完成
+        # （导入完成后视图会弹模态「导入完成」对话框，offscreen 环境下自动关闭，
+        #   避免 QEventLoop 被模态 exec 阻塞；生产环境行为不变）
+        import PySide6.QtWidgets as QW
+
+        monkeypatch.setattr(QW.QMessageBox, "exec", lambda self: 0)
+        loop = QEventLoop()
+        view.task_vm.finished.connect(loop.quit)
+        QTimer.singleShot(15000, loop.quit)
+        view._start_import()
+        loop.exec()
+        assert not view.task_vm.is_running()
+        # 校验：素材入库且文件已复制到 <工作区>/<项目名>/
+        assets = db.get_media_assets(project.project_id)
+        assert len(assets) == 1
+        copied = tmp_dir / "ws" / "E2E项目" / "a.jpg"
+        assert copied.exists()
+        view.close()
+        view.deleteLater()
+    finally:
+        reset_singletons()
+        reset_session_state()
+
+
 # ===== 功能模式：极简模式主窗口构建 =====
 
 

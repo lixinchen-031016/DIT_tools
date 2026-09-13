@@ -473,7 +473,31 @@ class MediaImportView(RefreshOnShowView):
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
         self.selector.refresh()
+        self._sync_view_project_state()
         self._sync_copy_check_state()
+
+    def _sync_view_project_state(self):
+        """页面显示时，把选择器当前选中项目同步到本视图状态（状态传递缺陷修复）。
+
+        根因：在其它页面（如项目概览）切换项目时，本视图不可见，
+        WorkspaceProjectSelector._on_global_project_changed 会因
+        isVisible() 为 False 提前返回，project_changed 信号不发射；
+        随后 selector.refresh() 又以 blockSignals 方式重载下拉，
+        同样不会触发 _on_project_changed。结果本视图 current_project
+        停留在旧值/None：
+        - 复制目标提示停留在「→ …/<项目名>」占位符，而非实际工作区路径
+        - 导入按钮因 current_project 为 None 被禁用，
+          _start_import 也会被「请先选择项目」拦截，导入无法执行
+
+        因此每次页面显示刷新后，读取选择器实际选中项并与视图状态比对，
+        不一致时复用 _on_project_changed 完成全部业务联动
+        （加载日志、更新目标提示、同步导入按钮可用性）。
+        """
+        project_id = self.selector.get_current_project_id()
+        current_id = self.current_project.project_id if self.current_project else None
+        if project_id == current_id:
+            return
+        self._on_project_changed(project_id)
 
     @Slot(str)
     def _on_data_changed(self, event: str):
@@ -499,6 +523,10 @@ class MediaImportView(RefreshOnShowView):
         if self.current_project:
             self._log(f"已选择项目: {self.current_project.name}")
             self._load_logs(project_id)
+            self._update_selected_label()
+            self._update_copy_dest_label()
+        else:
+            # 项目查询失败（如已被删除）：同步清空联动状态，避免按钮/提示失真
             self._update_selected_label()
             self._update_copy_dest_label()
 
