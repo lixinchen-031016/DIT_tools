@@ -70,7 +70,9 @@ class PageHeader(QWidget):
         # ---- 底部 1px 分隔线（BORDER 色）----
         self._separator = QWidget(self)
         self._separator.setFixedHeight(1)
-        self._separator.setStyleSheet(f"background-color: {COLOR.BORDER}; border: none;")
+        self._separator.setStyleSheet(
+            f"background-color: {COLOR.BORDER}; border: none;"
+        )
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)

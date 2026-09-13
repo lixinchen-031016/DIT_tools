@@ -69,7 +69,9 @@ class PathField(QWidget):
 
         self._browse_btn = QToolButton(self)
         self._browse_btn.setAutoRaise(True)
-        self._browse_btn.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        self._browse_btn.setIcon(
+            style.standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)
+        )
         self._browse_btn.setToolTip("浏览…（选择目录）")
         self._browse_btn.setMinimumSize(28, 28)
         self._browse_btn.setStyleSheet(TOOL_BUTTON_QSS)
@@ -87,9 +89,7 @@ class PathField(QWidget):
 
         self._clear_btn = QToolButton(self)
         self._clear_btn.setAutoRaise(True)
-        self._clear_btn.setIcon(
-            style.standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
-        )
+        self._clear_btn.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
         self._clear_btn.setToolTip("清除路径")
         self._clear_btn.setMinimumSize(28, 28)
         self._clear_btn.setStyleSheet(TOOL_BUTTON_QSS)

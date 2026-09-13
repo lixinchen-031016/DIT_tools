@@ -691,7 +691,9 @@ class BackupView(RefreshOnShowView):
             del_btn = QPushButton()
             del_btn.setFixedSize(24, 24)
             # Qt 内置标准图标替代 ✕ 字形（§5.4）
-            del_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCloseButton))
+            del_btn.setIcon(
+                self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCloseButton)
+            )
             del_btn.setToolTip("移除此目标")
             del_btn.setStyleSheet(f"""
                 QPushButton {{

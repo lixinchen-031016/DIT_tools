@@ -70,9 +70,7 @@ class StatusBanner(QWidget):
         self._text_label.setWordWrap(True)  # 中文长文本换行（§5.2）
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(
-            SPACING.MD, SPACING.SM, SPACING.MD, SPACING.SM
-        )
+        layout.setContentsMargins(SPACING.MD, SPACING.SM, SPACING.MD, SPACING.SM)
         layout.setSpacing(SPACING.SM)
         layout.addWidget(self._icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self._text_label, 1, Qt.AlignmentFlag.AlignVCenter)

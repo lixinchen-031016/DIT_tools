@@ -514,6 +514,7 @@ TOOL_BUTTON_QSS = _tool_button_qss(COLOR)
 TITLE_QSS = _title_qss(COLOR)
 SUBTITLE_QSS = _subtitle_qss(COLOR)
 
+
 def set_active_palette(palette: ThemePalette) -> None:
     """切换当前激活调色板并重建所有 QSS 常量（§8.3，本次仅建立机制）。
 

@@ -166,9 +166,7 @@ class MainWindow(QMainWindow):
         current_group: str | None = None
         for stack_index, (key, text, tooltip) in enumerate(self.active_nav_items):
             # 组名变化时插入分组标题行（§4.1）
-            group = next(
-                (name for name, keys in NAV_GROUPS.items() if key in keys), ""
-            )
+            group = next((name for name, keys in NAV_GROUPS.items() if key in keys), "")
             if group and group != current_group:
                 header = QListWidgetItem(group)
                 # 不可选中、不可聚焦：点击无效果，currentRow 不会落在标题行
@@ -183,7 +181,11 @@ class MainWindow(QMainWindow):
             current_group = group
 
             item = QListWidgetItem(text)
-            item.setIcon(self.style().standardIcon(_NAV_ICON_BY_KEY.get(key, QStyle.StandardPixmap.SP_FileIcon)))
+            item.setIcon(
+                self.style().standardIcon(
+                    _NAV_ICON_BY_KEY.get(key, QStyle.StandardPixmap.SP_FileIcon)
+                )
+            )
             item.setToolTip(tooltip)
             item.setSizeHint(QSize(NAV_WIDTH_EXPANDED - 24, 40))
             item.setForeground(QColor(COLOR.SIDEBAR_TEXT))
@@ -314,9 +316,7 @@ class MainWindow(QMainWindow):
         # Ctrl+1~N 切换到对应导航页（N = 激活导航项数量：团队 9 / 个人 7 / 极简 1）
         # 索引为「激活导航列表中的位置」（栈索引），经映射转换为列表控件行号
         for i in range(1, len(self.active_nav_items) + 1):
-            add_shortcut(
-                f"Ctrl+{i}", lambda idx=i - 1: self._select_stack_index(idx)
-            )
+            add_shortcut(f"Ctrl+{i}", lambda idx=i - 1: self._select_stack_index(idx))
         add_shortcut("F5", self._refresh_current_view)
         add_shortcut("Ctrl+K", self._show_command_palette)
         add_shortcut("Esc", self._cancel_running_workers)
@@ -853,7 +853,9 @@ class MainWindow(QMainWindow):
             self.card_automation_worker.deleteLater
         )
         self.card_automation_worker.start()
-        self._set_task_status(f"自动处理相机卡: {Path(source_path).name}", COLOR.WARNING)
+        self._set_task_status(
+            f"自动处理相机卡: {Path(source_path).name}", COLOR.WARNING
+        )
 
     @Slot(str, float, str)
     def _on_card_automation_progress(self, target: str, progress: float, message: str):
