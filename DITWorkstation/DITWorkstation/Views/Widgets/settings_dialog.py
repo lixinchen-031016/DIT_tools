@@ -1,5 +1,6 @@
 """设置对话框：数据存储位置重设 / 临时文件清理 / 最近路径管理 / 运行参数"""
 
+import platform
 import shutil
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -34,6 +36,7 @@ from DITWorkstation.App.feature_flags import (
     set_minimal_import_target_dir,
     set_usage_mode,
 )
+from DITWorkstation.Services.card_automation_service import SOP_STEPS
 from DITWorkstation.Utils import (
     clear_recent_paths,
     count_recent_paths,
@@ -47,14 +50,108 @@ from DITWorkstation.Utils import (
     logger,
     open_in_file_manager,
     pick_directory,
+    pick_save_file,
     save_app_settings,
 )
 from DITWorkstation.Views.Styles.theme import (
     COLOR,
     FONT_SIZE,
+    SECONDARY_BUTTON_QSS,
     SUBTITLE_QSS,
     TITLE_QSS,
 )
+from DITWorkstation.Views.Widgets.path_field import PathField
+
+#: SOP 步骤名 → 展示名（模块化勾选用；步骤顺序以 SOP_STEPS 为准）
+_SOP_STEP_LABELS = {
+    "import": "导入素材",
+    "backup": "备份",
+    "raw_extract": "RAW 提取",
+    "rename": "重命名",
+    "report": "报告",
+}
+
+#: 自动重命名模板预设（与文件重命名视图的 4 种预设一致）
+_RENAME_PATTERN_PRESETS = (
+    "{scene}_{shot}_{take}_{number}",
+    "{scene}_{shot}_{take}_{original}",
+    "{prefix}_{scene}_{number}",
+    "{date}_{scene}_{shot}_{number}",
+)
+
+
+def _post_ingest_hook_presets() -> list[tuple[str, str]]:
+    """按平台返回常用 post-ingest 钩子预设（展示名, 命令）。
+
+    命令均为可直接执行的 shell 片段，上下文经 DIT_* 环境变量注入。
+    """
+    system = platform.system()
+    if system == "Darwin":
+        return [
+            (
+                "macOS 桌面通知",
+                (
+                    'osascript -e \'display notification "相机卡处理完成" '
+                    'with title "DIT 工作站"\''
+                ),
+            ),
+            ("macOS 打开源卡目录", 'open "$DIT_SOURCE_PATH"'),
+            (
+                "追加日志到桌面文件",
+                (
+                    'echo "$(date "+%F %T") $DIT_SOURCE_PATH 完成" '
+                    ">> ~/Desktop/dit_hooks.log"
+                ),
+            ),
+            (
+                "Webhook 通知（POST JSON）",
+                (
+                    'curl -s -X POST -H "Content-Type: application/json" '
+                    '-d "{\\"event\\":\\"post_ingest\\",'
+                    '\\"source\\":\\"$DIT_SOURCE_PATH\\"}" https://example.com/hook'
+                ),
+            ),
+        ]
+    if system == "Windows":
+        return [
+            (
+                "Windows 弹窗通知",
+                (
+                    "powershell -NoProfile -Command "
+                    '"Add-Type -AssemblyName PresentationFramework; '
+                    "[System.Windows.MessageBox]::Show("
+                    "$env:DIT_SOURCE_PATH, 'DIT 工作站 - 相机卡处理完成')\""
+                ),
+            ),
+            ("Windows 打开源卡目录", "explorer %DIT_SOURCE_PATH%"),
+            (
+                "追加日志到临时文件",
+                'echo %DIT_SOURCE_PATH% >> "%TEMP%\\dit_hooks.log"',
+            ),
+            (
+                "Webhook 通知（POST JSON）",
+                (
+                    'curl -s -X POST -H "Content-Type: application/json" '
+                    '-d "{\\"event\\":\\"post_ingest\\"}" https://example.com/hook'
+                ),
+            ),
+        ]
+    return [
+        (
+            "追加日志到桌面文件",
+            'echo "$(date "+%F %T") $DIT_SOURCE_PATH 完成" >> ~/dit_hooks.log',
+        ),
+        ("打开源卡目录", 'xdg-open "$DIT_SOURCE_PATH"'),
+        (
+            "Webhook 通知（POST JSON）",
+            (
+                'curl -s -X POST -H "Content-Type: application/json" '
+                '-d "{\\"event\\":\\"post_ingest\\",'
+                '\\"source\\":\\"$DIT_SOURCE_PATH\\"}" https://example.com/hook'
+            ),
+        ),
+    ]
+
 
 #: 使用模式值 → 展示名（模式切换提示文案用）
 _MODE_LABELS = {
@@ -317,54 +414,95 @@ class SettingsDialog(QDialog):
         self.auto_card_backup_check.toggled.connect(self._on_auto_card_backup_toggled)
         volume_layout.addWidget(self.auto_card_backup_check)
 
-        self.auto_card_steps_edit = QLineEdit()
-        self.auto_card_steps_edit.setPlaceholderText(
-            "留空使用上面两个开关；或输入 import,backup,report"
+        # ---- SOP 模块化勾选：勾选即拼入流程（按 SOP_STEPS 固定顺序执行）----
+        self.auto_card_steps_label = QLabel(
+            "SOP 流程模块（勾选即拼入流程；全部不勾选时按上面两个开关执行）:"
         )
-        self.auto_card_steps_edit.setToolTip(
-            "可选步骤：import, backup, raw_extract, rename, report；按输入顺序执行。"
-        )
-        self.auto_card_steps_label = QLabel("高级 SOP 步骤（逗号分隔）:")
         volume_layout.addWidget(self.auto_card_steps_label)
-        volume_layout.addWidget(self.auto_card_steps_edit)
-        self.auto_card_raw_output_edit = QLineEdit()
-        self.auto_card_raw_output_edit.setPlaceholderText("raw_extract 步骤的输出目录")
+        steps_grid = QGridLayout()
+        steps_grid.setContentsMargins(0, 0, 0, 0)
+        self._sop_step_checks: dict[str, QCheckBox] = {}
+        for column, step in enumerate(SOP_STEPS):
+            check = QCheckBox(_SOP_STEP_LABELS.get(step, step))
+            check.setToolTip(f"步骤名：{step}")
+            check.toggled.connect(self._save_advanced_card_automation)
+            self._sop_step_checks[step] = check
+            steps_grid.addWidget(check, 0, column)
+        steps_grid.setColumnStretch(len(SOP_STEPS), 1)
+        volume_layout.addLayout(steps_grid)
+
+        # ---- RAW 提取输出目录：浏览选择 / 打开 / 清除 + 可手动编辑 ----
         self.auto_card_raw_output_label = QLabel("RAW 提取输出目录:")
         volume_layout.addWidget(self.auto_card_raw_output_label)
-        volume_layout.addWidget(self.auto_card_raw_output_edit)
-        self.auto_card_rename_pattern_edit = QLineEdit()
-        self.auto_card_rename_pattern_edit.setPlaceholderText(
-            "rename 步骤的命名模板，例如 {scene}_{number}"
+        self.auto_card_raw_output_field = PathField(
+            "raw_extract 步骤的输出目录（可浏览选择或手动输入）"
         )
+        self.auto_card_raw_output_field.set_editable(True)
+        self.auto_card_raw_output_field.path_changed.connect(
+            self._save_advanced_card_automation
+        )
+        volume_layout.addWidget(self.auto_card_raw_output_field)
+
+        # ---- 自动重命名模板：预设下拉（可编辑）+ 手动输入混合 ----
         self.auto_card_rename_pattern_label = QLabel("自动重命名模板:")
         volume_layout.addWidget(self.auto_card_rename_pattern_label)
-        volume_layout.addWidget(self.auto_card_rename_pattern_edit)
+        self.auto_card_rename_combo = QComboBox()
+        self.auto_card_rename_combo.setEditable(True)
+        for pattern in _RENAME_PATTERN_PRESETS:
+            self.auto_card_rename_combo.addItem(pattern, pattern)
+        self.auto_card_rename_combo.setToolTip(
+            "从预设模板选择后可再手动修改；支持变量：{scene} {shot} {take} "
+            "{original} {number} {prefix} {suffix} {date}"
+        )
+        self.auto_card_rename_combo.activated.connect(self._on_rename_preset_activated)
+        combo_line = self.auto_card_rename_combo.lineEdit()
+        if combo_line is not None:
+            combo_line.setPlaceholderText(
+                "rename 步骤的命名模板，例如 {scene}_{number}"
+            )
+            combo_line.textEdited.connect(self._save_advanced_card_automation)
+        volume_layout.addWidget(self.auto_card_rename_combo)
+
+        # ---- 自动报告路径：浏览选择 + 手动输入混合 ----
+        self.auto_card_report_path_label = QLabel("自动报告路径:")
+        volume_layout.addWidget(self.auto_card_report_path_label)
+        report_row = QHBoxLayout()
         self.auto_card_report_path_edit = QLineEdit()
         self.auto_card_report_path_edit.setPlaceholderText(
             "report 步骤的 PDF 路径，可留空使用默认目录"
         )
-        self.auto_card_report_path_label = QLabel("自动报告路径:")
-        volume_layout.addWidget(self.auto_card_report_path_label)
-        volume_layout.addWidget(self.auto_card_report_path_edit)
-        self.post_ingest_hook_edit = QLineEdit()
-        self.post_ingest_hook_edit.setPlaceholderText(
-            "留空禁用；例如 osascript -e 'display notification \"备份完成\"'"
+        self.auto_card_report_path_edit.textEdited.connect(
+            self._save_advanced_card_automation
         )
-        self.post_ingest_hook_edit.setToolTip(
-            "自动流程完成后执行的 shell 命令（webhook/通知/同步脚本均可）。\n"
-            "上下文经环境变量注入：DIT_SOURCE_PATH、DIT_PROJECT_ID、DIT_RESULT（JSON）。"
+        self.auto_card_report_browse_btn = QPushButton("浏览…")
+        self.auto_card_report_browse_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
+        self.auto_card_report_browse_btn.setToolTip(
+            "用系统文件对话框选择报告输出 PDF 路径"
         )
+        self.auto_card_report_browse_btn.clicked.connect(self._browse_report_path)
+        report_row.addWidget(self.auto_card_report_path_edit, 1)
+        report_row.addWidget(self.auto_card_report_browse_btn)
+        volume_layout.addLayout(report_row)
+
+        # ---- post-ingest 钩子：常用预设下拉（可编辑）+ 手动输入混合 ----
         self.post_ingest_hook_label = QLabel("post-ingest 钩子命令:")
         volume_layout.addWidget(self.post_ingest_hook_label)
-        volume_layout.addWidget(self.post_ingest_hook_edit)
-        for editor in (
-            self.auto_card_steps_edit,
-            self.auto_card_raw_output_edit,
-            self.auto_card_rename_pattern_edit,
-            self.auto_card_report_path_edit,
-            self.post_ingest_hook_edit,
-        ):
-            editor.editingFinished.connect(self._save_advanced_card_automation)
+        self.post_ingest_hook_combo = QComboBox()
+        self.post_ingest_hook_combo.setEditable(True)
+        for preset_label, command in _post_ingest_hook_presets():
+            self.post_ingest_hook_combo.addItem(preset_label, command)
+        self.post_ingest_hook_combo.setToolTip(
+            "自动流程完成后执行的 shell 命令（webhook/通知/同步脚本均可），留空禁用。\n"
+            "从下拉选择常用预设后自动填入命令，可再手动修改；\n"
+            "上下文经环境变量注入：DIT_SOURCE_PATH、DIT_PROJECT_ID、"
+            "DIT_CAMERA_MAKE、DIT_CAMERA_MODEL、DIT_RESULT（JSON）。"
+        )
+        self.post_ingest_hook_combo.activated.connect(self._on_hook_preset_activated)
+        hook_line = self.post_ingest_hook_combo.lineEdit()
+        if hook_line is not None:
+            hook_line.setPlaceholderText("留空禁用；可从下拉选择常用预设再修改")
+            hook_line.textEdited.connect(self._save_advanced_card_automation)
+        volume_layout.addWidget(self.post_ingest_hook_combo)
 
         volume_form = QFormLayout()
         self.auto_card_project_combo = QComboBox()
@@ -389,15 +527,16 @@ class SettingsDialog(QDialog):
             self.auto_card_import_check,
             self.auto_card_backup_check,
             self.auto_card_steps_label,
-            self.auto_card_steps_edit,
+            *self._sop_step_checks.values(),
             self.auto_card_raw_output_label,
-            self.auto_card_raw_output_edit,
+            self.auto_card_raw_output_field,
             self.auto_card_rename_pattern_label,
-            self.auto_card_rename_pattern_edit,
+            self.auto_card_rename_combo,
             self.auto_card_report_path_label,
             self.auto_card_report_path_edit,
+            self.auto_card_report_browse_btn,
             self.post_ingest_hook_label,
-            self.post_ingest_hook_edit,
+            self.post_ingest_hook_combo,
             self.auto_card_project_label,
             self.auto_card_project_combo,
             self.auto_card_template_label,
@@ -552,13 +691,21 @@ class SettingsDialog(QDialog):
         self.auto_card_automation_check.setChecked(config.auto_card_automation_enabled)
         self.auto_card_import_check.setChecked(config.auto_card_import)
         self.auto_card_backup_check.setChecked(config.auto_card_backup)
-        self.auto_card_steps_edit.setText(",".join(config.auto_card_steps))
-        self.auto_card_raw_output_edit.setText(config.auto_card_raw_output_dir)
-        self.auto_card_rename_pattern_edit.setText(config.auto_card_rename_pattern)
+        saved_steps = set(getattr(config, "auto_card_steps", []) or [])
+        for step, check in self._sop_step_checks.items():
+            check.blockSignals(True)
+            check.setChecked(step in saved_steps)
+            check.blockSignals(False)
+        self.auto_card_raw_output_field.set_path(config.auto_card_raw_output_dir)
+        self.auto_card_rename_combo.blockSignals(True)
+        self.auto_card_rename_combo.setEditText(config.auto_card_rename_pattern)
+        self.auto_card_rename_combo.blockSignals(False)
         self.auto_card_report_path_edit.setText(config.auto_card_report_path)
-        self.post_ingest_hook_edit.setText(
-            getattr(config, "post_ingest_hook_command", "")
-        )
+        self.post_ingest_hook_combo.blockSignals(True)
+        hook_line = self.post_ingest_hook_combo.lineEdit()
+        if hook_line is not None:
+            hook_line.setText(getattr(config, "post_ingest_hook_command", ""))
+        self.post_ingest_hook_combo.blockSignals(False)
 
     # ===== 使用场景（功能模式开关）=====
 
@@ -927,22 +1074,22 @@ class SettingsDialog(QDialog):
         save_app_settings(auto_card_backup=checked)
 
     def _save_advanced_card_automation(self):
-        """保存高级 SOP 字段；由编辑完成信号调用，空步骤回退兼容开关。"""
-        from DITWorkstation.Services.card_automation_service import SOP_STEPS
+        """保存 SOP 模块勾选与各路径/模板/钩子字段；由编辑完成信号调用。
 
-        raw_steps = [
-            item.strip()
-            for item in self.auto_card_steps_edit.text().split(",")
-            if item.strip()
-        ]
-        steps = list(dict.fromkeys(item for item in raw_steps if item in SOP_STEPS))
+        全部模块不勾选时存空列表，运行期由兼容开关（自动导入/自动备份）
+        推导步骤，保持历史行为。
+        """
+        steps = [s for s in SOP_STEPS if self._sop_step_checks[s].isChecked()]
         config.auto_card_steps = steps
-        config.auto_card_raw_output_dir = self.auto_card_raw_output_edit.text().strip()
+        config.auto_card_raw_output_dir = self.auto_card_raw_output_field.path().strip()
         config.auto_card_rename_pattern = (
-            self.auto_card_rename_pattern_edit.text().strip()
+            self.auto_card_rename_combo.currentText().strip()
         )
         config.auto_card_report_path = self.auto_card_report_path_edit.text().strip()
-        config.post_ingest_hook_command = self.post_ingest_hook_edit.text().strip()
+        hook_line = self.post_ingest_hook_combo.lineEdit()
+        config.post_ingest_hook_command = (
+            hook_line.text().strip() if hook_line is not None else ""
+        )
         save_app_settings(
             auto_card_steps=steps,
             auto_card_raw_output_dir=config.auto_card_raw_output_dir,
@@ -950,6 +1097,35 @@ class SettingsDialog(QDialog):
             auto_card_report_path=config.auto_card_report_path,
             post_ingest_hook_command=config.post_ingest_hook_command,
         )
+
+    def _on_rename_preset_activated(self, index: int):
+        """选择重命名预设：把预设模板填入编辑框并保存。"""
+        pattern = self.auto_card_rename_combo.itemData(index)
+        if pattern:
+            self.auto_card_rename_combo.setEditText(pattern)
+        self._save_advanced_card_automation()
+
+    def _on_hook_preset_activated(self, index: int):
+        """选择钩子预设：把预设命令填入编辑框并保存。"""
+        command = self.post_ingest_hook_combo.itemData(index)
+        if command:
+            self.post_ingest_hook_combo.setEditText(command)
+        self._save_advanced_card_automation()
+
+    def _browse_report_path(self):
+        """用系统文件对话框选择自动报告输出 PDF 路径。"""
+        current = self.auto_card_report_path_edit.text().strip()
+        path = pick_save_file(
+            self,
+            "选择自动报告输出路径",
+            current,
+            "PDF 文件 (*.pdf);;所有文件 (*)",
+            default_suffix="pdf",
+        )
+        if not path:
+            return
+        self.auto_card_report_path_edit.setText(path)
+        self._save_advanced_card_automation()
 
     def _on_auto_card_project_changed(self, index: int):
         value = self.auto_card_project_combo.itemData(index) or ""
