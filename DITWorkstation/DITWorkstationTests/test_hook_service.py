@@ -1,5 +1,6 @@
 """post-ingest 钩子服务测试。"""
 
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,16 +14,23 @@ class TestHookService(unittest.TestCase):
         self.assertTrue(ok)
 
     def test_command_success_and_env_context(self):
-        """命令成功执行且环境变量上下文可见"""
+        """命令成功执行且环境变量上下文可见（跨平台：不依赖 shell 变量语法）"""
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "env.txt"
-            # 通过环境变量把 DIT_SOURCE_PATH 落盘，验证上下文注入
+            # 通过环境变量把 DIT_SOURCE_PATH 落盘，验证上下文注入。
+            # 用 Python 子进程而非 echo "$VAR"：Windows cmd 不展开 $VAR，
+            # %VAR% 写法又不兼容 POSIX，子进程方式两端行为一致。
+            code = (
+                "import os, sys; "
+                "open(sys.argv[1], 'w', encoding='utf-8')"
+                ".write(os.environ.get('DIT_SOURCE_PATH', ''))"
+            )
             ok, _summary = run_post_ingest_hook(
-                f'echo "$DIT_SOURCE_PATH" > "{out}"',
+                f'"{sys.executable}" -c "{code}" "{out}"',
                 {"source_path": "/Volumes/CARD_A"},
             )
             self.assertTrue(ok)
-            self.assertEqual(out.read_text().strip(), "/Volumes/CARD_A")
+            self.assertEqual(out.read_text(encoding="utf-8"), "/Volumes/CARD_A")
 
     def test_command_failure_returncode(self):
         ok, summary = run_post_ingest_hook("exit 3")
