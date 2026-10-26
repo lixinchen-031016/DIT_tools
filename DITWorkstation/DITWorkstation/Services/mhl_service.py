@@ -190,18 +190,16 @@ def parse_mhl(mhl_path: str | Path) -> tuple[str, list[MHLFileEntry]]:
         value_node = node.find("hashvalue")
         size_node = node.find("size")
         date_node = node.find("lastmodificationdate") or node.find("hashdate")
+        size_text = size_node.text if size_node is not None else None
+        fmt_text = (fmt_node.text if fmt_node is not None else "") or default_format
         entries.append(
             MHLFileEntry(
                 path=path_node.text.strip(),
-                size=int(size_node.text)
-                if size_node is not None and (size_node.text or "").isdigit()
-                else None,
+                size=int(size_text) if size_text and size_text.isdigit() else None,
                 last_modification_date=date_node.text
                 if date_node is not None
                 else None,
-                hash_format=(fmt_node.text or "").strip().lower()
-                if fmt_node is not None
-                else default_format,
+                hash_format=(fmt_text or "").strip().lower(),
                 hash_value=value_node.text.strip() if value_node is not None else "",
             )
         )

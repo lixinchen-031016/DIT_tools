@@ -238,11 +238,15 @@ class ThumbnailService(QObject):
         try:
             with rawpy.imread(str(file_path)) as raw:
                 thumb = raw.extract_thumb()
-            if thumb.format == rawpy.ThumbFormat.JPEG:
-                img = Image.open(io.BytesIO(thumb.data))
+            # 用数据类型区分两种预览格式（rawpy 无类型存根，直接引用
+            # ThumbFormat 枚举会触发 pyright reportPrivateImportUsage）：
+            # JPEG 预览返回 bytes，RGB 像素预览返回 ndarray
+            data = thumb.data
+            if isinstance(data, bytes):
+                img = Image.open(io.BytesIO(data))
                 img.draft("RGB", (size, size))
             else:
-                img = Image.fromarray(thumb.data)
+                img = Image.fromarray(data)
             return ThumbnailService._to_png(img, size)
         except Exception as e:
             logger.debug(f"RAW 内嵌预览提取失败 {file_path}: {e}")
