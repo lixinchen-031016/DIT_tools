@@ -158,7 +158,9 @@ class ProjectDashboardView(RefreshOnShowView):
         self.selector = WorkspaceProjectSelector(
             project_widget="combo",
             show_edit_workspace=True,
+            show_delete_workspace=True,
             show_new_project=True,
+            show_delete_project=True,
             db_service=self.db_service,
         )
         header.addWidget(self.selector)

@@ -60,10 +60,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: 配置 Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -72,10 +72,16 @@ jobs:
       - name: 安装系统依赖 (Qt offscreen 运行所需)
         run: |
           sudo apt-get update -y
+          # ICU / glib 运行库包名随 Ubuntu 版本变化（soname 递增 / t64 后缀）：
+          #   22.04=libicu70, 24.04=libicu74, 26.04=更新 soname；glib 有 -t64 变体。
+          # 按当前软件源动态解析，兼容 ubuntu-latest 的版本漂移。
+          ICU_PKG=$(apt-cache search --names-only '^libicu[0-9]+$' | awk '{print $1}' | sort -V | tail -1)
+          GLIB_PKG=$(apt-cache search --names-only '^libglib2\.0-0(t64)?$' | awk '{print $1}' | sort -V | tail -1)
+          echo "解析到运行库包名: ICU=${ICU_PKG:?未找到 libicu 运行库} GLIB=${GLIB_PKG:?未找到 libglib2.0 运行库}"
           sudo apt-get install -y --no-install-recommends \
-            libgl1 libglib2.0-0 libegl1 libxkbcommon0 libdbus-1-3 \
+            libgl1 "$GLIB_PKG" libegl1 libxkbcommon0 libdbus-1-3 \
             libx11-6 libxext6 libxrender1 libxcb1 libx11-xcb1 \
-            libxau6 libxdmcp6 libfontconfig1 libicu70 libgl1-mesa-dri
+            libxau6 libxdmcp6 libfontconfig1 "$ICU_PKG" libgl1-mesa-dri
 
       - name: 安装 Python 依赖
         run: |
@@ -101,7 +107,7 @@ jobs:
 
       - name: 上传测试报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: test-report
           path: test-report.xml
@@ -124,10 +130,10 @@ jobs:
       MACOS_NOTARIZE_TEAM_ID: ${{ secrets.MACOS_NOTARIZE_TEAM_ID }}
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: 配置 Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -187,7 +193,7 @@ jobs:
           fi
 
       - name: 上传 macOS 构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: macos-dist
           path: |
@@ -209,10 +215,10 @@ jobs:
       WINDOWS_SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: 配置 Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -287,7 +293,7 @@ jobs:
             /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 dist/DITWorkstation.exe
 
       - name: 上传 Windows 构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: windows-dist
           path: dist/DITWorkstation.exe
@@ -311,16 +317,16 @@ jobs:
       contents: write   # 创建 Release 所需
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: 下载 macOS 产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: macos-dist
           path: artifacts/macos
 
       - name: 下载 Windows 产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: windows-dist
           path: artifacts/windows

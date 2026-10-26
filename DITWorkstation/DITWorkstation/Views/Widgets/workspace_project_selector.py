@@ -64,6 +64,7 @@ class WorkspaceProjectSelector(QWidget):
         *,
         project_widget: str = "list",
         show_edit_workspace: bool = False,
+        show_delete_workspace: bool = False,
         show_new_project: bool = True,
         show_delete_project: bool = False,
         show_workspace: bool | None = None,
@@ -76,6 +77,8 @@ class WorkspaceProjectSelector(QWidget):
         Args:
             project_widget: "list" 垂直布局，"combo" 水平布局（均用 QComboBox）
             show_edit_workspace: 是否显示"编辑工作区"按钮
+            show_delete_workspace: 是否显示"删除工作区"按钮
+                （默认工作区 'default' 不可删除，其下项目删除时归入默认工作区）
             show_new_project: 是否显示"新建项目"按钮
             show_delete_project: 是否显示"删除项目"按钮
             show_workspace: 是否显示工作区相关控件（标签/下拉/新建/编辑）。
@@ -92,6 +95,7 @@ class WorkspaceProjectSelector(QWidget):
         self._db_service = db_service or get_db_service()
         self._project_widget_type = project_widget
         self._show_edit_workspace = show_edit_workspace
+        self._show_delete_workspace = show_delete_workspace
         self._show_new_project = show_new_project
         self._show_delete_project = show_delete_project
         # 个人模式默认隐藏工作区控件（功能模式开关统一裁决）
@@ -170,6 +174,12 @@ class WorkspaceProjectSelector(QWidget):
             self._edit_ws_btn.setEnabled(False)
             ws_btn_row.addWidget(self._edit_ws_btn)
             self._ws_widgets.append(self._edit_ws_btn)
+        if self._show_delete_workspace:
+            self._del_ws_btn = QPushButton("删除工作区")
+            self._del_ws_btn.clicked.connect(self._delete_workspace)
+            self._del_ws_btn.setEnabled(False)
+            ws_btn_row.addWidget(self._del_ws_btn)
+            self._ws_widgets.append(self._del_ws_btn)
         ws_btn_row.addStretch()
         layout.addLayout(ws_btn_row, 1, 1)
 
@@ -216,6 +226,13 @@ class WorkspaceProjectSelector(QWidget):
             self._edit_ws_btn.setEnabled(False)
             ws_btn_layout.addWidget(self._edit_ws_btn)
             self._ws_widgets.append(self._edit_ws_btn)
+
+        if self._show_delete_workspace:
+            self._del_ws_btn = QPushButton("删除工作区")
+            self._del_ws_btn.clicked.connect(self._delete_workspace)
+            self._del_ws_btn.setEnabled(False)
+            ws_btn_layout.addWidget(self._del_ws_btn)
+            self._ws_widgets.append(self._del_ws_btn)
 
         layout.addLayout(ws_btn_layout)
 
@@ -271,6 +288,13 @@ class WorkspaceProjectSelector(QWidget):
             self._edit_ws_btn.setEnabled(False)
             layout.addWidget(self._edit_ws_btn)
             self._ws_widgets.append(self._edit_ws_btn)
+
+        if self._show_delete_workspace:
+            self._del_ws_btn = QPushButton("删除工作区")
+            self._del_ws_btn.clicked.connect(self._delete_workspace)
+            self._del_ws_btn.setEnabled(False)
+            layout.addWidget(self._del_ws_btn)
+            self._ws_widgets.append(self._del_ws_btn)
 
         layout.addWidget(QLabel("项目:"))
         self.project_combo = QComboBox()
@@ -335,6 +359,8 @@ class WorkspaceProjectSelector(QWidget):
         # 编辑需选中具体工作区；新建项目只要有工作区即可（未选中时会自动解析/弹选择）。
         if self._show_edit_workspace:
             self._edit_ws_btn.setEnabled(target_index > 0)
+        if self._show_delete_workspace:
+            self._sync_delete_workspace_btn(self.workspace_combo.itemData(target_index))
         if self._show_new_project:
             if self._show_workspace:
                 self.new_proj_btn.setEnabled(len(workspaces) > 0)
@@ -389,6 +415,8 @@ class WorkspaceProjectSelector(QWidget):
         # 同步按钮启用状态
         if self._show_edit_workspace:
             self._edit_ws_btn.setEnabled(ws_id is not None)
+        if self._show_delete_workspace:
+            self._sync_delete_workspace_btn(ws_id)
         if self._show_new_project and self._show_workspace:
             self.new_proj_btn.setEnabled(self.workspace_combo.count() > 1)
         # 通知宿主视图
@@ -454,6 +482,8 @@ class WorkspaceProjectSelector(QWidget):
         self._load_projects()
         if self._show_edit_workspace:
             self._edit_ws_btn.setEnabled(workspace_id is not None)
+        if self._show_delete_workspace:
+            self._sync_delete_workspace_btn(workspace_id)
         if self._show_new_project and self._show_workspace:
             self.new_proj_btn.setEnabled(self.workspace_combo.count() > 1)
 
@@ -516,6 +546,46 @@ class WorkspaceProjectSelector(QWidget):
         get_data_bus().emit_data_changed("workspaces_changed")
         # 刷新下拉显示
         self._load_workspaces()
+
+    def _sync_delete_workspace_btn(self, ws_id):
+        """同步删除工作区按钮启用状态：选中具体工作区且非默认工作区时可用。"""
+        if not self._show_delete_workspace:
+            return
+        self._del_ws_btn.setEnabled(bool(ws_id) and ws_id != "default")
+
+    @safe_slot("删除工作区失败")
+    def _delete_workspace(self):
+        """删除当前选中的工作区（默认工作区不可删除；项目归入默认工作区）"""
+        ws_id = self.workspace_combo.currentData()
+        if not ws_id:
+            return
+        if ws_id == "default":
+            QMessageBox.information(self, "提示", "默认工作区不可删除。")
+            return
+        ws = self._db_service.get_workspace(ws_id)
+        if not ws:
+            QMessageBox.warning(self, "提示", "工作区不存在")
+            return
+        reply = QMessageBox.question(
+            self,
+            "确认删除工作区",
+            f"确定删除工作区「{ws.name}」？\n\n"
+            "该工作区下的项目将归入「默认工作区」，不会丢失；\n"
+            "工作区磁盘目录与媒体文件不受影响。此操作不可撤销。",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        if not self._db_service.delete_workspace(ws_id):
+            QMessageBox.warning(self, "删除失败", "工作区删除失败，请查看日志。")
+            return
+        # 删除的是当前工作区时清空全局会话状态，避免悬挂引用
+        if get_current_workspace_id() == ws_id:
+            set_current_workspace(None)
+        get_data_bus().emit_data_changed("workspaces_changed")
+        self._load_workspaces()
+        self._load_projects()
 
     @safe_slot("新建项目失败")
     def _create_project(self):

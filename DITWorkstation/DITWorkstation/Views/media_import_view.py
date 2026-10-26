@@ -128,6 +128,7 @@ class MediaImportView(RefreshOnShowView):
             project_widget="list",
             show_edit_workspace=False,
             show_new_project=True,
+            show_delete_project=True,
             db_service=self.db_service,
         )
         left_layout.addWidget(self.selector)

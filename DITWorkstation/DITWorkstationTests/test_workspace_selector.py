@@ -4,7 +4,7 @@ from DITWorkstation.Services.database_service import DatabaseService
 from DITWorkstation.Views.Widgets.workspace_project_selector import (
     WorkspaceProjectSelector,
 )
-from PySide6.QtWidgets import QInputDialog
+from PySide6.QtWidgets import QInputDialog, QMessageBox
 
 
 def _make_selector(db_service):
@@ -104,3 +104,113 @@ def test_create_workspace_reloads_selector(tmp_dir, monkeypatch):
     assert sel.workspace_combo.count() == 2
     assert sel.workspace_combo.currentData() is not None
     assert sel.new_proj_btn.isEnabled()
+
+
+def _make_deletable_selector(db_service):
+    sel = WorkspaceProjectSelector(
+        project_widget="list",
+        show_edit_workspace=True,
+        show_delete_workspace=True,
+        show_new_project=True,
+        show_delete_project=True,
+        db_service=db_service,
+    )
+    sel.show()
+    return sel
+
+
+def test_delete_workspace_reassigns_projects(tmp_dir, monkeypatch):
+    """删除非默认工作区：工作区消失，项目归入 default，全局会话清空"""
+    from DITWorkstation.App.session_context import (
+        get_current_workspace_id,
+        set_current_workspace,
+    )
+
+    db = DatabaseService(db_path=tmp_dir / "test.db")
+    db.get_or_create_default_workspace()
+    ws = db.create_workspace(name="待删工作区", path="/tmp/ws")
+    project = db.create_project(name="归属项目", workspace_id=ws.workspace_id)
+    sel = _make_deletable_selector(db)
+    set_current_workspace(ws.workspace_id)
+    sel.refresh()
+    assert sel._del_ws_btn.isEnabled()
+
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QMessageBox.question",
+        staticmethod(lambda *a, **k: QMessageBox.Yes),
+    )
+    sel._delete_workspace()
+
+    assert db.get_workspace(ws.workspace_id) is None
+    moved = db.get_project(project.project_id)
+    assert moved.workspace_id == "default"
+    assert get_current_workspace_id() is None
+    # 下拉刷新后不再包含已删除工作区
+    ids = [sel.workspace_combo.itemData(i) for i in range(sel.workspace_combo.count())]
+    assert ws.workspace_id not in ids
+
+
+def test_delete_workspace_default_guarded(tmp_dir, monkeypatch):
+    """默认工作区：按钮禁用；绕过按钮直接调用时给出提示且不删除"""
+    db = DatabaseService(db_path=tmp_dir / "test.db")
+    db.get_or_create_default_workspace()
+    sel = _make_deletable_selector(db)
+    sel.refresh()
+    # 选中 default → 按钮禁用
+    sel.workspace_combo.setCurrentIndex(sel.workspace_combo.findData("default"))
+    assert not sel._del_ws_btn.isEnabled()
+
+    messages = []
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QMessageBox.information",
+        staticmethod(lambda *a, **k: messages.append("shown")),
+    )
+    sel.workspace_combo.setCurrentIndex(sel.workspace_combo.findData("default"))
+    sel._del_ws_btn.setEnabled(True)  # 绕过禁用状态直接触发
+    sel._delete_workspace()
+    assert messages == ["shown"]
+    assert db.get_workspace("default") is not None
+
+
+def test_delete_workspace_cancelled_keeps_data(tmp_dir, monkeypatch):
+    """确认框选否：工作区与项目均保留"""
+    db = DatabaseService(db_path=tmp_dir / "test.db")
+    db.get_or_create_default_workspace()
+    ws = db.create_workspace(name="保留工作区", path="/tmp/keep")
+    project = db.create_project(name="保留项目", workspace_id=ws.workspace_id)
+    sel = _make_deletable_selector(db)
+    sel.refresh()
+    sel.workspace_combo.setCurrentIndex(sel.workspace_combo.findData(ws.workspace_id))
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QMessageBox.question",
+        staticmethod(lambda *a, **k: QMessageBox.No),
+    )
+    sel._delete_workspace()
+    assert db.get_workspace(ws.workspace_id) is not None
+    assert db.get_project(project.project_id) is not None
+
+
+def test_delete_project_refreshes_combo(tmp_dir, monkeypatch):
+    """删除项目后下拉刷新，全局项目清空"""
+    from DITWorkstation.App.session_context import (
+        get_current_project_id,
+        set_current_project,
+    )
+
+    db = DatabaseService(db_path=tmp_dir / "test.db")
+    db.get_or_create_default_workspace()
+    project = db.create_project(name="待删项目")
+    sel = _make_deletable_selector(db)
+    set_current_project(project.project_id)
+    sel.refresh()
+    sel.project_combo.setCurrentIndex(sel.project_combo.findData(project.project_id))
+    assert sel.del_proj_btn.isEnabled()
+
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QMessageBox.question",
+        staticmethod(lambda *a, **k: QMessageBox.Yes),
+    )
+    sel._delete_project()
+    assert get_current_project_id() is None
+    ids = [sel.project_combo.itemData(i) for i in range(sel.project_combo.count())]
+    assert project.project_id not in ids
