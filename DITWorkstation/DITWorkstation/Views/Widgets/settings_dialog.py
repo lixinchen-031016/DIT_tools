@@ -264,6 +264,17 @@ class SettingsDialog(QDialog):
         )
         self.verify_after_copy_check.toggled.connect(self._on_verify_after_copy_toggled)
         backup_layout.addWidget(self.verify_after_copy_check)
+
+        self.verify_source_reread_check = QCheckBox("备份完成后复读源卡校验（更安全）")
+        self.verify_source_reread_check.setToolTip(
+            "所有目标拷贝并验证通过后，重新读取源卡逐文件比对哈希。\n"
+            "能发现拷贝间隔内源卡内容变化（卡劣化/坏块），代价是源读取时间翻倍。\n"
+            "发现不一致时状态栏会警告「此卡可能劣化，请勿擦除」。"
+        )
+        self.verify_source_reread_check.toggled.connect(
+            self._on_verify_source_reread_toggled
+        )
+        backup_layout.addWidget(self.verify_source_reread_check)
         # 极简模式无备份模块，隐藏其专属默认项
         backup_group.setVisible(not is_minimal_mode())
         layout.addWidget(backup_group)
@@ -335,11 +346,23 @@ class SettingsDialog(QDialog):
         self.auto_card_report_path_label = QLabel("自动报告路径:")
         volume_layout.addWidget(self.auto_card_report_path_label)
         volume_layout.addWidget(self.auto_card_report_path_edit)
+        self.post_ingest_hook_edit = QLineEdit()
+        self.post_ingest_hook_edit.setPlaceholderText(
+            "留空禁用；例如 osascript -e 'display notification \"备份完成\"'"
+        )
+        self.post_ingest_hook_edit.setToolTip(
+            "自动流程完成后执行的 shell 命令（webhook/通知/同步脚本均可）。\n"
+            "上下文经环境变量注入：DIT_SOURCE_PATH、DIT_PROJECT_ID、DIT_RESULT（JSON）。"
+        )
+        self.post_ingest_hook_label = QLabel("post-ingest 钩子命令:")
+        volume_layout.addWidget(self.post_ingest_hook_label)
+        volume_layout.addWidget(self.post_ingest_hook_edit)
         for editor in (
             self.auto_card_steps_edit,
             self.auto_card_raw_output_edit,
             self.auto_card_rename_pattern_edit,
             self.auto_card_report_path_edit,
+            self.post_ingest_hook_edit,
         ):
             editor.editingFinished.connect(self._save_advanced_card_automation)
 
@@ -373,6 +396,8 @@ class SettingsDialog(QDialog):
             self.auto_card_rename_pattern_edit,
             self.auto_card_report_path_label,
             self.auto_card_report_path_edit,
+            self.post_ingest_hook_label,
+            self.post_ingest_hook_edit,
             self.auto_card_project_label,
             self.auto_card_project_combo,
             self.auto_card_template_label,
@@ -480,6 +505,9 @@ class SettingsDialog(QDialog):
         recent_total = count_recent_paths()
         self.recent_info_label.setText(f"共 {recent_total} 条最近使用记录")
         self.verify_after_copy_check.setChecked(config.verify_after_copy)
+        self.verify_source_reread_check.setChecked(
+            getattr(config, "verify_source_reread", False)
+        )
         self.auto_detect_check.setChecked(config.auto_detect_volume)
         self.skip_processed_cards_check.setChecked(
             bool(getattr(config, "skip_processed_cards", True))
@@ -528,6 +556,9 @@ class SettingsDialog(QDialog):
         self.auto_card_raw_output_edit.setText(config.auto_card_raw_output_dir)
         self.auto_card_rename_pattern_edit.setText(config.auto_card_rename_pattern)
         self.auto_card_report_path_edit.setText(config.auto_card_report_path)
+        self.post_ingest_hook_edit.setText(
+            getattr(config, "post_ingest_hook_command", "")
+        )
 
     # ===== 使用场景（功能模式开关）=====
 
@@ -875,6 +906,10 @@ class SettingsDialog(QDialog):
         config.verify_after_copy = checked
         save_app_settings(verify_after_copy=checked)
 
+    def _on_verify_source_reread_toggled(self, checked: bool):
+        config.verify_source_reread = checked
+        save_app_settings(verify_source_reread=checked)
+
     def _on_auto_detect_toggled(self, checked: bool):
         config.auto_detect_volume = checked
         save_app_settings(auto_detect_volume=checked)
@@ -907,11 +942,13 @@ class SettingsDialog(QDialog):
             self.auto_card_rename_pattern_edit.text().strip()
         )
         config.auto_card_report_path = self.auto_card_report_path_edit.text().strip()
+        config.post_ingest_hook_command = self.post_ingest_hook_edit.text().strip()
         save_app_settings(
             auto_card_steps=steps,
             auto_card_raw_output_dir=config.auto_card_raw_output_dir,
             auto_card_rename_pattern=config.auto_card_rename_pattern,
             auto_card_report_path=config.auto_card_report_path,
+            post_ingest_hook_command=config.post_ingest_hook_command,
         )
 
     def _on_auto_card_project_changed(self, index: int):

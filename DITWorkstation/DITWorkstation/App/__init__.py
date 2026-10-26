@@ -121,6 +121,7 @@ class AppConfig:
     # 备份配置
     max_parallel_copies: int = 4  # 最大并行拷贝数
     verify_after_copy: bool = True  # 拷贝后验证
+    verify_source_reread: bool = False  # 拷贝完成后复读源文件比对（检测劣化存储卡，双倍源读取耗时）
 
     # 存储卡自动识别
     auto_detect_volume: bool = True  # 检测到存储卡时自动跳转到导入视图并预填源目录
@@ -135,6 +136,11 @@ class AppConfig:
     auto_card_template_id: str = ""
     auto_card_project_id: str = ""
 
+    # post-ingest 钩子：相机卡自动流程完成后执行的 shell 命令（空=禁用）。
+    # 上下文经环境变量注入（DIT_SOURCE_PATH/DIT_PROJECT_ID/DIT_RESULT 等），
+    # 执行逻辑见 Services/hook_service.py。
+    post_ingest_hook_command: str = ""
+
     # 完整性校验调度：间隔小时数（0=禁用）；scope=all/backup
     integrity_check_interval_hours: int = 0
     integrity_check_scope: str = "all"
@@ -143,6 +149,11 @@ class AppConfig:
     # 多卡去重：跳过已处理过的存储卡指纹
     skip_processed_cards: bool = True
     processed_card_fingerprints: list[str] = field(default_factory=list)
+
+    # 存储卡擦除保护状态：指纹 -> verified/pending/failed。
+    # verified=备份完成且校验通过（可安全格式化）；pending=仅导入未备份；
+    # failed=备份失败或未完成。见 Services/card_identity.py。
+    card_verification_states: dict[str, str] = field(default_factory=dict)
 
     # 保存搜索上限
     saved_search_limit: int = 20

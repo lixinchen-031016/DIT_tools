@@ -135,14 +135,15 @@ class TestBackupService(unittest.TestCase):
         self.assertGreater(len(progress_data), 0)
 
     def test_mhl_report_generation(self):
-        """MHL报告生成"""
+        """MHL报告生成（ASC MHL v2 规范格式）"""
         job = self.service.create_backup_job(self.source_dir, [self.target1_dir])
         mhl = self.service.generate_mhl_report(job)
 
         self.assertIn('<?xml version="1.0"', mhl)
-        self.assertIn("<hashlist", mhl)
+        self.assertIn('<ascmhl version="2.0">', mhl)
         self.assertIn("<hashvalue>", mhl)
-        self.assertIn("xxhash64", mhl)
+        self.assertIn("<hashformat>xxh64</hashformat>", mhl)
+        self.assertIn("<toolname>DIT工作站</toolname>", mhl)
 
     def test_backup_continues_after_file_error(self):
         """单文件失败不中断整个目标：其余文件继续拷贝，目标标记 FAILED"""

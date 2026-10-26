@@ -1,5 +1,6 @@
 """主窗口与导航框架"""
 
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer, Slot
@@ -359,6 +360,9 @@ class MainWindow(QMainWindow):
 
         self.card_automation_worker = None
         self.card_automation_source_path = None
+        self.card_camera_info = None  # 最近插卡识别到的相机信息（EXIF）
+        self._kiosk_active = False  # KIOSK 窗口打开期间主窗口让出卡片事件
+        self._kiosk_window = None
         # 相机卡自动化依赖备份视图（项目/备份方案模板查询），且受特性开关约束。
         # 极简模式无备份视图且禁用 card_automation，此处安全跳过。
         self.card_automation_service = None
@@ -413,6 +417,13 @@ class MainWindow(QMainWindow):
         task_history_action.setToolTip("查看后台任务历史、错误摘要和可恢复任务")
         task_history_action.triggered.connect(self._show_task_center)
         task_history_action.setVisible(is_enabled("task_history"))
+
+        kiosk_action = settings_menu.addAction("KIOSK 跟机模式…")
+        kiosk_action.setToolTip(
+            "进入插卡即自动备份的全屏跟机界面，适合交给跟机员操作"
+        )
+        kiosk_action.triggered.connect(self._enter_kiosk_mode)
+        kiosk_action.setVisible(is_enabled("kiosk_mode"))
 
         # 帮助菜单
         help_menu = menubar.addMenu("帮助(&H)")
@@ -557,6 +568,17 @@ class MainWindow(QMainWindow):
         from DITWorkstation.Views.Widgets.task_history_dialog import TaskHistoryDialog
 
         TaskHistoryDialog(self).exec()
+
+    def _enter_kiosk_mode(self):
+        """进入 KIOSK 跟机模式：全屏插卡即备份界面，关闭后回到主窗口。"""
+        if self._kiosk_window is not None:
+            self._kiosk_window.raise_().activateWindow()
+            return
+        from DITWorkstation.Views.Widgets.kiosk_window import KioskWindow
+
+        self._kiosk_window = KioskWindow(self)
+        self._kiosk_window.show()
+        self._set_task_status("已进入 KIOSK 跟机模式", COLOR.SUCCESS)
 
     def _wrap_scrollable(self, view: QWidget) -> QScrollArea:
         """把视图包裹在 QScrollArea 中，内容超出时自动出现滚动条。
@@ -874,6 +896,9 @@ class MainWindow(QMainWindow):
 
     def _on_volume_mounted(self, path: str):
         """检测到新存储卡：跳转导入视图，并按需入多卡自动队列。"""
+        # KIOSK 窗口打开期间由其处理卡片事件（避免双重触发）
+        if self._kiosk_active:
+            return
         if getattr(config, "auto_detect_volume", True):
             self._set_task_status(
                 f"检测到存储卡: {Path(path).name or path}", COLOR.WARNING
@@ -881,6 +906,17 @@ class MainWindow(QMainWindow):
             self._navigate_to("import")
             if self.import_view is not None:
                 self.import_view.set_source_folder(path, auto_scan=True)
+            # 擦除保护：插入未验证备份的卡时持续提醒
+            from DITWorkstation.Services.card_identity import card_wipe_warning
+
+            wipe_warning = card_wipe_warning(path)
+            if wipe_warning:
+                self._set_task_status(f"⚠️ {wipe_warning}", COLOR.WARNING)
+            # 相机品牌机型识别（EXIF，抽样 ≤3 个文件），结果供提示与钩子使用
+            self.card_camera_info = None
+            threading.Thread(
+                target=self._identify_card_camera, args=(path,), daemon=True
+            ).start()
         # 队列仅在相机卡自动化可用时创建（极简模式为 None）
         if (
             self.card_batch_queue is not None
@@ -889,11 +925,30 @@ class MainWindow(QMainWindow):
         ):
             self.card_batch_queue.enqueue(path)
 
+    def _identify_card_camera(self, path: str):
+        """后台识别插卡相机品牌机型，识别成功后更新状态栏并缓存供钩子使用。"""
+        from DITWorkstation.Services.camera_identity_service import (
+            identify_camera_for_card,
+        )
+
+        try:
+            info = identify_camera_for_card(path)
+        except Exception as e:
+            logger.debug(f"相机识别异常 {path}: {e}")
+            info = None
+        self.card_camera_info = info
+        if info:
+            label = f"{info['make']} {info['model']}".strip()
+            self._set_task_status(f"识别到相机: {label}", COLOR.SUCCESS)
+
     def _on_card_automation_finished(self, result):
         self.card_automation_worker = None
+        source_path = self.card_automation_source_path
         # 多卡队列：记录指纹并派发下一张
-        if self.card_automation_source_path and self.card_batch_queue is not None:
-            fp = compute_card_fingerprint(self.card_automation_source_path)
+        fingerprint = ""
+        if source_path and self.card_batch_queue is not None:
+            fp = compute_card_fingerprint(source_path)
+            fingerprint = fp
             self.card_batch_queue.on_finished(fingerprint=fp)
         backup = result.get("backup") if isinstance(result, dict) else None
         imported = (
@@ -904,11 +959,52 @@ class MainWindow(QMainWindow):
         backup_text = ""
         if backup is not None:
             backup_text = f"，备份状态 {backup.status.value}"
+        wipe_note = self._update_card_verification_state(result, fingerprint)
         self._set_task_status(
             f"相机卡自动处理完成：导入 {imported} 个{backup_text}", COLOR.SUCCESS
         )
+        if wipe_note:
+            self._set_task_status(wipe_note, COLOR.WARNING)
         if imported:
             get_data_bus().emit_data_changed("assets_changed")
+        self._run_post_ingest_hook(result, source_path=source_path)
+
+    def _update_card_verification_state(self, result, fingerprint: str) -> str:
+        """根据自动流程结果更新卡的擦除保护状态（逻辑见 card_identity）。"""
+        from DITWorkstation.Services.card_identity import (
+            card_state_note_from_automation_result,
+        )
+
+        return card_state_note_from_automation_result(result, fingerprint)
+
+    def _run_post_ingest_hook(self, result, source_path: str | None):
+        """相机卡自动流程完成后异步执行 post-ingest 钩子（不阻塞 UI）。"""
+        command = getattr(config, "post_ingest_hook_command", "") or ""
+        if not command.strip():
+            return
+        context = {
+            "source_path": source_path or "",
+            "result": result if isinstance(result, dict) else {},
+        }
+        camera = getattr(self, "card_camera_info", None)
+        if camera:
+            context["camera_make"] = camera.get("make", "")
+            context["camera_model"] = camera.get("model", "")
+        project_id = getattr(config, "auto_card_project_id", "")
+        if project_id:
+            context["project_id"] = project_id
+
+        def _run():
+            from DITWorkstation.Services.hook_service import run_post_ingest_hook
+
+            ok, summary = run_post_ingest_hook(command, context)
+            if not ok:
+                logger.warning(f"post-ingest 钩子执行失败: {summary}")
+                self._set_task_status("post-ingest 钩子执行失败，详见日志", COLOR.WARNING)
+            else:
+                self._set_task_status("post-ingest 钩子执行完成", COLOR.SUCCESS)
+
+        threading.Thread(target=_run, name="post-ingest-hook", daemon=True).start()
 
     def _on_card_automation_error(self, error: str):
         self.card_automation_worker = None

@@ -35,6 +35,7 @@ from DITWorkstation.Utils import (
     get_db_service,
     logger,
     pick_directory,
+    pick_open_file,
     pick_save_file,
     safe_slot,
 )
@@ -260,10 +261,21 @@ class BackupView(RefreshOnShowView):
         self.cancel_btn.clicked.connect(self._cancel_backup)
 
         self.mhl_btn = QPushButton("导出 MHL 校验清单")
-        self.mhl_btn.setToolTip("把本次备份的源文件哈希列表导出为 ASC MHL XML 文件")
+        self.mhl_btn.setToolTip(
+            "把本次备份的源文件哈希列表导出为 ASC MHL v2 规范 XML，"
+            "可被 Silverstack / OffShoot / YoYotta 等工具读取"
+        )
         self.mhl_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         self.mhl_btn.setEnabled(False)
         self.mhl_btn.clicked.connect(self._export_mhl)
+
+        self.mhl_verify_btn = QPushButton("导入 MHL 校验")
+        self.mhl_verify_btn.setToolTip(
+            "选择一份 MHL 清单文件和对应目录，逐文件核对哈希，"
+            "用于交接素材的核验（无需重新全量入库）"
+        )
+        self.mhl_verify_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
+        self.mhl_verify_btn.clicked.connect(self._verify_mhl)
 
         self.verify_backup_btn = QPushButton("校验已有备份")
         self.verify_backup_btn.setToolTip(
@@ -276,6 +288,7 @@ class BackupView(RefreshOnShowView):
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.cancel_btn)
         btn_layout.addWidget(self.mhl_btn)
+        btn_layout.addWidget(self.mhl_verify_btn)
         btn_layout.addWidget(self.verify_backup_btn)
         btn_layout.addStretch()
         config_layout.addLayout(btn_layout)
@@ -940,10 +953,11 @@ class BackupView(RefreshOnShowView):
 
     @safe_slot("导出 MHL 失败")
     def _export_mhl(self):
-        """导出当前备份作业的 ASC MHL 校验清单（XML）。"""
+        """导出当前备份作业的 ASC MHL v2 校验清单（XML）。"""
         if not self.current_job:
             return
-        default_name = f"MHL_{self.current_job.job_id}.xml"
+        source_name = Path(self.current_job.source_path).name or "backup"
+        default_name = f"{source_name}-ascmhl.xml"
         path = pick_save_file(
             self, "导出 MHL 校验清单", default_name, "MHL 文件 (*.xml);;所有文件 (*)"
         )
@@ -952,7 +966,86 @@ class BackupView(RefreshOnShowView):
         content = self.backup_service.generate_mhl_report(self.current_job)
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
-        self._log(f"✅ MHL 校验清单已导出: {path}")
+        self._log(f"✅ ASC MHL 校验清单已导出: {path}")
+
+    @safe_slot("导入 MHL 校验失败")
+    def _verify_mhl(self):
+        """选择外部 MHL 清单和基准目录，后台逐文件校验（交接素材核验）。"""
+        if self.task_vm.is_running():
+            QMessageBox.warning(self, "提示", "已有后台任务正在运行，请稍候")
+            return
+        mhl_path = pick_open_file(
+            self, "选择 MHL 校验清单", "", "MHL 文件 (*.xml *.mhl);;所有文件 (*)"
+        )
+        if not mhl_path:
+            return
+        root_dir = pick_directory(self, "选择清单对应的素材目录", "mhl_verify_root")
+        if not root_dir:
+            return
+
+        self.start_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.verify_backup_btn.setEnabled(False)
+        self.progress_bar.setValue(0)
+        self.status_label.setText("正在按 MHL 清单校验…")
+        self._log(f"开始 MHL 校验: 清单 {mhl_path}，目录 {root_dir}")
+
+        self._task_kind = "verify_mhl"
+        self.task_vm.start(
+            self.backup_service.verify_mhl_files,
+            mhl_path,
+            root_dir,
+            task_name="MHL 清单校验",
+            progress_callback=lambda cur, tot, msg: self._verify_progress.emit(
+                cur, tot, msg
+            ),
+            inject_cancel_check=True,
+        )
+
+    def _on_mhl_verify_finished(self, result):
+        """MHL 校验完成：展示汇总与失败明细。"""
+        self.start_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+        self.verify_backup_btn.setEnabled(True)
+        self.status_label.setText(f"MHL 校验完成: {result.summary()}")
+        if result.cancelled:
+            self.status_banner.set_status("warning", "MHL 校验已取消")
+        elif result.mismatched or result.missing:
+            self.status_banner.set_status(
+                "error", f"MHL 校验发现问题: {result.summary()}"
+            )
+        else:
+            self.status_banner.set_status("success", f"MHL 校验通过: {result.summary()}")
+        self._log(f"MHL 校验结果: {result.summary()}")
+
+        for d in result.details:
+            if d["status"] == "verified":
+                continue
+            if d["status"] == "missing":
+                self._log(f"  ⚠️ 缺失: {d['path']}")
+            elif d["status"] == "mismatched":
+                self._log(f"  ❌ 哈希不匹配: {d['path']}")
+                self._log(f"      期望 {d.get('expected', '')}")
+                self._log(f"      实际 {d.get('actual', '')}")
+            elif d["status"] == "skipped":
+                self._log(f"  ⏭️ 跳过: {d['path']}（{d.get('reason', '')}）")
+
+        if result.mismatched or result.missing:
+            lines = [f"MHL 校验发现 {result.mismatched + result.missing} 个问题："]
+            for d in result.details:
+                if d["status"] in ("missing", "mismatched"):
+                    mark = "缺失" if d["status"] == "missing" else "哈希不匹配"
+                    lines.append(f"[{mark}] {d['path']}")
+            show_error(
+                title="MHL 校验发现问题",
+                description="部分文件与清单不一致，详见日志。",
+                details="\n".join(lines),
+                parent=self,
+            )
+        elif not result.cancelled:
+            QMessageBox.information(
+                self, "MHL 校验结果", f"全部通过：{result.verified} 个文件校验一致。"
+            )
 
     def _cancel_backup(self):
         self.task_vm.cancel()
@@ -1114,6 +1207,8 @@ class BackupView(RefreshOnShowView):
         self._task_kind = None
         if task_kind == "verify":
             self._on_verify_finished(result)
+        elif task_kind == "verify_mhl":
+            self._on_mhl_verify_finished(result)
         elif task_kind == "backup":
             self._on_finished(result)
 

@@ -90,6 +90,82 @@ def mark_fingerprint_processed(fingerprint: str) -> None:
     save_app_settings(processed_card_fingerprints=config.processed_card_fingerprints)
 
 
+# ===== 擦除保护状态 =====
+# 未验证备份的卡不允许用户放心格式化：verified 才视为可安全擦除。
+
+CARD_VERIFIED = "verified"  # 备份完成且校验通过
+CARD_PENDING = "pending"  # 已导入但未做校验备份
+CARD_FAILED = "failed"  # 备份失败/未完成
+_MAX_CARD_STATES = 50
+
+
+def get_card_state(fingerprint: str) -> str:
+    """返回卡的保护状态；未知指纹返回 "unknown"。"""
+    if not fingerprint:
+        return "unknown"
+    states = getattr(config, "card_verification_states", {})
+    return states.get(fingerprint, "unknown")
+
+
+def mark_card_state(fingerprint: str, state: str) -> None:
+    """记录卡的擦除保护状态（最多保留 50 条，防止无限增长）。"""
+    from DITWorkstation.Utils import save_app_settings
+
+    if not fingerprint or state not in (CARD_VERIFIED, CARD_PENDING, CARD_FAILED):
+        return
+    states = dict(getattr(config, "card_verification_states", {}))
+    states[fingerprint] = state
+    # 只保留最近 50 张卡的状态
+    if len(states) > _MAX_CARD_STATES:
+        recent_keys = list(states)[-_MAX_CARD_STATES:]
+        states = {k: states[k] for k in recent_keys}
+    config.card_verification_states = states
+    save_app_settings(card_verification_states=states)
+
+
+def card_wipe_warning(path: str) -> str | None:
+    """计算卡的擦除风险提示；已验证备份返回 None，否则返回警告文案。"""
+    state = get_card_state(compute_card_fingerprint(path))
+    if state == CARD_VERIFIED:
+        return None
+    if state == CARD_PENDING:
+        return "此卡素材已导入但未做校验备份，请勿格式化/擦除"
+    if state == CARD_FAILED:
+        return "此卡上次备份未完成或未通过校验，请勿格式化/擦除"
+    return "此卡尚未在本工具中完成校验备份，请勿格式化/擦除"
+
+
+def card_state_note_from_automation_result(result, fingerprint: str) -> str:
+    """根据 CardAutomationService.execute 的结果更新卡擦除保护状态。
+
+    - 备份完成且校验通过（且源卡复读无异常）→ verified（可安全格式化）；
+    - 备份部分完成/失败或复读发现内容变化 → failed（警告勿擦除）；
+    - 未配置备份步骤（仅导入/整理）→ pending（警告勿擦除）。
+    取消的任务不更新状态。
+
+    Returns:
+        需要展示给用户的提示文案；无需提示时返回空字符串。
+    """
+    if not isinstance(result, dict) or result.get("cancelled"):
+        return ""
+    if result.get("backup") is not None:
+        backup = result["backup"]
+        reread_bad = list(getattr(backup, "source_reread_mismatches", []) or [])
+        if backup.status.value == "completed" and not reread_bad:
+            mark_card_state(fingerprint, CARD_VERIFIED)
+            return "✅ 此卡已完成校验备份，可安全格式化"
+        if reread_bad:
+            mark_card_state(fingerprint, CARD_FAILED)
+            return (
+                f"⚠️ 源卡复读发现 {len(reread_bad)} 个文件内容变化，"
+                f"此卡可能劣化，请勿擦除并尽快重新备份"
+            )
+        mark_card_state(fingerprint, CARD_FAILED)
+        return "⚠️ 备份未完成或未通过校验，请勿格式化/擦除此卡"
+    mark_card_state(fingerprint, CARD_PENDING)
+    return "⚠️ 素材已导入但未做校验备份，请勿格式化/擦除此卡"
+
+
 class CardBatchQueue:
     """多卡串行处理队列。
 

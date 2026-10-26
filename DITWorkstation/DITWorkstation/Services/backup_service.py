@@ -6,6 +6,7 @@ import time
 import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 
 from DITWorkstation.App import config
@@ -468,7 +469,74 @@ class BackupService:
                 self._executor.shutdown(wait=False)
                 self._executor = None
 
+        # 源卡复读校验（可选）：所有目标完成后重读源文件比对哈希，
+        # 检测拷贝间隔内源介质内容变化（劣化/坏块）。
+        job.source_reread_mismatches = []
+        if getattr(config, "verify_source_reread", False) and any(
+            t.status == CopyStatus.COMPLETED for t in job.targets
+        ):
+            job.source_reread_mismatches = self._reread_verify_source(
+                files, job.algorithm, progress_callback
+            )
+
         return self._finalize_and_persist(job, files, project_id)
+
+    def _reread_verify_source(
+        self,
+        files: list[dict],
+        algorithm: ChecksumAlgorithm,
+        progress_callback: Callable[[str, float, str], None] | None = None,
+    ) -> list[str]:
+        """拷贝完成后复读源文件，与拷贝时记录的哈希比对。
+
+        目标盘已按拷贝时哈希验证过；复读不一致说明源介质在拷贝间隔内
+        内容发生变化（卡劣化/坏块），相关文件应重新导入备份。
+        只记录警告，不改变备份作业状态。
+
+        Returns:
+            复读哈希不一致的相对路径列表。
+        """
+        mismatches: list[str] = []
+        total = len(files)
+        checked = 0
+        for i, file_info in enumerate(files):
+            if self._is_cancelled():
+                break
+            expected = file_info.get("checksum")
+            if not expected:
+                continue  # 跳过/未拷贝的文件没有拷贝时哈希可比
+            src_file = Path(file_info["path"])
+            if not src_file.is_file():
+                continue
+            checked += 1
+            if progress_callback:
+                self._report_progress(
+                    progress_callback,
+                    "source_reread",
+                    i / max(1, total),
+                    f"复读源文件: {src_file.name}",
+                )
+            try:
+                actual = self.checksum_service.compute_file_checksum_fresh(
+                    str(src_file), algorithm, cancel_check=self._is_cancelled
+                )
+            except (InterruptedError, OSError) as e:
+                logger.warning(f"源文件复读失败 {src_file.name}: {e}")
+                mismatches.append(file_info.get("relative", src_file.name))
+                continue
+            if actual.hash_value.lower() != expected.lower():
+                relative = file_info.get("relative", src_file.name)
+                mismatches.append(relative)
+                logger.warning(
+                    f"⚠️ 源文件复读哈希不一致（源卡可能劣化）: {relative}，"
+                    f"拷贝时 {expected} / 复读 {actual.hash_value}"
+                )
+        if checked:
+            logger.info(
+                f"源卡复读校验完成: 比对 {checked} 个文件，"
+                f"不一致 {len(mismatches)} 个"
+            )
+        return mismatches
 
     def load_job(self, job_id: str) -> BackupJob | None:
         """从数据库恢复备份作业（含目标状态与失败文件列表），供断点续传/重试。
@@ -948,36 +1016,63 @@ class BackupService:
 
     def generate_mhl_report(self, job: BackupJob) -> str:
         """
-        生成ASC MHL格式的哈希值列表
+        生成 ASC MHL v2 规范格式的校验清单（Media Hash List）
+
+        兼容 Silverstack / OffShoot(Hedge) / YoYotta 等行业标准工具读取。
 
         Returns:
-            MHL格式字符串
+            ASC MHL XML 字符串
         """
-        lines = [
-            '<?xml version="1.0" encoding="UTF-8"?>',
-            '<hashlist version="2.0">',
-            "  <creatorinfo>",
-            "    <tool>DIT工作站 v1.0</tool>",
-            f"    <creationdate>{now_local().isoformat()}</creationdate>",
-            "  </creatorinfo>",
-        ]
+        from DITWorkstation.Services.mhl_service import generate_asc_mhl
 
         files = getattr(job, "_files_cache", None)
         if files is None:
             files = self.scan_source(job.source_path)
 
+        prepared: list[dict] = []
         for file_info in files:
             src_file = Path(file_info["path"])
-            relative = file_info.get("relative", src_file.name)
             checksum = self.checksum_service.compute_file_checksum(
                 str(src_file), job.algorithm
             )
-            lines.append("  <hash>")
-            lines.append(f"    <path>{relative}</path>")
-            lines.append(f"    <size>{file_info['size']}</size>")
-            lines.append(f"    <hashformat>{job.algorithm.value}</hashformat>")
-            lines.append(f"    <hashvalue>{checksum.hash_value}</hashvalue>")
-            lines.append("  </hash>")
+            item = {
+                "path": file_info["path"],
+                "relative": file_info.get("relative", src_file.name),
+                "size": file_info["size"],
+                "checksum": checksum.hash_value,
+            }
+            if file_info.get("mtime_ns"):
+                item["last_modification_date"] = datetime.fromtimestamp(
+                    file_info["mtime_ns"] / 1e9
+                ).astimezone().isoformat(timespec="seconds")
+            prepared.append(item)
 
-        lines.append("</hashlist>")
-        return "\n".join(lines)
+        return generate_asc_mhl(prepared, job.algorithm, source_root=job.source_path)
+
+    def verify_mhl_files(
+        self,
+        mhl_path: str,
+        root_dir: str,
+        progress_callback=None,
+        cancel_check=None,
+    ):
+        """按外部 MHL 清单逐文件校验目录内容（交接素材核验）。
+
+        Args:
+            mhl_path: MHL XML 清单文件路径
+            root_dir: 清单内相对路径的基准目录
+            progress_callback: (completed, total, message) 进度回调
+            cancel_check: 取消回调
+
+        Returns:
+            MHLVerifyResult
+        """
+        from DITWorkstation.Services.mhl_service import verify_against_mhl
+
+        return verify_against_mhl(
+            mhl_path,
+            root_dir,
+            self.checksum_service,
+            cancel_check=cancel_check,
+            progress_callback=progress_callback,
+        )
