@@ -118,7 +118,8 @@ a = Analysis(
     [ENTRY_SCRIPT],
     pathex=[str(PROJECT_ROOT / "DITWorkstation")],
     binaries=_collect_mediainfo_binaries(),
-    datas=[],
+    # 随包分发用户手册（帮助菜单「用户手册...」在应用内渲染）
+    datas=[(str(PROJECT_ROOT / "DITWorkstation" / "docs"), "docs")],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

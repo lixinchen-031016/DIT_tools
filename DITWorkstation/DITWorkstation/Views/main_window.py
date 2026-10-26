@@ -426,6 +426,10 @@ class MainWindow(QMainWindow):
         # 帮助菜单
         help_menu = menubar.addMenu("帮助(&H)")
 
+        manual_action = help_menu.addAction("用户手册...")
+        manual_action.setToolTip("在应用内浏览完整用户手册（与仓库文档同步）")
+        manual_action.triggered.connect(self._show_help_viewer)
+
         restart_action = help_menu.addAction("重新启动新手向导...")
         restart_action.setShortcut("Ctrl+Shift+H")
         restart_action.setToolTip(
@@ -492,6 +496,12 @@ class MainWindow(QMainWindow):
         ]
         QMessageBox.information(self, "快捷键大全", "\n".join(lines))
 
+    def _show_help_viewer(self):
+        """打开应用内用户手册查看器（渲染 docs/用户手册.md）。"""
+        from DITWorkstation.Views.Widgets.help_viewer_dialog import HelpViewerDialog
+
+        HelpViewerDialog(self).show()
+
     def _show_about(self):
         """关于对话框"""
         QMessageBox.about(
@@ -500,8 +510,9 @@ class MainWindow(QMainWindow):
             "<h3>DIT 工作站</h3>"
             f"<p>版本：{APP_VERSION}</p>"
             "<p>专业摄影数据管理应用</p>"
-            "<p>支持安全备份、校验和验证、JPG 筛选 RAW 提取、批量重命名、"
-            "拍摄日志管理、素材检索与报告生成。</p>",
+            "<p>支持媒体导入、多目标校验备份（ASC MHL v2 交接清单、断点续传、"
+            "源卡复读校验）、存储卡自动化与擦除保护、KIOSK 跟机模式、"
+            "JPG 筛选 RAW 提取、批量重命名、拍摄日志管理、素材检索与报告生成。</p>",
         )
 
     def _show_settings(self):

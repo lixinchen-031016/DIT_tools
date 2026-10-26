@@ -33,7 +33,7 @@ DIT 工作站围绕 9 大功能模块构建完整的数据管理闭环：
 |---|------|------|------|
 | 1 | 项目概览 | 🏠 | 当前项目进度看板，聚合展示导入/备份/日志/报告进度，提供 SOP「下一步」快捷跳转；支持项目归档/恢复（zip 打包，可选附带素材文件）与项目模板（从模板新建 / 保存为模板） |
 | 2 | 媒体导入 | 📁 | 将图片/视频/RAW 导入项目，支持引用模式与复制模式，自动读取 EXIF，可选关联拍摄日志，按路径查重；扫描后可勾选要导入的文件（选中行显示缩略图预览），支持全选/反选 |
-| 3 | 数据备份 | 📦 | 从存储卡多目标并行备份，校验和验证（XXHash64/MD5），支持导出 ASC MHL 校验清单，完成后回写素材的备份位置；备份前自动预检目标磁盘空间，支持对已有备份做独立完整性再校验；目标已存在且校验一致的文件自动跳过（断点续传），失败文件记入备份历史可一键重试；支持备份方案模板复用与相机卡自动备份 |
+| 3 | 数据备份 | 📦 | 从存储卡多目标并行备份，校验和验证（XXHash64/MD5），支持导出/导入 **ASC MHL v2 规范**校验清单（兼容 Silverstack / OffShoot / YoYotta），完成后回写素材的备份位置；备份前自动预检目标磁盘空间，支持对已有备份做独立完整性再校验；可选「源卡复读校验」检测劣化存储卡；目标已存在且校验一致的文件自动跳过（断点续传），失败文件记入备份历史可一键重试；支持备份方案模板复用与相机卡自动备份 |
 | 4 | RAW 提取 | 🎞 | 根据筛选后的 JPG 文件，从 RAW 源文件夹自动匹配并提取对应 RAW，提取后可自动入库 |
 | 5 | 文件重命名 | ✏️ | 按场景/镜头/镜次规则批量重命名，支持模板变量，预览确认后执行，自动防覆盖 |
 | 6 | 拍摄日志 | 📋 | 管理场景/镜头/镜次拍摄记录，支持「从代表素材填充 EXIF」，双向关联素材与日志；支持 CSV 导入导出（标准镜头清单，按场景/镜头/镜次去重更新） |
@@ -44,6 +44,49 @@ DIT 工作站围绕 9 大功能模块构建完整的数据管理闭环：
 ---
 
 ## 🆕 新版本亮点
+
+### ASC MHL v2 互操作（🏷 行业标准交接）
+- 备份完成后可导出 **ASC MHL v2 规范格式**校验清单（`<ascmhl>` XML，含 creatorinfo / processinfo / 逐文件哈希），可被 Silverstack、OffShoot(Hedge)、YoYotta 等行业标准工具直接读取，替代早期自产 `<hashlist>` 格式
+- 写入遵循 ASC MHL 目录约定：`<目标>/.ascmhl/<源名>-<代数>-ascmhl.xml`，同一目标多次备份自动递增清单代数
+- **导入 MHL 校验**：选择外部 MHL 清单（兼容 ASC MHL 与原始 MHL `<hashlist>` 两种格式）与对应目录，逐文件核对哈希，用于交接素材核验，无需重新全量入库；清单内未知算法条目自动跳过
+- 哈希格式名遵循 ASC 规范（`xxh64`/`md5`）
+
+### 存储卡擦除保护（🔒）
+- 每张卡按内容指纹维护擦除保护状态：**verified**（备份完成且校验通过，可安全格式化）/ **pending**（仅导入未备份）/ **failed**（备份失败、未完成或源卡复读异常）
+- 插入未验证备份的卡时，状态栏持续显示「请勿格式化/擦除」警告
+- 自动流程完成后按结果自动更新状态，并在状态栏给出「可安全格式化」或警告提示
+
+### 源卡复读校验（🩺 可选）
+- 「设置 → 备份默认选项」开启后，所有目标拷贝并验证通过后**重新读取源卡逐文件比对哈希**，检测拷贝间隔内源介质内容变化（卡劣化 / 坏块）
+- 发现不一致时记录警告并把该卡标记为 failed（勿擦除）；代价是源读取时间翻倍，默认关闭
+
+### EXIF 相机品牌机型识别（📷）
+- 插卡后自动抽样卡内媒体文件（最多 3 个，浅层两层扫描，毫秒级），从 EXIF `Make`/`Model` 读取品牌与机型（Nikon / Canon / Sony / ARRI / RED / Blackmagic 等自动规范化）
+- 识别结果显示在状态栏，并注入 post-ingest 钩子上下文（`DIT_CAMERA_MAKE` / `DIT_CAMERA_MODEL`）
+- 不依赖卡上目录特征（目录结构随厂商固件变化，不可靠）
+
+### post-ingest 钩子（🪝）
+- 「设置 → 存储卡」可配置自动流程完成后执行的 shell 命令（webhook / 通知 / 同步脚本均可），留空禁用
+- 上下文经环境变量注入：`DIT_EVENT`、`DIT_SOURCE_PATH`、`DIT_PROJECT_ID`、`DIT_CAMERA_MAKE`、`DIT_CAMERA_MODEL`、`DIT_RESULT`（JSON 摘要）
+- 后台线程执行，不阻塞 UI；钩子失败仅记录日志，不影响已完成的备份
+
+### KIOSK 跟机模式（🖥）
+- 「设置 → KIOSK 跟机模式…」进入全屏「插卡即备份」界面，适合交给跟机员操作
+- 大字状态展示（等待插卡 / 处理中进度 / 成功绿灯 / 失败红灯）+ 操作日志；插卡后按「设置 → 存储卡」的自动化配置执行同一套 SOP 链
+- 复用擦除保护：完成且显示「可安全格式化」前，界面持续警示勿拔卡勿格式化
+- `Esc` 或关闭按钮退出，回到主窗口
+
+### 工作区与项目删除入口
+- 「项目概览」的选择器提供「删除工作区」按钮（默认工作区不可删除；删除非默认工作区时其下项目自动归入默认工作区，磁盘文件不受影响）
+- 「项目概览」与「媒体导入」提供项目「删除」按钮（软删除进回收站，30 天内可恢复，源媒体文件不删除）
+
+### RAW 缩略图快速路径（⚡）
+- RAW 文件缩略图优先走 libraw 内嵌预览提取（`rawpy.extract_thumb`）：实测 65MB 尼康 NEF 约 45ms 即生成全尺寸清晰缩略图
+- 旧链路的 Pillow 直解（仅能取到 160×120 低清小图）与全量显影（数百毫秒）降级为兜底，覆盖 rawpy 缺失或个别格式不支持的情况
+
+### 应用内用户手册（📖）
+- 「帮助 → 用户手册...」在应用内直接浏览完整用户手册（Markdown 渲染 + 关键字查找）
+- 手册内容运行时读取 `docs/用户手册.md`，与仓库文档保持同一份来源；打包产物随包分发该文件，文档更新后无需改动代码即可在应用内生效
 
 ### 工作区-项目两级结构
 - **工作区**是项目的父级容器，对应一个物理目录，用于组织一组相关项目
@@ -280,13 +323,21 @@ DIT_tools/
     │   │   ├── checksum_service.py     # 校验和服务（内存 + 跨会话持久化缓存）
     │   │   ├── media_import_service.py # 媒体导入服务
     │   │   ├── metadata_service.py     # 元数据读取服务（EXIF/视频）
-    │   │   ├── backup_service.py       # 备份服务（含快照持久化）
+    │   │   ├── backup_service.py       # 备份服务（含快照持久化与源卡复读校验）
+    │   │   ├── mhl_service.py          # ASC MHL v2 清单生成/解析/校验
+    │   │   ├── hook_service.py         # post-ingest 钩子执行
+    │   │   ├── camera_identity_service.py # EXIF 相机品牌机型识别
+    │   │   ├── card_identity.py        # 存储卡指纹与擦除保护状态
+    │   │   ├── card_automation_service.py # 相机卡自动化 SOP 链
+    │   │   ├── integrity_scheduler.py  # 周期完整性校验调度
+    │   │   ├── project_health_service.py # 项目健康与容量趋势
+    │   │   ├── backup_restore_service.py # 从备份恢复素材（回拷）
+    │   │   ├── asset_relink_service.py # 丢失素材重新链接
     │   │   ├── archive_service.py      # 项目归档/恢复（含安全防护）
-    │   │   ├── card_automation_service.py # 相机卡自动化
     │   │   ├── raw_extraction_service.py # RAW 提取服务
     │   │   ├── rename_service.py       # 重命名服务
     │   │   ├── report_service.py       # 报告生成服务
-    │   │   ├── thumbnail_service.py    # 缩略图服务
+    │   │   ├── thumbnail_service.py    # 缩略图服务（RAW 内嵌预览快速路径）
     │   │   └── volume_monitor.py       # 存储卡挂载点监控
     │   ├── Utils/
     │   │   ├── __init__.py
@@ -310,34 +361,31 @@ DIT_tools/
     │       ├── report_view.py          # 报告生成视图
     │       └── Widgets/
     │           ├── workspace_dialog.py        # 工作区新建/编辑对话框
-    │           ├── workspace_project_selector.py # 工作区-项目共享选择控件
+    │           ├── workspace_project_selector.py # 工作区-项目共享选择控件（含删除入口）
     │           ├── settings_dialog.py            # 设置对话框
     │           ├── recycle_bin_dialog.py         # 回收站查看与恢复对话框
     │           ├── project_template_dialog.py    # 项目模板对话框
     │           ├── backup_template_dialog.py     # 备份方案对话框
+    │           ├── kiosk_window.py               # KIOSK 跟机模式全屏窗口
+    │           ├── help_viewer_dialog.py         # 应用内用户手册查看器
+    │           ├── restore_wizard.py             # 从备份恢复素材向导
+    │           ├── command_palette.py            # 全局命令面板（Ctrl+K）
+    │           ├── task_history_dialog.py        # 后台任务历史中心
     │           ├── status_panel.py               # 进度/状态/日志面板
     │           ├── table_factory.py              # 表格工厂
     │           ├── empty_state.py                # 空状态占位
-    │           └── task_history_dialog.py        # 后台任务历史中心
-    ├── DITWorkstationTests/           # 测试套件（当前 402 个测试）
-    │   ├── conftest.py                 # 共享 fixture
-    │   ├── test_database.py            # 数据库服务测试（73）
-    │   ├── test_media_import.py        # 媒体导入测试（30）
-    │   ├── test_utils.py               # 工具函数测试（39）
-    │   ├── test_backup.py              # 备份服务测试（16）
-    │   ├── test_thumbnail.py           # 缩略图测试（12）
-    │   ├── test_backup_resume.py       # 断点续传测试（12）
-    │   ├── test_session_context.py     # 会话上下文测试（10）
-    │   ├── test_settings.py            # 设置持久化测试（19）
-    │   ├── test_archive.py             # 归档/恢复测试（12）
-    │   ├── test_raw_extraction.py      # RAW 提取测试（9）
-    │   ├── test_tags.py                # 标签测试（9）
-    │   ├── test_models.py              # 数据模型测试（8）
-    │   ├── test_rename.py             # 重命名测试（7）
-    │   ├── test_checksum.py           # 校验和服务测试（15）
-    │   ├── test_workers.py            # 后台线程测试（7）
-    │   ├── test_ui_headless.py        # 无头 UI 与模式切换测试（31）
-    │   └── test_feature_flags.py      # 功能模式开关测试（15）
+    │           └── asset_table_model.py          # 素材列表分页模型
+    ├── DITWorkstationTests/           # 测试套件（当前 494 个测试，明细见下方「测试覆盖」表）
+    │   ├── conftest.py                 # 共享 fixture（隔离数据库、临时目录与工厂函数）
+    │   ├── test_database.py            # 数据库服务测试
+    │   ├── test_backup*.py             # 备份 / 断点续传 / 方案模板 / 回写联动
+    │   ├── test_mhl_service.py         # ASC MHL 生成/解析/校验
+    │   ├── test_hook_service.py        # post-ingest 钩子
+    │   ├── test_card_verification.py   # 存储卡擦除保护状态
+    │   ├── test_source_reread.py       # 源卡复读校验
+    │   ├── test_camera_identity.py     # EXIF 相机识别
+    │   ├── test_workspace_selector.py  # 工作区-项目选择控件（含删除）
+    │   └── …                           # 其余 30 个测试文件见「测试覆盖」表
     └── docs/
         └── 用户手册.md                 # 用户操作手册
 ```
@@ -407,39 +455,47 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 |----------|----------|----------|
 | `test_database.py` | 数据库服务（14 张业务表 CRUD + 版本化迁移 + FTS5 + 连接池 + 拍摄日期时间线） | 73 |
 | `test_utils.py` | 工具函数（format_size / sanitize_filename 等） | 39 |
+| `test_ui_headless.py` | 无头 UI：布局/分页/设置/模板入口/模式切换/文件状态扫描/拍摄时间线下钻/任务中心/启动路由 | 38 |
 | `test_media_import.py` | 媒体导入服务 | 30 |
-| `test_backup.py` | 备份服务 | 16 |
-| `test_thumbnail.py` | 缩略图服务（缓存、生命周期与请求去重） | 12 |
-| `test_checksum.py` | 校验和服务（含跨会话持久化缓存） | 15 |
-| `test_backup_resume.py` | 备份断点续传 / 失败重试 | 12 |
-| `test_session_context.py` | EventBus + 全局项目/工作区状态联动 | 10 |
-| `test_settings.py` | 应用设置持久化 | 19 |
+| `test_feature_flags.py` | 团队/个人/极简模式功能开关 | 28 |
+| `test_new_features.py` | 横向新特性集成（标签/回收站/评级/持久化缓存等） | 23 |
+| `test_settings.py` | 应用设置持久化 | 21 |
+| `test_settings_dialog.py` | 设置对话框交互与持久化 | 12 |
+| `test_backup.py` | 备份服务（含 ASC MHL 导出） | 16 |
+| `test_checksum.py` | 校验和服务（含跨会话持久化缓存与强制重读） | 15 |
 | `test_archive.py` | 项目归档 / 恢复（含安全防护） | 12 |
+| `test_backup_resume.py` | 备份断点续传 / 失败重试 | 12 |
+| `test_task_view_model.py` | TaskViewModel 状态机与线程生命周期 | 12 |
+| `test_thumbnail.py` | 缩略图服务（缓存、生命周期与请求去重） | 12 |
+| `test_session_context.py` | EventBus + 全局项目/工作区状态联动 | 10 |
+| `test_workspace_selector.py` | 工作区-项目选择控件（含删除工作区/项目） | 10 |
+| `test_report.py` | 报告生成服务（素材/备份/审计 PDF 与 CSV） | 9 |
 | `test_raw_extraction.py` | RAW 提取服务 | 9 |
+| `test_recovery.py` | 回收站恢复、重新链接与重命名回退 | 9 |
 | `test_tags.py` | 素材标签关联表与检索 | 9 |
 | `test_models.py` | 数据模型（AssetRating / RATING_LABELS） | 8 |
+| `test_camera_identity.py` | EXIF 相机品牌机型识别 | 7 |
+| `test_field_registry.py` | 数据库字段注册表与标识符白名单 | 7 |
+| `test_minimal_mode.py` | 极简模式行为 | 7 |
 | `test_rename.py` | 重命名服务 | 7 |
-| `test_ui_headless.py` | 无头 UI：布局/分页/设置/模板入口/模式切换/文件状态扫描/拍摄时间线下钻/任务中心/启动路由 | 31 |
 | `test_volume_monitor.py` | 存储卡识别 | 7 |
 | `test_workers.py` | 后台线程 WorkerThread | 7 |
-| `test_templates.py` | 项目模板 CRUD 与默认模板 | 6 |
-| `test_workspace_selector.py` | 工作区-项目选择控件 | 6 |
-| `test_report.py` | 报告生成服务（素材/备份/审计 PDF 与 CSV） | 9 |
-| `test_task_view_model.py` | TaskViewModel 状态机与线程生命周期 | 12 |
-| `test_backup_import_closure.py` | 备份回写导入联动 | 4 |
-| `test_backup_templates.py` | 备份方案模板 | 2 |
-| `test_card_automation.py` | 相机卡自动化与可配置 SOP 链 | 3 |
-| `test_feature_flags.py` | 团队/个人模式功能开关 | 15 |
-| `test_field_registry.py` | 数据库字段注册表与标识符白名单 | 7 |
-| `test_project_health.py` | 项目健康汇总、容量快照与趋势预测 | 3 |
 | `test_workspace_repository.py` | 工作区及仓储门面一致性 | 7 |
-| `test_recovery.py` | 回收站恢复、重新链接与重命名回退 | 9 |
+| `test_mhl_service.py` | ASC MHL 清单生成/解析/目录约定/按清单校验 | 6 |
+| `test_templates.py` | 项目模板 CRUD 与默认模板 | 6 |
+| `test_backup_import_closure.py` | 备份回写导入联动 | 4 |
+| `test_card_verification.py` | 存储卡擦除保护状态机 | 4 |
+| `test_hook_service.py` | post-ingest 钩子（跨平台环境变量注入） | 4 |
+| `test_project_health.py` | 项目健康汇总、容量快照与趋势预测 | 3 |
+| `test_card_automation.py` | 相机卡自动化与可配置 SOP 链 | 3 |
+| `test_source_reread.py` | 源卡复读校验（检测劣化存储卡） | 3 |
+| `test_backup_templates.py` | 备份方案模板 | 2 |
 | `test_version_and_recycle_bin.py` | alpha 版本格式与回收站 UI 恢复入口 | 3 |
-| **合计** | | **402** |
+| **合计** | | **494** |
 
 测试共享 fixture（`conftest.py`）提供隔离的数据库实例、临时目录与工厂函数，保证测试间互不干扰。
 
-当前本地验证环境为 macOS arm64、Python 3.13、PySide6 6.11.1，执行结果为 `402 passed`。测试使用 Qt `offscreen` 平台，不能替代 Windows/macOS/Linux 原生 GUI、文件系统和打包产物验证。
+当前本地验证环境为 macOS arm64、Python 3.13、PySide6 6.11.1，执行结果为 `494 passed`。CI 质量门禁包含 pytest、Ruff（lint + format）与 Pyright，并在 macOS / Windows 双平台执行 PyInstaller 打包与冒烟启动。测试使用 Qt `offscreen` 平台，不能替代 Windows/macOS/Linux 原生 GUI、文件系统和打包产物验证。
 
 ### 性能参考
 
