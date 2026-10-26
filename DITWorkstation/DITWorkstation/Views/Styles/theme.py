@@ -278,6 +278,11 @@ QComboBox::drop-down {{
     border: none;
     width: 22px;
 }}
+QComboBox::down-arrow {{
+    image: url("__DOWN_ARROW_SVG_PATH__");
+    width: 12px;
+    height: 12px;
+}}
 QComboBox QAbstractItemView {{
     background-color: {C.BG_CARD};
     border: 1px solid {C.BORDER};
@@ -545,16 +550,41 @@ def set_active_palette(palette: ThemePalette) -> None:
 
 def _ensure_checkmark_svg() -> str:
     """生成复选框对勾 SVG 临时文件并返回其路径。"""
-    tmp_dir = tempfile.gettempdir()
-    svg_path = os.path.join(tmp_dir, "dit_checkmark.svg")
-    tmp_path = ""
-    if not os.path.exists(svg_path):
-        svg_content = (
+    return _ensure_svg_file(
+        "dit_checkmark.svg",
+        (
             "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' "
             "viewBox='0 0 16 16'>"
             "<path d='M3 8 L6.5 11.5 L13 4.5' stroke='white' stroke-width='2.5' "
             "stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>"
-        )
+        ),
+    )
+
+
+def _ensure_dropdown_arrow_svg() -> str:
+    """生成 QComboBox 下拉箭头 SVG 临时文件并返回其路径。
+
+    全局 QSS 设置了 QComboBox::drop-down {{ border: none }}，macOS 原生
+    箭头会被样式抹掉，必须显式提供 down-arrow 图标，否则可编辑下拉框
+    （如设置对话框中的预设选择）看起来与普通输入框无异。
+    """
+    return _ensure_svg_file(
+        "dit_dropdown_arrow.svg",
+        (
+            "<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' "
+            "viewBox='0 0 12 12'>"
+            "<path d='M2.5 4 L6 7.5 L9.5 4' stroke='#98989d' stroke-width='1.8' "
+            "stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>"
+        ),
+    )
+
+
+def _ensure_svg_file(file_name: str, svg_content: str) -> str:
+    """将 SVG 内容写入临时文件（幂等）并返回其路径，失败时返回空串。"""
+    tmp_dir = tempfile.gettempdir()
+    svg_path = os.path.join(tmp_dir, file_name)
+    tmp_path = ""
+    if not os.path.exists(svg_path):
         try:
             tmp_path = svg_path + ".tmp." + str(os.getpid())
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -577,7 +607,10 @@ def apply_global_style(app, palette: ThemePalette | None = None) -> None:
         palette: 可选调色板；None 时使用当前激活调色板（保持原有行为）。
     """
     checkmark_path = _ensure_checkmark_svg()
+    arrow_path = _ensure_dropdown_arrow_svg()
     qss = _build_qss(palette)
     if checkmark_path:
         qss = qss.replace("__CHECKMARK_SVG_PATH__", checkmark_path)
+    if arrow_path:
+        qss = qss.replace("__DOWN_ARROW_SVG_PATH__", arrow_path)
     app.setStyleSheet(qss)
