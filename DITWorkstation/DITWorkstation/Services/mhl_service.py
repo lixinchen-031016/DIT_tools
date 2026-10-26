@@ -144,9 +144,7 @@ def next_mhl_generation(target_dir: Path, source_name: str) -> int:
     return max_gen + 1
 
 
-def write_mhl_to_folder(
-    mhl_xml: str, target_dir: Path, source_name: str
-) -> Path:
+def write_mhl_to_folder(mhl_xml: str, target_dir: Path, source_name: str) -> Path:
     """按 ASC MHL 约定把清单写入 ``<target>/.ascmhl/<name>-<gen>-ascmhl.xml``。
 
     Returns:
@@ -195,9 +193,15 @@ def parse_mhl(mhl_path: str | Path) -> tuple[str, list[MHLFileEntry]]:
         entries.append(
             MHLFileEntry(
                 path=path_node.text.strip(),
-                size=int(size_node.text) if size_node is not None and (size_node.text or "").isdigit() else None,
-                last_modification_date=date_node.text if date_node is not None else None,
-                hash_format=(fmt_node.text or "").strip().lower() if fmt_node is not None else default_format,
+                size=int(size_node.text)
+                if size_node is not None and (size_node.text or "").isdigit()
+                else None,
+                last_modification_date=date_node.text
+                if date_node is not None
+                else None,
+                hash_format=(fmt_node.text or "").strip().lower()
+                if fmt_node is not None
+                else default_format,
                 hash_value=value_node.text.strip() if value_node is not None else "",
             )
         )
@@ -233,15 +237,17 @@ def verify_against_mhl(
             result.cancelled = True
             break
         if progress_callback:
-            progress_callback(
-                idx - 1, total, f"校验: {entry.path}"
-            )
+            progress_callback(idx - 1, total, f"校验: {entry.path}")
 
         algorithm = ASC_TO_ALGORITHM.get(entry.hash_format)
         if algorithm is None:
             result.skipped += 1
             result.details.append(
-                {"path": entry.path, "status": "skipped", "reason": f"不支持的算法 {entry.hash_format}"}
+                {
+                    "path": entry.path,
+                    "status": "skipped",
+                    "reason": f"不支持的算法 {entry.hash_format}",
+                }
             )
             continue
         file_path = root / entry.path

@@ -533,8 +533,7 @@ class BackupService:
                 )
         if checked:
             logger.info(
-                f"源卡复读校验完成: 比对 {checked} 个文件，"
-                f"不一致 {len(mismatches)} 个"
+                f"源卡复读校验完成: 比对 {checked} 个文件，不一致 {len(mismatches)} 个"
             )
         return mismatches
 
@@ -1042,9 +1041,11 @@ class BackupService:
                 "checksum": checksum.hash_value,
             }
             if file_info.get("mtime_ns"):
-                item["last_modification_date"] = datetime.fromtimestamp(
-                    file_info["mtime_ns"] / 1e9
-                ).astimezone().isoformat(timespec="seconds")
+                item["last_modification_date"] = (
+                    datetime.fromtimestamp(file_info["mtime_ns"] / 1e9)
+                    .astimezone()
+                    .isoformat(timespec="seconds")
+                )
             prepared.append(item)
 
         return generate_asc_mhl(prepared, job.algorithm, source_root=job.source_path)

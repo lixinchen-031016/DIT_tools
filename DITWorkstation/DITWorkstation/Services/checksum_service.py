@@ -179,7 +179,9 @@ class ChecksumService:
         if not path.exists():
             raise FileNotFoundError(f"文件不存在: {file_path}")
         stat = path.stat()
-        hash_value = self._compute_hash(path, algorithm, stat.st_size, None, cancel_check)
+        hash_value = self._compute_hash(
+            path, algorithm, stat.st_size, None, cancel_check
+        )
         checksum = FileChecksum(
             file_path=str(path),
             algorithm=algorithm,

@@ -121,7 +121,9 @@ class AppConfig:
     # 备份配置
     max_parallel_copies: int = 4  # 最大并行拷贝数
     verify_after_copy: bool = True  # 拷贝后验证
-    verify_source_reread: bool = False  # 拷贝完成后复读源文件比对（检测劣化存储卡，双倍源读取耗时）
+    verify_source_reread: bool = (
+        False  # 拷贝完成后复读源文件比对（检测劣化存储卡，双倍源读取耗时）
+    )
 
     # 存储卡自动识别
     auto_detect_volume: bool = True  # 检测到存储卡时自动跳转到导入视图并预填源目录

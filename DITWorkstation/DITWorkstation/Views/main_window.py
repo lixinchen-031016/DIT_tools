@@ -419,9 +419,7 @@ class MainWindow(QMainWindow):
         task_history_action.setVisible(is_enabled("task_history"))
 
         kiosk_action = settings_menu.addAction("KIOSK 跟机模式…")
-        kiosk_action.setToolTip(
-            "进入插卡即自动备份的全屏跟机界面，适合交给跟机员操作"
-        )
+        kiosk_action.setToolTip("进入插卡即自动备份的全屏跟机界面，适合交给跟机员操作")
         kiosk_action.triggered.connect(self._enter_kiosk_mode)
         kiosk_action.setVisible(is_enabled("kiosk_mode"))
 
@@ -1000,7 +998,9 @@ class MainWindow(QMainWindow):
             ok, summary = run_post_ingest_hook(command, context)
             if not ok:
                 logger.warning(f"post-ingest 钩子执行失败: {summary}")
-                self._set_task_status("post-ingest 钩子执行失败，详见日志", COLOR.WARNING)
+                self._set_task_status(
+                    "post-ingest 钩子执行失败，详见日志", COLOR.WARNING
+                )
             else:
                 self._set_task_status("post-ingest 钩子执行完成", COLOR.SUCCESS)
 

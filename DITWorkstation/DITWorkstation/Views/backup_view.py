@@ -1015,7 +1015,9 @@ class BackupView(RefreshOnShowView):
                 "error", f"MHL 校验发现问题: {result.summary()}"
             )
         else:
-            self.status_banner.set_status("success", f"MHL 校验通过: {result.summary()}")
+            self.status_banner.set_status(
+                "success", f"MHL 校验通过: {result.summary()}"
+            )
         self._log(f"MHL 校验结果: {result.summary()}")
 
         for d in result.details:

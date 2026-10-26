@@ -144,11 +144,16 @@ class KioskWindow(QMainWindow):
         if warning:
             self._log(f"⚠️ {warning}")
         fingerprint = compute_card_fingerprint(path)
-        if fingerprint and is_fingerprint_processed(fingerprint) and getattr(
-            config, "skip_processed_cards", True
+        if (
+            fingerprint
+            and is_fingerprint_processed(fingerprint)
+            and getattr(config, "skip_processed_cards", True)
         ):
-            self._set_state("此卡已处理过", COLOR.TEXT_MUTED,
-                            "如需重新处理，请在主窗口手动执行导入/备份。")
+            self._set_state(
+                "此卡已处理过",
+                COLOR.TEXT_MUTED,
+                "如需重新处理，请在主窗口手动执行导入/备份。",
+            )
             return
 
         project_id = getattr(config, "auto_card_project_id", "")
@@ -156,10 +161,16 @@ class KioskWindow(QMainWindow):
         steps = getattr(config, "auto_card_steps", None) or None
         do_import = getattr(config, "auto_card_import", True)
         do_backup = getattr(config, "auto_card_backup", False)
-        db_service = self._main.backup_view.db_service if self._main.backup_view else None
-        if not project_id or db_service is None or (
-            (do_backup or (steps and "backup" in steps))
-            and not (template_id and db_service.get_backup_template(template_id))
+        db_service = (
+            self._main.backup_view.db_service if self._main.backup_view else None
+        )
+        if (
+            not project_id
+            or db_service is None
+            or (
+                (do_backup or (steps and "backup" in steps))
+                and not (template_id and db_service.get_backup_template(template_id))
+            )
         ):
             self._set_state(
                 "自动化配置不完整",
@@ -171,12 +182,14 @@ class KioskWindow(QMainWindow):
         template = db_service.get_backup_template(template_id) if template_id else None
         service = self._main.card_automation_service
         if service is None:
-            self._set_state("自动化不可用", COLOR.WARNING,
-                            "当前功能模式未启用相机卡自动化。")
+            self._set_state(
+                "自动化不可用", COLOR.WARNING, "当前功能模式未启用相机卡自动化。"
+            )
             return
 
-        self._set_state("正在处理存储卡…", COLOR.WARNING,
-                        f"来源: {Path(path).name or path}")
+        self._set_state(
+            "正在处理存储卡…", COLOR.WARNING, f"来源: {Path(path).name or path}"
+        )
         self._log(f"开始自动处理: {path}")
         self._worker = WorkerThread(
             service.execute,
@@ -186,11 +199,14 @@ class KioskWindow(QMainWindow):
             do_import=do_import,
             do_backup=do_backup,
             steps=steps,
-            raw_config={"output_folder": getattr(config, "auto_card_raw_output_dir", "")}
+            raw_config={
+                "output_folder": getattr(config, "auto_card_raw_output_dir", "")
+            }
             if steps and "raw_extract" in steps
             else None,
             rename_config={"rule": {"pattern": config.auto_card_rename_pattern}}
-            if steps and "rename" in steps
+            if steps
+            and "rename" in steps
             and getattr(config, "auto_card_rename_pattern", "")
             else None,
             report_path=getattr(config, "auto_card_report_path", "") or None,
@@ -239,15 +255,22 @@ class KioskWindow(QMainWindow):
         if backup is not None:
             self._log(
                 f"备份状态: {backup.status.value}"
-                + ("" if backup.status == BackupStatus.COMPLETED else "（存在失败目标）")
+                + (
+                    ""
+                    if backup.status == BackupStatus.COMPLETED
+                    else "（存在失败目标）"
+                )
             )
         self._log(f"卡片处理结束: {self._current_card}")
 
     def _on_error(self, error: str):
         self._worker = None
         self.progress_bar.setValue(0)
-        self._set_state("❌ 处理失败", COLOR.DANGER,
-                        "素材可能未完成备份，请勿格式化此卡；详情见日志。")
+        self._set_state(
+            "❌ 处理失败",
+            COLOR.DANGER,
+            "素材可能未完成备份，请勿格式化此卡；详情见日志。",
+        )
         self._log(f"错误: {error}")
         logger.error(f"KIOSK 自动任务失败: {error}")
 
