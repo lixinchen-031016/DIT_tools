@@ -15,6 +15,52 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+
+def _running_in_ci() -> bool:
+    """判断当前是否云端流水线（GitHub Actions 自动注入 CI / GITHUB_ACTIONS）。"""
+    ci_flag = os.environ.get("CI", "").strip().lower()
+    actions_flag = os.environ.get("GITHUB_ACTIONS", "").strip().lower()
+    return ci_flag in {"1", "true", "yes"} or actions_flag == "true"
+
+
+_LOCAL_TESTS_DIR = Path(__file__).parent / "local"
+
+# 云端流水线只收集适合云端环境的测试：本地专属目录在**收集阶段**即被忽略，
+# 连模块导入、fixture 构造、用例 skip 判定都不会发生（不是运行时 skip）。
+# CI workflow 与打包脚本另加 --ignore / -m 显式排除，形成三重保障；
+# 本地环境（无 CI 变量）不受影响，可单独运行 `pytest DITWorkstationTests/local`。
+if _running_in_ci():
+    collect_ignore = ["local"]
+
+
+def pytest_ignore_collect(collection_path, config):
+    """CI 环境彻底忽略 local/：即使调用方把该目录/文件显式作为参数传入。
+
+    ``collect_ignore`` 只作用于目录遍历收集，显式指定路径时会绕过它；
+    这里用收集钩子补上，保证本地专属用例在云端永远不进入收集范围。
+    """
+    _ = config  # pytest hook 固定签名
+    if not _running_in_ci():
+        return None
+    # 显式传入的路径可能是相对路径，统一 resolve 后再比较
+    try:
+        target = Path(collection_path).resolve()
+        local_dir = _LOCAL_TESTS_DIR.resolve()
+    except (OSError, TypeError):
+        return None
+    if target == local_dir or local_dir in target.parents:
+        return True
+    return None
+
+
+def pytest_collection_modifyitems(config, items):
+    """最后一道防线：CI 环境丢弃任何带 local_only 标记的用例。"""
+    _ = config  # pytest hook 固定签名
+    if not _running_in_ci():
+        return
+    items[:] = [item for item in items if item.get_closest_marker("local_only") is None]
+
+
 # session_context 模块在导入时实例化 EventBus(QObject)，需要 QApplication 先存在。
 # 使用 offscreen 平台避免无头/沙箱环境下连接窗口服务器或剪贴板导致崩溃。
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

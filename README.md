@@ -375,19 +375,15 @@ DIT_tools/
     │           ├── table_factory.py              # 表格工厂
     │           ├── empty_state.py                # 空状态占位
     │           └── asset_table_model.py          # 素材列表分页模型
-    ├── DITWorkstationTests/           # 测试套件（当前 494 个测试，明细见下方「测试覆盖」表）
-    │   ├── conftest.py                 # 共享 fixture（隔离数据库、临时目录与工厂函数）
-    │   ├── test_database.py            # 数据库服务测试
-    │   ├── test_backup*.py             # 备份 / 断点续传 / 方案模板 / 回写联动
-    │   ├── test_mhl_service.py         # ASC MHL 生成/解析/校验
-    │   ├── test_hook_service.py        # post-ingest 钩子
-    │   ├── test_card_verification.py   # 存储卡擦除保护状态
-    │   ├── test_source_reread.py       # 源卡复读校验
-    │   ├── test_camera_identity.py     # EXIF 相机识别
-    │   ├── test_workspace_selector.py  # 工作区-项目选择控件（含删除）
-    │   └── …                           # 其余 30 个测试文件见「测试覆盖」表
+    ├── pytest.ini                     # 测试分类 marker 注册（ci / local_only 等）
+    ├── DITWorkstationTests/           # 云端安全测试（515 用例，明细见「测试覆盖」表）
+    │   ├── conftest.py                 # 共享 fixture + CI 环境收集阶段排除规则
+    │   ├── test_exif_synthetic.py      # EXIF 解析云端回归（合成数据）
+    │   ├── local/                      # 本地专属测试（22 用例，CI 不收集/不触发）
+    │   │   └── test_exif_real_media.py # 真实 JPG/RAW 素材回归与全量扫描
+    │   └── …                           # 其余测试文件见「测试覆盖」表
     └── docs/
-        └── 用户手册.md                 # 用户操作手册
+        └── 用户手册.md                 # 用户操作手册（含测试与 CI 附录）
 ```
 
 ---
@@ -431,11 +427,37 @@ python DITWorkstation/main.py
 
 测试覆盖核心服务业务逻辑、回收站恢复、跨平台路径重新链接、分页、后台任务、归档取消、工具函数、会话上下文、数据模型、缩略图、功能模式、项目健康、文件状态扫描、可中断扫描、Worker 状态协议、缩略图请求去重和无头 UI 交互。
 
+### 测试分类与云端执行范围
+
+测试按执行环境明确分为两类，**云端流水线只执行云端安全测试**；所有依赖本机私有素材、本机路径或人工条件的用例集中在 `DITWorkstationTests/local/`，在 CI 环境不会被收集、导入或触发。marker 统一注册在 `DITWorkstation/pytest.ini`（启用 `--strict-markers`）。
+
+| 分类 | Marker | 位置 | 用例数 | 云端流水线 | 内容 |
+|------|--------|------|--------|------------|------|
+| 云端安全 | `ci` | `DITWorkstationTests/test_*.py` | 515 | ✅ 执行 | 合成数据、mock、临时目录、offscreen Qt，无本机资源依赖 |
+| 本地专属 | `local_only` / `requires_local_media` / `full_library_scan` | `DITWorkstationTests/local/` | 22 | ❌ 不收集、不触发 | 真实 JPG/RAW 素材回归、全量素材扫描、真实素材端到端导入 |
+
+**三重排除规则**（任一环节都能阻止本地专属用例进入云端）：
+
+1. `conftest.py` 在检测到 `CI` / `GITHUB_ACTIONS` 时，于**收集阶段**忽略 `local/`（`collect_ignore` + `pytest_ignore_collect` + `pytest_collection_modifyitems`）；显式把该目录或文件作为参数传入也不会执行任何用例（文件级由模块守卫整模块跳过）。
+2. `.github/workflows/ci-cd.yml` 的测试作业显式传入 `--ignore=DITWorkstationTests/local -m "not local_only"`。
+3. `build/build_macos.sh` 与 `build/build_windows.bat` 的打包门禁使用同样的排除参数，避免云端 runner 依赖开发机私有素材。
+
 ```bash
-# 激活虚拟环境后
+# 云端流水线 / CI 质量门禁（只跑 515 个云端安全用例）
 cd DITWorkstation
+pytest DITWorkstationTests/ --ignore=DITWorkstationTests/local -m "not local_only" -v
+
+# 本地全量（云端安全 + 本地专属，共 537）
 pytest DITWorkstationTests/ -v
+
+# 本地单独运行真实素材回归（缺素材时相关用例自动跳过）
+pytest DITWorkstationTests/local -q
+
+# 本地额外启用全量素材扫描（JPG 803 张 + RAW 2134 张）
+DIT_EXIF_FULL_SCAN=1 DIT_RAW_FULL_SCAN=1 pytest DITWorkstationTests/local -q
 ```
+
+素材目录可用 `DIT_EXIF_FIXTURE_ROOT` / `DIT_EXIF_WORK_ROOT` / `DIT_RAW_ROOT` / `DIT_RAW_WORK_ROOT` 覆盖；全量扫描默认关闭，必须显式设置上述环境变量才会触发。
 
 ### 性能基准
 
@@ -453,49 +475,53 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 
 | 测试文件 | 覆盖范围 | 测试数量 |
 |----------|----------|----------|
-| `test_database.py` | 数据库服务（14 张业务表 CRUD + 版本化迁移 + FTS5 + 连接池 + 拍摄日期时间线） | 73 |
-| `test_utils.py` | 工具函数（format_size / sanitize_filename 等） | 39 |
-| `test_ui_headless.py` | 无头 UI：布局/分页/设置/模板入口/模式切换/文件状态扫描/拍摄时间线下钻/任务中心/启动路由 | 38 |
-| `test_media_import.py` | 媒体导入服务 | 30 |
-| `test_feature_flags.py` | 团队/个人/极简模式功能开关 | 28 |
-| `test_new_features.py` | 横向新特性集成（标签/回收站/评级/持久化缓存等） | 23 |
-| `test_settings.py` | 应用设置持久化 | 21 |
-| `test_settings_dialog.py` | 设置对话框交互与持久化 | 12 |
-| `test_backup.py` | 备份服务（含 ASC MHL 导出） | 16 |
-| `test_checksum.py` | 校验和服务（含跨会话持久化缓存与强制重读） | 15 |
-| `test_archive.py` | 项目归档 / 恢复（含安全防护） | 12 |
-| `test_backup_resume.py` | 备份断点续传 / 失败重试 | 12 |
-| `test_task_view_model.py` | TaskViewModel 状态机与线程生命周期 | 12 |
-| `test_thumbnail.py` | 缩略图服务（缓存、生命周期与请求去重） | 12 |
-| `test_session_context.py` | EventBus + 全局项目/工作区状态联动 | 10 |
-| `test_workspace_selector.py` | 工作区-项目选择控件（含删除工作区/项目） | 10 |
-| `test_report.py` | 报告生成服务（素材/备份/审计 PDF 与 CSV） | 9 |
-| `test_raw_extraction.py` | RAW 提取服务 | 9 |
-| `test_recovery.py` | 回收站恢复、重新链接与重命名回退 | 9 |
-| `test_tags.py` | 素材标签关联表与检索 | 9 |
-| `test_models.py` | 数据模型（AssetRating / RATING_LABELS） | 8 |
-| `test_camera_identity.py` | EXIF 相机品牌机型识别 | 7 |
-| `test_field_registry.py` | 数据库字段注册表与标识符白名单 | 7 |
-| `test_minimal_mode.py` | 极简模式行为 | 7 |
-| `test_rename.py` | 重命名服务 | 7 |
-| `test_volume_monitor.py` | 存储卡识别 | 7 |
-| `test_workers.py` | 后台线程 WorkerThread | 7 |
-| `test_workspace_repository.py` | 工作区及仓储门面一致性 | 7 |
-| `test_mhl_service.py` | ASC MHL 清单生成/解析/目录约定/按清单校验 | 6 |
-| `test_templates.py` | 项目模板 CRUD 与默认模板 | 6 |
-| `test_backup_import_closure.py` | 备份回写导入联动 | 4 |
-| `test_card_verification.py` | 存储卡擦除保护状态机 | 4 |
-| `test_hook_service.py` | post-ingest 钩子（跨平台环境变量注入） | 4 |
-| `test_project_health.py` | 项目健康汇总、容量快照与趋势预测 | 3 |
-| `test_card_automation.py` | 相机卡自动化与可配置 SOP 链 | 3 |
-| `test_source_reread.py` | 源卡复读校验（检测劣化存储卡） | 3 |
-| `test_backup_templates.py` | 备份方案模板 | 2 |
-| `test_version_and_recycle_bin.py` | alpha 版本格式与回收站 UI 恢复入口 | 3 |
-| **合计** | | **494** |
+| `DITWorkstationTests/local/test_exif_real_media.py`（本地专属） | EXIF 真实 JPG/RAW 素材回归与全量扫描（仅本地，local_only） | 22 |
+| `DITWorkstationTests/test_archive.py` | 项目归档 / 恢复（含安全防护） | 12 |
+| `DITWorkstationTests/test_backup.py` | 备份服务（含 ASC MHL 导出） | 16 |
+| `DITWorkstationTests/test_backup_import_closure.py` | 备份回写导入联动 | 4 |
+| `DITWorkstationTests/test_backup_resume.py` | 备份断点续传 / 失败重试 | 12 |
+| `DITWorkstationTests/test_backup_templates.py` | 备份方案模板 | 2 |
+| `DITWorkstationTests/test_camera_identity.py` | EXIF 相机品牌机型识别 | 7 |
+| `DITWorkstationTests/test_card_automation.py` | 相机卡自动化与可配置 SOP 链 | 3 |
+| `DITWorkstationTests/test_card_verification.py` | 存储卡擦除保护状态机 | 4 |
+| `DITWorkstationTests/test_checksum.py` | 校验和服务（含跨会话持久化缓存与强制重读） | 15 |
+| `DITWorkstationTests/test_database.py` | 数据库服务（14 张业务表 CRUD + 版本化迁移 + FTS5 + 连接池 + 拍摄日期时间线） | 73 |
+| `DITWorkstationTests/test_exif_synthetic.py` | EXIF 解析云端回归（合成数据、有理数归一化、Pillow/rawpy 兜底、RAW 边界） | 11 |
+| `DITWorkstationTests/test_feature_flags.py` | 团队/个人/极简模式功能开关 | 28 |
+| `DITWorkstationTests/test_field_registry.py` | 数据库字段注册表与标识符白名单 | 7 |
+| `DITWorkstationTests/test_help_viewer.py` | 应用内用户手册查看器 | 5 |
+| `DITWorkstationTests/test_hook_service.py` | post-ingest 钩子（跨平台环境变量注入） | 4 |
+| `DITWorkstationTests/test_media_import.py` | 媒体导入服务 | 30 |
+| `DITWorkstationTests/test_mhl_service.py` | ASC MHL 清单生成/解析/目录约定/按清单校验 | 6 |
+| `DITWorkstationTests/test_minimal_mode.py` | 极简模式行为 | 7 |
+| `DITWorkstationTests/test_models.py` | 数据模型（AssetRating / RATING_LABELS） | 8 |
+| `DITWorkstationTests/test_new_features.py` | 横向新特性集成（标签/回收站/评级/持久化缓存等） | 23 |
+| `DITWorkstationTests/test_project_health.py` | 项目健康汇总、容量快照与趋势预测 | 3 |
+| `DITWorkstationTests/test_raw_extraction.py` | RAW 提取服务 | 9 |
+| `DITWorkstationTests/test_recovery.py` | 回收站恢复、重新链接与重命名回退 | 9 |
+| `DITWorkstationTests/test_rename.py` | 重命名服务 | 7 |
+| `DITWorkstationTests/test_report.py` | 报告生成服务（素材/备份/审计 PDF 与 CSV） | 9 |
+| `DITWorkstationTests/test_session_context.py` | EventBus + 全局项目/工作区状态联动 | 10 |
+| `DITWorkstationTests/test_settings.py` | 应用设置持久化 | 21 |
+| `DITWorkstationTests/test_settings_dialog.py` | 设置对话框交互与持久化 | 12 |
+| `DITWorkstationTests/test_settings_sop_widgets.py` | 高级 SOP 配置控件 | 5 |
+| `DITWorkstationTests/test_source_reread.py` | 源卡复读校验（检测劣化存储卡） | 3 |
+| `DITWorkstationTests/test_tags.py` | 素材标签关联表与检索 | 9 |
+| `DITWorkstationTests/test_task_view_model.py` | TaskViewModel 状态机与线程生命周期 | 12 |
+| `DITWorkstationTests/test_templates.py` | 项目模板 CRUD 与默认模板 | 6 |
+| `DITWorkstationTests/test_thumbnail.py` | 缩略图服务（缓存、生命周期与请求去重） | 12 |
+| `DITWorkstationTests/test_ui_headless.py` | 无头 UI：布局/分页/设置/模板入口/模式切换/文件状态扫描/拍摄时间线下钻/任务中心/启动路由 | 38 |
+| `DITWorkstationTests/test_utils.py` | 工具函数（format_size / sanitize_filename 等） | 39 |
+| `DITWorkstationTests/test_version_and_recycle_bin.py` | alpha 版本格式与回收站 UI 恢复入口 | 3 |
+| `DITWorkstationTests/test_volume_monitor.py` | 存储卡识别 | 7 |
+| `DITWorkstationTests/test_workers.py` | 后台线程 WorkerThread | 7 |
+| `DITWorkstationTests/test_workspace_repository.py` | 工作区及仓储门面一致性 | 7 |
+| `DITWorkstationTests/test_workspace_selector.py` | 工作区-项目选择控件（含删除工作区/项目） | 10 |
+| **合计** | 云端 515 + 本地专属 22 | **537** |
 
-测试共享 fixture（`conftest.py`）提供隔离的数据库实例、临时目录与工厂函数，保证测试间互不干扰。
+测试共享 fixture（`conftest.py`）提供隔离的数据库实例、临时目录与工厂函数，保证测试间互不干扰；同一文件还负责 CI 环境下的收集阶段排除。
 
-当前本地验证环境为 macOS arm64、Python 3.13、PySide6 6.11.1，执行结果为 `494 passed`。CI 质量门禁包含 pytest、Ruff（lint + format）与 Pyright，并在 macOS / Windows 双平台执行 PyInstaller 打包与冒烟启动。测试使用 Qt `offscreen` 平台，不能替代 Windows/macOS/Linux 原生 GUI、文件系统和打包产物验证。
+**验证结果**（macOS arm64 / Python 3.13 / PySide6 6.11.1）：云端安全测试 `515 passed`，覆盖率 `67.45%`（门禁要求 ≥ 50%）；本地全量含真实素材回归 `537 passed`（其中 JPG 803 张 + RAW 2134 张全量扫描需显式开启）。CI 质量门禁包含 pytest、Ruff（lint + format）与 Pyright，并在 macOS / Windows 双平台执行 PyInstaller 打包与冒烟启动。测试使用 Qt `offscreen` 平台，不能替代 Windows/macOS/Linux 原生 GUI、文件系统和打包产物验证；真实素材回归与全量扫描只在本地执行，云端 runner 不具备这些私有资源。
 
 ### 性能参考
 

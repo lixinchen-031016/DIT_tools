@@ -69,9 +69,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo === [4/5] 运行单元测试 ===
+echo === [4/5] 运行云端安全测试（打包门禁，不含本地素材回归）===
+REM 打包可能在云端 runner 上执行：排除 local/ 本地专属用例，避免依赖本机
+REM 私有素材目录。真实素材回归请在本地单独运行：
+REM   python -m pytest DITWorkstationTests\local -q
 cd DITWorkstation
-python -m pytest DITWorkstationTests/ -q
+python -m pytest DITWorkstationTests/ -q --ignore=DITWorkstationTests/local -m "not local_only"
 if errorlevel 1 (
     echo 错误：单元测试失败，打包中止
     exit /b 1

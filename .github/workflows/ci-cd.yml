@@ -6,12 +6,19 @@
 #   - 运行时  : Python 3.11+（README 推荐 3.13）
 #   - 技术栈  : PySide6 6.11.1、SQLite（WAL 本地持久化）、xxhash、Pillow、
 #              ExifRead、pymediainfo、reportlab；PyInstaller 打包；pytest 测试
-#   - 目录结构: DITWorkstation/ 为主包，DITWorkstation/DITWorkstationTests/ 为
-#              测试套件（252 个用例，offscreen 无头运行）；build/ 为打包脚本与
-#              PyInstaller spec；dist/ 为产物
+#   - 目录结构: DITWorkstation/ 为主包；DITWorkstationTests/ 为云端安全测试，
+#              DITWorkstationTests/local/ 为仅限本地运行的真实素材回归；
+#              build/ 为打包脚本与 PyInstaller spec；dist/ 为产物
 #   - 构建命令: macOS → bash build/build_macos.sh   (产物 .app + .dmg)
 #              Windows → build\build_windows.bat     (产物 .exe)
-#   - 测试命令: cd DITWorkstation && pytest DITWorkstationTests/ -v
+#   - 测试分类: ci（云端，默认集合：合成数据 / mock / offscreen Qt）/
+#              local_only（本地专属：本机私有素材、本机路径、人工条件）
+#   - 云端测试命令: cd DITWorkstation && pytest DITWorkstationTests/ \
+#        --ignore=DITWorkstationTests/local -m "not local_only" -v
+#   - 本地专属命令: pytest DITWorkstationTests/local -q
+#   - 执行范围  : 云端流水线只执行 ci 测试；local/ 由 conftest 在收集阶段
+#                忽略，配合 workflow / 打包脚本的 --ignore 与 -m 三重保障，
+#                本地专属用例不会被收集、导入或触发
 #   - 部署目标: 桌面分发产物（PyInstaller 不支持交叉编译，需在各平台原生构建），
 #              统一发布到 GitHub Releases（nightly 预发布 + 正式 tag 发布）
 #
@@ -98,12 +105,18 @@ jobs:
         run: |
           .venv/bin/python -m pyright DITWorkstation/DITWorkstation
 
-      - name: 运行单元测试 (headless / offscreen)
+      - name: 运行云端安全测试 (ci / offscreen)
         env:
           QT_QPA_PLATFORM: offscreen   # conftest 也会默认设置，此处显式保证
         run: |
           cd DITWorkstation
-          ../.venv/bin/pytest DITWorkstationTests/ -v --junitxml=../test-report.xml --cov=DITWorkstation --cov-report=term --cov-fail-under=50
+          # --ignore 与 -m 双重排除本地专属用例；conftest 在 CI 环境下再从
+          # 收集阶段忽略 local/ 目录，确保依赖本机素材/人工条件的用例不被触发。
+          ../.venv/bin/pytest DITWorkstationTests/ -v \
+            --ignore=DITWorkstationTests/local \
+            -m "not local_only" \
+            --junitxml=../test-report.xml \
+            --cov=DITWorkstation --cov-report=term --cov-fail-under=50
 
       - name: 上传测试报告
         if: always()

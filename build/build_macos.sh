@@ -53,9 +53,13 @@ python -m pip install --upgrade pip >/dev/null
 # RAW 与 PyAV 是正式交付依赖；安装失败即中止，避免构建出功能不完整的包。
 python -m pip install -r requirements.txt >/dev/null
 
-echo "=== [4/6] 运行单元测试 ==="
+echo "=== [4/6] 运行云端安全测试（打包门禁，不含本地素材回归）==="
 cd DITWorkstation
-python -m pytest DITWorkstationTests/ -q
+# 打包也可能在云端 runner 上执行：排除 local/ 本地专属用例，避免依赖
+# 开发机私有素材目录。真实素材回归请在本地单独运行：
+#   python -m pytest DITWorkstationTests/local -q
+python -m pytest DITWorkstationTests/ -q \
+  --ignore=DITWorkstationTests/local -m "not local_only"
 cd "$PROJECT_ROOT"
 
 echo "=== [5/6] 执行 PyInstaller 打包 ==="
