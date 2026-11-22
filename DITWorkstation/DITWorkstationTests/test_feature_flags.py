@@ -10,6 +10,8 @@
 - 极简模式媒体保存目录的读写与持久化
 """
 
+from pathlib import Path
+
 import pytest
 from DITWorkstation.App import config
 from DITWorkstation.App.feature_flags import (
@@ -348,6 +350,16 @@ def test_resolve_minimal_import_target_dir_joins_project(tmp_path):
     assert resolve_minimal_import_target_dir("项目A") == str(base / "项目A")
     # 未传项目名时仅返回根目录
     assert resolve_minimal_import_target_dir() == str(base)
+
+
+def test_resolve_minimal_import_target_dir_sanitizes_project_name(tmp_path):
+    """项目名含 Windows 非法字符或路径跳转段时不得逃出保存目录。"""
+    base = tmp_path / "media"
+    set_minimal_import_target_dir(base)
+
+    assert resolve_minimal_import_target_dir("A:B/C") == str(base / "A_B_C")
+    traversal = Path(resolve_minimal_import_target_dir("../escape"))
+    assert traversal.parent == base
 
 
 def test_minimal_import_target_dir_restored_after_reload(tmp_path, monkeypatch):

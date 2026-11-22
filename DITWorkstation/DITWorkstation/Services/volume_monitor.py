@@ -29,6 +29,13 @@ def list_volume_roots() -> list:
             ]
         return []
     if system == "Windows":
+        # Python 3.12+ 提供 os.listdrives()，避免每轮轮询逐个探测 26 个盘符
+        listdrives = getattr(os, "listdrives", None)
+        if listdrives is not None:
+            try:
+                return [str(drive) for drive in listdrives()]
+            except OSError:
+                pass
         roots = []
         for letter in string.ascii_uppercase:
             drive = f"{letter}:\\"

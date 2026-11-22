@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from DITWorkstation.App import config
 from DITWorkstation.Utils import (
     get_db_service,
     get_report_service,
@@ -92,7 +93,7 @@ class ReportView(RefreshOnShowView):
         # 输出路径（用 QLineEdit 避免多行输入混入换行符）
         out_row = QHBoxLayout()
         self.output_edit = QLineEdit()
-        self.output_edit.setPlaceholderText("默认输出到 ~/Documents/DIT_Reports/")
+        self.output_edit.setPlaceholderText(f"默认输出到 {config.report_dir}")
         out_btn = QPushButton("浏览…")
         out_btn.clicked.connect(self._select_output)
         out_row.addWidget(self.output_edit, 1)

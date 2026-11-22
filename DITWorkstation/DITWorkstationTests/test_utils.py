@@ -25,10 +25,12 @@ from DITWorkstation.Utils.common import (
     get_file_stem,
     get_metadata_service,
     get_report_service,
+    is_network_or_synced_path,
     normalize_name_key,
     normalize_path,
     now_local,
     now_local_iso,
+    resolve_project_directory,
     sanitize_filename,
 )
 from DITWorkstation.Utils.scanner import scan_files
@@ -62,6 +64,21 @@ class TestScanner(unittest.TestCase):
             Path(root, "nested", "clip.cr2").write_bytes(b"raw")
             with self.assertRaises(InterruptedError):
                 scan_files(root, cancel_check=lambda: True)
+
+    def test_hidden_directories_are_skipped(self):
+        """隐藏目录（Unix 点前缀 / Windows 隐藏属性）不应被扫描。"""
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, "visible").mkdir()
+            Path(root, "visible", "a.cr2").write_bytes(b"raw")
+            Path(root, ".hidden").mkdir()
+            Path(root, ".hidden", "b.cr2").write_bytes(b"raw")
+
+            names = {p.name for p in scan_files(root)}
+            self.assertEqual(names, {"a.cr2"})
+            self.assertEqual(
+                {p.name for p in scan_files(root, include_hidden=True)},
+                {"a.cr2", "b.cr2"},
+            )
 
 
 class TestSanitizeFilename(unittest.TestCase):
@@ -121,6 +138,46 @@ class TestSanitizeFilename(unittest.TestCase):
         nfd = unicodedata.normalize("NFD", nfc)
         self.assertNotEqual(nfc, nfd)
         self.assertEqual(sanitize_filename(nfd), nfc)
+
+    def test_control_chars_replaced(self):
+        """Windows 禁止的控制字符也应被替换。"""
+        result = sanitize_filename("a\x00b\x1fc\x7f")
+        self.assertNotIn("\x00", result)
+        self.assertNotIn("\x1f", result)
+
+    def test_long_name_truncated_to_safe_bytes(self):
+        """超长文件名按 UTF-8 字节截断且保留扩展名。"""
+        result = sanitize_filename("长" * 300 + ".cr2")
+        self.assertLessEqual(len(result.encode("utf-8")), 180)
+        self.assertTrue(result.endswith(".cr2"))
+        self.assertTrue(result.startswith("长"))
+
+
+class TestResolveProjectDirectory(unittest.TestCase):
+    def test_uses_sanitized_name(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = resolve_project_directory(root, "A:B/C")
+        self.assertEqual(target, Path(root) / "A_B_C")
+
+    @unittest.skipIf(os.name == "nt", "Windows 不允许创建含冒号的目录")
+    def test_reuses_existing_legacy_directory(self):
+        """macOS/Linux 上已存在含冒号的历史目录时继续复用，避免素材分裂。"""
+        with tempfile.TemporaryDirectory() as root:
+            legacy = Path(root) / "A:B"
+            legacy.mkdir()
+            self.assertEqual(resolve_project_directory(root, "A:B"), legacy)
+
+
+class TestNetworkOrSyncedPath(unittest.TestCase):
+    def test_normal_local_dir_is_safe(self):
+        with tempfile.TemporaryDirectory() as root:
+            risky, reason = is_network_or_synced_path(root)
+        self.assertFalse(risky, reason)
+
+    def test_common_sync_dir_is_detected(self):
+        risky, reason = is_network_or_synced_path(Path.home() / "Dropbox" / "proj")
+        self.assertTrue(risky)
+        self.assertIn("Dropbox", reason)
 
 
 class TestNormalizeNameKey(unittest.TestCase):

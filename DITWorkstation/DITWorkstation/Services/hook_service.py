@@ -9,6 +9,7 @@
 """
 
 import json
+import locale
 import os
 import subprocess
 
@@ -16,6 +17,29 @@ from DITWorkstation.Utils import logger
 
 HOOK_TIMEOUT_SECONDS = 300
 _HOOK_OUTPUT_LIMIT = 500
+
+
+def _decode_output(data: bytes | None) -> str:
+    """跨平台解码 hook 输出。
+
+    Windows 中文环境的 shell 可能输出 GBK，用户脚本也可能输出 UTF-8；
+    依次尝试 UTF-8、系统首选编码、GBK，最后用替换模式兜底，避免
+    ``UnicodeDecodeError`` 中断自动流程。
+    """
+    if not data:
+        return ""
+    encodings = ["utf-8", locale.getpreferredencoding(False), "gbk"]
+    seen = set()
+    for encoding in encodings:
+        key = (encoding or "").lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        try:
+            return data.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode("utf-8", errors="replace")
 
 
 def run_post_ingest_hook(
@@ -47,7 +71,6 @@ def run_post_ingest_hook(
             command,
             shell=True,
             capture_output=True,
-            text=True,
             timeout=timeout,
             env=env,
             check=False,
@@ -59,7 +82,7 @@ def run_post_ingest_hook(
         logger.warning(f"post-ingest 钩子执行失败: {e}")
         return False, str(e)
 
-    output = ((result.stdout or "") + (result.stderr or "")).strip()
+    output = (_decode_output(result.stdout) + _decode_output(result.stderr)).strip()
     if result.returncode != 0:
         logger.warning(
             f"post-ingest 钩子返回码 {result.returncode}: {output[:_HOOK_OUTPUT_LIMIT]}"

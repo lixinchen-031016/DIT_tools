@@ -1,5 +1,6 @@
 """通用工具模块"""
 
+import contextlib
 import functools
 import json
 import logging
@@ -83,21 +84,54 @@ def normalize_name_key(name: str) -> str:
     return unicodedata.normalize("NFC", name).lower()
 
 
+#: 单个文件名片段的 UTF-8 字节上限。NTFS 为 255 个 UTF-16 单元，
+#: ext4/APFS 为 255 字节；留出归档索引前缀等余量后取 180。
+_MAX_FILENAME_BYTES = 180
+
+#: Windows 非法字符（含控制字符 0x00-0x1F）+ 路径分隔符
+_ILLEGAL_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """按 UTF-8 字节数截断字符串，且不截断半个字符。
+
+    对 Linux 上以 surrogateescape 表示的非法字节文件名也能安全处理：
+    编码时保留原始字节，截断后忽略不完整的字节序列，避免产生新的代理字符。
+    """
+    encoded = text.encode("utf-8", errors="surrogateescape")
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
 def sanitize_filename(filename: str) -> str:
     """清理文件名，移除非法字符（Windows 文件名规则，兼容各系统）。
 
-    - 替换非法字符 \\ / : * ? " < > |
+    - 替换非法字符 \\ / : * ? " < > | 及控制字符 0x00-0x1F
     - 统一为 NFC 归一化形式（macOS 文件系统以 NFD 存储，归档/跨系统
       分发前归一化避免乱码与重复）
     - 去除 Windows 不允许的结尾点与空格（"file. " / "file "）
     - 规避 Windows 保留设备名（CON / PRN / AUX / NUL / COM1-9 / LPT1-9），
       命中时前缀 _ 避免生成无法创建的文件
+    - 按 UTF-8 字节数截断，避免超过 NTFS / APFS / ext4 的单段文件名上限
     """
-    illegal_chars = r'[\\/:*?"<>|]'
     name = unicodedata.normalize("NFC", filename)
-    name = re.sub(illegal_chars, "_", name).rstrip(" .")
+    name = _ILLEGAL_FILENAME_CHARS.sub("_", name).rstrip(" .")
     if not name:
         return "_"
+
+    # 保留扩展名，只截断主干，避免破坏文件类型
+    dot = name.rfind(".")
+    if dot > 0:
+        stem, suffix = name[:dot], name[dot:]
+    else:
+        stem, suffix = name, ""
+    max_stem_bytes = max(1, _MAX_FILENAME_BYTES - len(suffix.encode("utf-8")))
+    name = f"{_truncate_utf8(stem, max_stem_bytes)}{suffix}"
+    name = _truncate_utf8(name, _MAX_FILENAME_BYTES).rstrip(" .")
+    if not name:
+        return "_"
+
     stem = name.split(".", 1)[0].upper()
     reserved = {
         "CON",
@@ -110,6 +144,125 @@ def sanitize_filename(filename: str) -> str:
     if stem in reserved:
         return f"_{name}"
     return name
+
+
+def _is_path_under(path: Path, root: Path) -> bool:
+    """判断 path 是否位于 root 之下（大小写不敏感兜底）。"""
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        pass
+    try:
+        p = os.path.normcase(str(path))
+        r = os.path.normcase(str(root)).rstrip("/\\")
+        return bool(r) and (p == r or p.startswith(r + os.sep))
+    except (OSError, ValueError):
+        return False
+
+
+def resolve_project_directory(base, project_name: str) -> Path:
+    """返回项目在 ``base`` 下的子目录路径。
+
+    - 默认使用 ``sanitize_filename(project_name)``，保证 Windows 可创建；
+    - macOS/Linux 上若历史目录已使用含 ``:`` 等 Windows 非法字符的原始名，
+      且净化后的目录尚不存在，则继续复用历史目录，避免素材被拆到两个目录。
+
+    Args:
+        base: 工作区根目录或极简模式保存目录。
+        project_name: 项目显示名（用户输入）。
+
+    Returns:
+        项目子目录路径（未创建）。
+    """
+    base_path = Path(base)
+    raw = str(project_name or "")
+    safe_name = sanitize_filename(raw)
+    safe_path = base_path / safe_name
+    if (
+        os.name != "nt"
+        and raw
+        and raw not in (".", "..")
+        and "/" not in raw
+        and "\\" not in raw
+        and raw != safe_name
+    ):
+        try:
+            legacy = base_path / raw
+            if legacy.is_dir() and not safe_path.exists():
+                return legacy
+        except OSError:
+            pass
+    return safe_path
+
+
+def is_network_or_synced_path(path) -> tuple[bool, str]:
+    """判断路径是否位于网络盘或常见云同步目录。
+
+    网络盘（SMB/NFS/UNC）和云同步目录上的 SQLite WAL 可能无法可靠工作，
+    或在多端同步时产生锁冲突。调用方据此提示用户，而不是静默接受。
+
+    Returns:
+        (是否有风险, 风险原因)；安全路径返回 ``(False, "")``。
+    """
+    if not path:
+        return False, ""
+    try:
+        target = Path(path).expanduser()
+        absolute = target if target.is_absolute() else Path.cwd() / target
+        # 用 normpath 而非 resolve：避免在失联的网络盘上阻塞
+        resolved = Path(os.path.normpath(str(absolute)))
+    except (OSError, ValueError, TypeError):
+        return False, ""
+
+    if os.name == "nt":
+        text = str(resolved)
+        if text.startswith(("\\\\", "//")):
+            return True, "网络共享路径（SMB/UNC）"
+        drive = resolved.drive
+        if drive:
+            with contextlib.suppress(Exception):
+                import ctypes
+
+                # DRIVE_REMOTE = 4
+                if ctypes.windll.kernel32.GetDriveTypeW(f"{drive}\\") == 4:
+                    return True, "网络映射盘"
+
+    sync_roots: list[tuple[Path, str]] = []
+    for env_key, label in (
+        ("OneDrive", "OneDrive"),
+        ("OneDriveCommercial", "OneDrive"),
+        ("OneDriveConsumer", "OneDrive"),
+        ("Dropbox", "Dropbox"),
+    ):
+        value = (os.environ.get(env_key) or "").strip()
+        if value:
+            sync_roots.append((Path(value), label))
+
+    home = Path.home()
+    for rel, label in (
+        ("Dropbox", "Dropbox"),
+        ("Google Drive", "Google Drive"),
+        ("GoogleDrive", "Google Drive"),
+        ("Box", "Box"),
+        ("pCloudDrive", "pCloud"),
+        ("OneDrive", "OneDrive"),
+        ("Library/Mobile Documents", "iCloud Drive"),
+    ):
+        sync_roots.append((home / rel, label))
+
+    for root, label in sync_roots:
+        try:
+            candidate = root.expanduser()
+            absolute_root = (
+                candidate if candidate.is_absolute() else Path.cwd() / candidate
+            )
+            resolved_root = Path(os.path.normpath(str(absolute_root)))
+        except (OSError, ValueError):
+            resolved_root = root
+        if _is_path_under(resolved, resolved_root):
+            return True, f"{label} 同步目录"
+    return False, ""
 
 
 def ensure_directory(path: str) -> bool:

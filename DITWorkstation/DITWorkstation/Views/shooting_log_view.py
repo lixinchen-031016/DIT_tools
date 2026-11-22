@@ -34,6 +34,7 @@ from DITWorkstation.Utils import (
     normalize_name_key,
     open_in_file_manager,
     safe_slot,
+    sanitize_filename,
 )
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS, TITLE_QSS
 from DITWorkstation.Views.Widgets import RefreshOnShowView, WorkspaceProjectSelector
@@ -585,7 +586,10 @@ class ShootingLogView(RefreshOnShowView):
         if not self._logs:
             QMessageBox.information(self, "无数据", "当前项目暂无拍摄日志可导出。")
             return
-        default_name = f"shooting_logs_{self.current_project.name if self.current_project else ''}.csv"
+        project_part = (
+            sanitize_filename(self.current_project.name) if self.current_project else ""
+        )
+        default_name = f"shooting_logs_{project_part}.csv"
         path = pick_save_file(
             self,
             "导出拍摄日志 CSV",

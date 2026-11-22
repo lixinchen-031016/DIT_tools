@@ -47,6 +47,7 @@ from DITWorkstation.Utils import (
     logger,
     open_in_file_manager,
     pick_directory,
+    resolve_project_directory,
 )
 from DITWorkstation.ViewModels import TaskViewModel
 from DITWorkstation.Views.Styles.theme import (
@@ -766,8 +767,12 @@ class MediaImportView(RefreshOnShowView):
                     f"color: {COLOR.DANGER}; font-size: {FONT_SIZE.SM}px;"
                 )
                 return
-            name = self.current_project.name if self.current_project else "<项目名>"
-            self.copy_dest_label.setText(f"→ {Path(target) / name}")
+            dest = (
+                resolve_minimal_import_target_dir(self.current_project.name)
+                if self.current_project
+                else str(Path(target) / "<项目名>")
+            )
+            self.copy_dest_label.setText(f"→ {dest}")
             self.copy_dest_label.setStyleSheet(
                 f"color: {COLOR.TEXT_SECONDARY}; font-size: {FONT_SIZE.SM}px;"
             )
@@ -780,7 +785,7 @@ class MediaImportView(RefreshOnShowView):
             )
             return
         if self.current_project:
-            dest = str(Path(ws.path) / self.current_project.name)
+            dest = str(resolve_project_directory(ws.path, self.current_project.name))
         else:
             dest = str(Path(ws.path) / "<项目名>")
         self.copy_dest_label.setText(f"→ {dest}")
@@ -1073,7 +1078,9 @@ class MediaImportView(RefreshOnShowView):
                         ws, "选择工作区目录（复制到此处）"
                     ):
                         return
-                workspace_dir = str(Path(ws.path) / self.current_project.name)
+                workspace_dir = str(
+                    resolve_project_directory(ws.path, self.current_project.name)
+                )
 
             # 覆盖确认：检查目标目录中是否已存在同名文件（两种模式共用）
             try:

@@ -7,9 +7,12 @@
 - 数据库迁移 v11：新增 `shots` 表归一「场景 / 镜头 / 镜次」三元组，`shooting_logs` 与 `media_assets` 增加 `shot_id`，所有写入路径统一维护；重复三元组自动合并。
 - 清理遗留 `shooting_logs.file_paths`（SQLite 3.35+ 直接删除列），`ShootingLog` 模型移除 `file_paths`，归档导出/恢复改用 `shot_id`。
 - 项目软删除/恢复与永久删除纳入 `shots` 表；删除日志、解除关联或修改三元组后自动清理孤儿 shot。
-- 文档同步：README 数据库结构（15 张业务表 / 24 个显式索引 / v1–v11）与测试计数（云端 526 / 合计 548）；用户手册补充设置四页说明。
+- 跨平台修复：重命名模板、项目名作为目录名时统一净化（Windows 非法字符、保留设备名、超长名、路径分隔符与 `..` 逃逸）；仅大小写变化的重命名不再误判为冲突。
+- 跨平台修复：`sanitize_filename` 清理控制字符并按 UTF-8 字节截断；文件扫描跳过 Windows 隐藏/系统目录；Windows 卷检测优先使用 `os.listdrives()`。
+- 跨平台修复：hook 输出按 UTF-8 / 系统编码 / GBK 依次解码，避免 `UnicodeDecodeError`；Windows 报告目录使用系统「文档」已知文件夹；选择网络盘或云同步目录作为数据库目录时给出风险提示。
+- 文档同步：README 数据库结构（15 张业务表 / 24 个显式索引 / v1–v11）与测试计数（云端 537 / 合计 559）；用户手册补充设置四页说明。
 
-测试基线：`pytest DITWorkstationTests/ --ignore=DITWorkstationTests/local -m "not local_only" -q`，`526 passed`；`ruff check` / `ruff format --check` 全通过。
+测试基线：`pytest DITWorkstationTests/ --ignore=DITWorkstationTests/local -m "not local_only" -q`，`537 passed`；`ruff check` / `ruff format --check` 全通过。
 
 ## 2026-09-12（新增「极简模式」界面模式）
 

@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import os
+import stat
 from collections.abc import Callable, Iterable
 from pathlib import Path
+
+#: Windows 隐藏/系统属性；非 Windows 平台不存在这些常量，取默认值即可
+_WINDOWS_HIDDEN_ATTRS = getattr(stat, "FILE_ATTRIBUTE_HIDDEN", 0x2) | getattr(
+    stat, "FILE_ATTRIBUTE_SYSTEM", 0x4
+)
 
 
 def scan_files(
@@ -31,7 +37,7 @@ def scan_files(
         return [base] if _matches(base, extensions, include_hidden) else []
     allowed = {extension.lower() for extension in extensions} if extensions else None
     files, batch = [], []
-    for path in _iter_scan_paths(base, recursive, cancel_check):
+    for path in _iter_scan_paths(base, recursive, include_hidden, cancel_check):
         if cancel_check and cancel_check():
             raise InterruptedError("文件扫描已取消")
         if not _is_visible_file(path, include_hidden):
@@ -51,6 +57,7 @@ def scan_files(
 def _iter_scan_paths(
     base: Path,
     recursive: bool,
+    include_hidden: bool = False,
     cancel_check: Callable[[], bool] | None = None,
 ):
     """以可中断的 scandir 遍历返回路径，避免 rglob 卡住取消响应。"""
@@ -66,6 +73,9 @@ def _iter_scan_paths(
         for entry in reversed(entries):
             if cancel_check and cancel_check():
                 raise InterruptedError("文件扫描已取消")
+            if not include_hidden and _is_hidden_entry(entry):
+                # 隐藏目录整体跳过，避免扫描 System Volume Information 等系统目录
+                continue
             path = Path(entry.path)
             yield path
             if recursive:
@@ -78,8 +88,34 @@ def _iter_scan_paths(
             break
 
 
+def _is_hidden_entry(entry: os.DirEntry) -> bool:
+    """判断 scandir 条目是否隐藏（Unix 点前缀 / Windows 隐藏或系统属性）。"""
+    if entry.name.startswith("."):
+        return True
+    if os.name != "nt":
+        return False
+    try:
+        attributes = entry.stat(follow_symlinks=False).st_file_attributes
+    except OSError:
+        return False
+    return bool(attributes & _WINDOWS_HIDDEN_ATTRS)
+
+
+def _is_hidden_path(path: Path) -> bool:
+    """判断路径是否隐藏（用于直接传入的文件/目录）。"""
+    if path.name.startswith("."):
+        return True
+    if os.name != "nt":
+        return False
+    try:
+        attributes = path.stat().st_file_attributes
+    except OSError:
+        return False
+    return bool(attributes & _WINDOWS_HIDDEN_ATTRS)
+
+
 def _is_visible_file(path: Path, include_hidden: bool) -> bool:
-    return path.is_file() and (include_hidden or not path.name.startswith("."))
+    return path.is_file() and (include_hidden or not _is_hidden_path(path))
 
 
 def _emit_batch(callback: Callable[[list[Path]], None], batch: list[Path]) -> None:
@@ -89,7 +125,7 @@ def _emit_batch(callback: Callable[[list[Path]], None], batch: list[Path]) -> No
 def _matches(
     path: Path, extensions: Iterable[str] | None, include_hidden: bool
 ) -> bool:
-    if not include_hidden and path.name.startswith("."):
+    if not include_hidden and _is_hidden_path(path):
         return False
     return extensions is None or path.suffix.lower() in {
         ext.lower() for ext in extensions

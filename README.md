@@ -401,7 +401,7 @@ DIT_tools/
     │           ├── empty_state.py                # 空状态占位
     │           └── asset_table_model.py          # 素材列表分页模型
     ├── pytest.ini                     # 测试分类 marker 注册（ci / local_only 等）
-    ├── DITWorkstationTests/           # 云端安全测试（526 用例，明细见「测试覆盖」表）
+    ├── DITWorkstationTests/           # 云端安全测试（537 用例，明细见「测试覆盖」表）
     │   ├── conftest.py                 # 共享 fixture + CI 环境收集阶段排除规则
     │   ├── test_exif_synthetic.py      # EXIF 解析云端回归（合成数据）
     │   ├── local/                      # 本地专属测试（22 用例，CI 不收集/不触发）
@@ -458,7 +458,7 @@ python DITWorkstation/main.py
 
 | 分类 | Marker | 位置 | 用例数 | 云端流水线 | 内容 |
 |------|--------|------|--------|------------|------|
-| 云端安全 | `ci` | `DITWorkstationTests/test_*.py` | 526 | ✅ 执行 | 合成数据、mock、临时目录、offscreen Qt，无本机资源依赖 |
+| 云端安全 | `ci` | `DITWorkstationTests/test_*.py` | 537 | ✅ 执行 | 合成数据、mock、临时目录、offscreen Qt，无本机资源依赖 |
 | 本地专属 | `local_only` / `requires_local_media` / `full_library_scan` | `DITWorkstationTests/local/` | 22 | ❌ 不收集、不触发 | 真实 JPG/RAW 素材回归、全量素材扫描、真实素材端到端导入 |
 
 **三重排除规则**（任一环节都能阻止本地专属用例进入云端）：
@@ -468,11 +468,11 @@ python DITWorkstation/main.py
 3. `build/build_macos.sh` 与 `build/build_windows.bat` 的打包门禁使用同样的排除参数，避免云端 runner 依赖开发机私有素材。
 
 ```bash
-# 云端流水线 / CI 质量门禁（只跑 526 个云端安全用例）
+# 云端流水线 / CI 质量门禁（只跑 537 个云端安全用例）
 cd DITWorkstation
 pytest DITWorkstationTests/ --ignore=DITWorkstationTests/local -m "not local_only" -v
 
-# 本地全量（云端安全 + 本地专属，共 548）
+# 本地全量（云端安全 + 本地专属，共 559）
 pytest DITWorkstationTests/ -v
 
 # 本地单独运行真实素材回归（缺素材时相关用例自动跳过）
@@ -512,10 +512,10 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 | `DITWorkstationTests/test_checksum.py` | 校验和服务（含跨会话持久化缓存与强制重读） | 15 |
 | `DITWorkstationTests/test_database.py` | 数据库服务（15 张业务表 CRUD + 版本化迁移 + FTS5 + 连接池 + 拍摄日期时间线 + 场记三元组归一） | 74 |
 | `DITWorkstationTests/test_exif_synthetic.py` | EXIF 解析云端回归（合成数据、有理数归一化、Pillow/rawpy 兜底、RAW 边界） | 11 |
-| `DITWorkstationTests/test_feature_flags.py` | 团队/个人/极简模式功能开关（含数据驱动预设） | 30 |
+| `DITWorkstationTests/test_feature_flags.py` | 团队/个人/极简模式功能开关（含数据驱动预设） | 31 |
 | `DITWorkstationTests/test_field_registry.py` | 数据库字段注册表与标识符白名单 | 7 |
 | `DITWorkstationTests/test_help_viewer.py` | 应用内用户手册查看器 | 5 |
-| `DITWorkstationTests/test_hook_service.py` | post-ingest 钩子（跨平台环境变量注入） | 4 |
+| `DITWorkstationTests/test_hook_service.py` | post-ingest 钩子（跨平台环境变量注入与输出解码） | 5 |
 | `DITWorkstationTests/test_media_import.py` | 媒体导入服务 | 30 |
 | `DITWorkstationTests/test_mhl_service.py` | ASC MHL 清单生成/解析/目录约定/按清单校验 | 6 |
 | `DITWorkstationTests/test_minimal_mode.py` | 极简模式行为 | 7 |
@@ -524,7 +524,7 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 | `DITWorkstationTests/test_project_health.py` | 项目健康汇总、容量快照与趋势预测 | 3 |
 | `DITWorkstationTests/test_raw_extraction.py` | RAW 提取服务 | 9 |
 | `DITWorkstationTests/test_recovery.py` | 回收站恢复、重新链接与重命名回退 | 9 |
-| `DITWorkstationTests/test_rename.py` | 重命名服务 | 7 |
+| `DITWorkstationTests/test_rename.py` | 重命名服务（含跨平台文件名校验） | 9 |
 | `DITWorkstationTests/test_report.py` | 报告生成服务（素材/备份/审计 PDF 与 CSV） | 9 |
 | `DITWorkstationTests/test_session_context.py` | EventBus + 全局项目/工作区状态联动 | 10 |
 | `DITWorkstationTests/test_settings.py` | 应用设置持久化 | 21 |
@@ -536,17 +536,17 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 | `DITWorkstationTests/test_templates.py` | 项目模板 CRUD 与默认模板 | 6 |
 | `DITWorkstationTests/test_thumbnail.py` | 缩略图服务（缓存、生命周期与请求去重） | 12 |
 | `DITWorkstationTests/test_ui_headless.py` | 无头 UI：布局/分页/设置/模板入口/模式切换/文件状态扫描/拍摄时间线下钻/任务中心/数据安全概览/素材库场记标签/报告对话框/启动路由 | 44 |
-| `DITWorkstationTests/test_utils.py` | 工具函数（format_size / sanitize_filename 等） | 39 |
+| `DITWorkstationTests/test_utils.py` | 工具函数（format_size / sanitize_filename / 项目目录解析 / 网络与同步目录识别等） | 46 |
 | `DITWorkstationTests/test_version_and_recycle_bin.py` | alpha 版本格式与回收站 UI 恢复入口 | 3 |
 | `DITWorkstationTests/test_volume_monitor.py` | 存储卡识别 | 7 |
 | `DITWorkstationTests/test_workers.py` | 后台线程 WorkerThread | 7 |
 | `DITWorkstationTests/test_workspace_repository.py` | 工作区及仓储门面一致性 | 7 |
 | `DITWorkstationTests/test_workspace_selector.py` | 工作区-项目选择控件（含删除工作区/项目） | 10 |
-| **合计** | 云端 526 + 本地专属 22 | **548** |
+| **合计** | 云端 537 + 本地专属 22 | **559** |
 
 测试共享 fixture（`conftest.py`）提供隔离的数据库实例、临时目录与工厂函数，保证测试间互不干扰；同一文件还负责 CI 环境下的收集阶段排除。
 
-**验证结果**（macOS arm64 / Python 3.13 / PySide6 6.11.1）：云端安全测试 `526 passed`，覆盖率 `67.45%`（门禁要求 ≥ 50%）；本地全量含真实素材回归 `548 passed`（其中 JPG 803 张 + RAW 2134 张全量扫描需显式开启）。CI 质量门禁包含 pytest、Ruff（lint + format）与 Pyright，并在 macOS / Windows 双平台执行 PyInstaller 打包与冒烟启动。测试使用 Qt `offscreen` 平台，不能替代 Windows/macOS/Linux 原生 GUI、文件系统和打包产物验证；真实素材回归与全量扫描只在本地执行，云端 runner 不具备这些私有资源。
+**验证结果**（macOS arm64 / Python 3.13 / PySide6 6.11.1）：云端安全测试 `537 passed`，覆盖率 `67.45%`（门禁要求 ≥ 50%）；本地全量含真实素材回归 `559 passed`（其中 JPG 803 张 + RAW 2134 张全量扫描需显式开启）。CI 质量门禁包含 pytest、Ruff（lint + format）与 Pyright，并在 macOS / Windows 双平台执行 PyInstaller 打包与冒烟启动。测试使用 Qt `offscreen` 平台，不能替代 Windows/macOS/Linux 原生 GUI、文件系统和打包产物验证；真实素材回归与全量扫描只在本地执行，云端 runner 不具备这些私有资源。
 
 ### 性能参考
 

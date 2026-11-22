@@ -47,6 +47,7 @@ from DITWorkstation.Utils import (
     get_db_service,
     get_thumbnail_service,
     import_settings,
+    is_network_or_synced_path,
     log_files_summary,
     logger,
     open_in_file_manager,
@@ -132,8 +133,10 @@ def _post_ingest_hook_presets() -> list[tuple[str, str]]:
             (
                 "Webhook 通知（POST JSON）",
                 (
-                    'curl -s -X POST -H "Content-Type: application/json" '
-                    '-d "{\\"event\\":\\"post_ingest\\"}" https://example.com/hook'
+                    "powershell -NoProfile -Command \"$b = @{event='post_ingest'; "
+                    "source=$env:DIT_SOURCE_PATH} | ConvertTo-Json -Compress; "
+                    "Invoke-RestMethod -Uri 'https://example.com/hook' "
+                    "-Method Post -ContentType 'application/json' -Body $b\""
                 ),
             ),
         ]
@@ -866,6 +869,21 @@ class SettingsDialog(QDialog):
         if new_dir.resolve() == current.resolve():
             QMessageBox.information(self, "提示", "数据库目录未变化。")
             return
+
+        risky, reason = is_network_or_synced_path(new_dir)
+        if risky:
+            reply = QMessageBox.question(
+                self,
+                "目录存在风险",
+                f"所选目录位于{reason}：\n{new_dir}\n\n"
+                "SQLite 的 WAL 模式在网络盘或云同步目录上可能无法可靠工作，"
+                "并可能产生锁冲突或同步冲突。\n"
+                "建议选择本机磁盘目录。是否仍要继续？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
 
         # 关闭连接池后移动数据库文件（含 WAL/SHM）
         try:

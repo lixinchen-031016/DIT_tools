@@ -97,6 +97,25 @@ class TestRenameService(unittest.TestCase):
         new_path = results[0][1]
         self.assertTrue(Path(new_path).exists())
 
+    def test_pattern_sanitizes_illegal_chars(self):
+        """模板中的 Windows 非法字符应被净化，且不能逃出原目录。"""
+        rule = RenameRule(pattern="bad:name/{number}", start_number=1, padding=3)
+        pairs = self.service.preview_rename(self.test_files[:1], rule)
+
+        source_parent = Path(self.test_files[0]).parent
+        target = Path(pairs[0][1])
+        self.assertEqual(target.parent, source_parent)
+        self.assertNotIn(":", target.name)
+        self.assertNotIn("/", target.name)
+        self.assertNotIn("\\", target.name)
+
+    def test_pattern_traversal_stays_in_directory(self):
+        """含 ../ 的模板不能把文件移动到父目录。"""
+        rule = RenameRule(pattern="../{number}", start_number=1, padding=3)
+        pairs = self.service.preview_rename(self.test_files[:1], rule)
+        target = Path(pairs[0][1])
+        self.assertEqual(target.parent, Path(self.test_files[0]).parent)
+
     def test_custom_pattern_variables(self):
         """自定义模板变量"""
         rule = RenameRule(

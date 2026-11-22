@@ -32,11 +32,33 @@ def _resolve_data_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent.parent / "data"
 
 
+def _windows_documents_dir() -> Path | None:
+    """读取 Windows「文档」已知文件夹（兼容 OneDrive 重定向与本地化目录）。"""
+    try:
+        import ctypes
+
+        buffer = ctypes.create_unicode_buffer(260)
+        # CSIDL_PERSONAL = 5
+        if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buffer) == 0:
+            value = buffer.value.strip()
+            if value:
+                return Path(value)
+    except Exception:
+        # 非 Windows 或已知文件夹 API 不可用时回退到默认文档目录
+        return None
+    return None
+
+
 def _resolve_report_dir() -> Path:
-    """解析报告输出目录（跨平台 + 冻结态兼容）"""
-    if getattr(sys, "frozen", False):
-        # 打包后：输出到用户文档目录
-        return Path.home() / "Documents" / "DIT_Reports"
+    """解析报告输出目录（跨平台 + 冻结态兼容）。
+
+    Windows 优先使用系统「文档」已知文件夹，避免 OneDrive 重定向或
+    本地化目录名导致报告落到非用户预期的位置。
+    """
+    if platform.system() == "Windows":
+        documents = _windows_documents_dir()
+        if documents is not None:
+            return documents / "DIT_Reports"
     return Path.home() / "Documents" / "DIT_Reports"
 
 

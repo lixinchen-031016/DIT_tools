@@ -30,7 +30,7 @@ from pathlib import Path
 
 from DITWorkstation.App import config
 from DITWorkstation.App.navigation import NAV_ITEMS
-from DITWorkstation.Utils import logger
+from DITWorkstation.Utils import logger, resolve_project_directory
 
 
 class UsageMode(str, Enum):
@@ -306,7 +306,9 @@ def resolve_minimal_import_target_dir(project_name: str = "") -> str:
         return ""
     target = Path(base)
     if project_name:
-        target = target / project_name
+        # 项目名是用户输入，作为目录名时必须按各平台文件名规则净化，
+        # 同时防止以 /、\ 或 .. 开头时跳出保存目录。
+        target = resolve_project_directory(target, project_name)
     return str(target)
 
 

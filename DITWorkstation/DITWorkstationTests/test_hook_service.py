@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from DITWorkstation.Services.hook_service import run_post_ingest_hook
+from DITWorkstation.Services.hook_service import _decode_output, run_post_ingest_hook
 
 
 class TestHookService(unittest.TestCase):
@@ -40,6 +40,12 @@ class TestHookService(unittest.TestCase):
     def test_invalid_command_reports_error(self):
         ok, _ = run_post_ingest_hook("__definitely_not_a_command_xyz__")
         self.assertFalse(ok)
+
+    def test_decode_output_prefers_utf8_and_never_raises(self):
+        """UTF-8 输出应正确解码；任意字节都不能抛 UnicodeDecodeError。"""
+        self.assertEqual(_decode_output("相机卡完成".encode()), "相机卡完成")
+        self.assertEqual(_decode_output(None), "")
+        self.assertIsInstance(_decode_output(b"\x81\x40\xff"), str)
 
 
 if __name__ == "__main__":

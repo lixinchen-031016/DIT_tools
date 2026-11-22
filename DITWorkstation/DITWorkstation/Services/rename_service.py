@@ -9,7 +9,15 @@ from collections.abc import Callable
 from pathlib import Path
 
 from DITWorkstation.Models import OperationResult, OperationStatus, RenameRule
-from DITWorkstation.Utils import now_local
+from DITWorkstation.Utils import now_local, sanitize_filename
+
+
+def _same_file(left: Path, right: Path) -> bool:
+    """判断两个路径是否指向同一文件（大小写不敏感文件系统友好）。"""
+    try:
+        return left.samefile(right)
+    except (OSError, ValueError):
+        return False
 
 
 class RenameService:
@@ -67,8 +75,16 @@ class RenameService:
                     progress_callback(i + 1, total, new.name)
                 continue
 
-            # 避免覆盖已有文件
-            if new.exists() and old != new:
+            if old == new:
+                if progress_callback:
+                    progress_callback(i + 1, total, new.name)
+                continue
+
+            # samefile 可准确区分「仅大小写不同但指向同一文件」与
+            # 「另一个已存在的同名文件」，无需假设文件系统是否区分大小写。
+            same_location = new.exists() and _same_file(old, new)
+            # 避免覆盖已有文件；仅大小写变化不算冲突
+            if not same_location and new.exists():
                 stem = new.stem
                 suffix = new.suffix
                 counter = 1
@@ -76,9 +92,18 @@ class RenameService:
                     new = new.parent / f"{stem}_{counter}{suffix}"
                     counter += 1
 
-            if old != new:
+            if same_location:
+                # 大小写不敏感文件系统上，直接改大小写可能失败；用临时名中转
+                temp = old.with_name(f"{old.name}.dit-case-tmp")
+                counter = 1
+                while temp.exists():
+                    temp = old.with_name(f"{old.name}.dit-case-tmp{counter}")
+                    counter += 1
+                old.rename(temp)
+                temp.rename(new)
+            else:
                 old.rename(new)
-                results.append((old_path, str(new)))
+            results.append((old_path, str(new)))
 
             if progress_callback:
                 progress_callback(i + 1, total, new.name)
@@ -103,10 +128,12 @@ class RenameService:
         name = name.replace("{suffix}", rule.suffix)
         name = name.replace("{date}", now_local().strftime("%Y%m%d"))
 
-        # 清理多余分隔符
+        # 清理多余分隔符，并按 Windows/跨平台文件名规则净化
         name = re.sub(r"[_\-\s]+", "_", name).strip("_")
+        if not name:
+            name = original_stem or "file"
 
-        return f"{name}{suffix}"
+        return sanitize_filename(f"{name}{suffix}")
 
     def batch_rename_with_association(
         self, file_groups: list[list[str]], rule: RenameRule
