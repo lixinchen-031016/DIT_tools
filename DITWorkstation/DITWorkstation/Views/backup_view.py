@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
 )
 
 from DITWorkstation.App.feature_flags import is_enabled
-from DITWorkstation.App.navigation import get_nav_index
 from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import BackupJob, BackupTemplate, ChecksumAlgorithm
 from DITWorkstation.Services.backup_service import BackupService
@@ -1313,12 +1312,10 @@ class BackupView(RefreshOnShowView):
             if goto_log_btn is not None and msg_box.clickedButton() is goto_log_btn:
                 try:
                     main_window = self.window()
-                    log_idx = get_nav_index("log")
-                    # 目标页未激活时 get_nav_index 返回 None，禁止传给 setCurrentRow
-                    if hasattr(main_window, "nav_list") and log_idx is not None:
-                        main_window.nav_list.setCurrentRow(log_idx)
+                    if hasattr(main_window, "open_shooting_log"):
+                        main_window.open_shooting_log()
                 except Exception as e:
-                    logger.warning(f"跳转日志视图失败: {e}")
+                    logger.warning(f"打开场记标签页失败: {e}")
 
         # 刷新备份历史表（含失败文件与最新状态）
         try:

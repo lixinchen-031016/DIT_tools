@@ -5,7 +5,7 @@
 - 非法 usage_mode 值回退团队模式
 - set_usage_mode 持久化到 app_config
 - apply_saved_config 后模式恢复
-- 团队模式 7 项导航 / 个人模式 6 项导航 / 极简模式 1 项导航（顺序正确）
+- 团队模式 6 项导航 / 个人模式 6 项导航 / 极简模式 1 项导航（顺序正确）
 - 个人模式关闭团队特性，团队模式全部开启，极简模式仅开启白名单特性
 - 极简模式媒体保存目录的读写与持久化
 """
@@ -108,7 +108,7 @@ def test_old_settings_without_usage_mode_stays_team():
 def test_team_mode_activates_all_nav_items():
     active = get_active_nav_items()
     assert [k for k, _, _ in active] == [k for k, _, _ in NAV_ITEMS]
-    assert len(active) == 7
+    assert len(active) == 6
 
 
 def test_personal_mode_activates_six_nav_items(monkeypatch):
@@ -122,21 +122,24 @@ def test_personal_mode_activates_six_nav_items(monkeypatch):
 
 
 def test_is_nav_enabled(monkeypatch):
-    assert is_nav_enabled("log")
-    # 报告生成已改为工作台动作，不再是一级导航项
+    assert is_nav_enabled("library")
+    # 拍摄日志已并入素材库「场记」标签页，报告改为工作台动作，均非一级导航
+    assert not is_nav_enabled("log")
     assert not is_nav_enabled("report")
+    assert is_enabled("shooting_log")
     monkeypatch.setattr(config, "usage_mode", "personal")
     assert not is_nav_enabled("log")
     assert not is_nav_enabled("report")
+    assert not is_enabled("shooting_log")
     assert is_nav_enabled("dashboard")
     assert is_nav_enabled("backup")
 
 
 def test_get_nav_index_uses_active_list(monkeypatch):
-    """get_nav_index 基于激活列表：个人模式下 log/report 返回 None，raw 索引前移。"""
-    # 团队模式：log=3, raw=4
-    assert get_nav_index("log") == 3
-    assert get_nav_index("raw") == 4
+    """get_nav_index 基于激活列表：log/report 返回 None，raw 索引前移。"""
+    # 团队模式：raw=3, rename=4, library=5
+    assert get_nav_index("log") is None
+    assert get_nav_index("raw") == 3
     assert get_nav_index("nonexistent") is None
 
     monkeypatch.setattr(config, "usage_mode", "personal")

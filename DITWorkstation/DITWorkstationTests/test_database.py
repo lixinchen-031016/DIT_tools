@@ -1705,5 +1705,52 @@ class TestMissingFileDetection(unittest.TestCase):
         self.assertIsNone(self.db.get_media_asset(ok.asset_id))
 
 
+def test_link_assets_syncs_shot_fields_and_delete_clears_all(db_service, project):
+    """日志关联/删除必须保持 scene/shot/take 与 log_id 同步，避免字段漂移。"""
+    from DITWorkstation.Models import MediaAsset, ShootingLog
+
+    for asset_id in ("a1", "a2"):
+        db_service.add_media_asset(
+            MediaAsset(
+                asset_id=asset_id,
+                project_id=project.project_id,
+                file_path=f"/p/{asset_id}.jpg",
+                file_name=f"{asset_id}.jpg",
+            )
+        )
+
+    log = ShootingLog(
+        log_id="log1",
+        project_id=project.project_id,
+        scene="1",
+        shot="2",
+        take="3",
+    )
+    db_service.create_log_with_assets(log, ["a1"], sync_scene_shot=True)
+    first = db_service.get_media_asset("a1")
+    assert (first.log_id, first.scene, first.shot, first.take) == (
+        "log1",
+        "1",
+        "2",
+        "3",
+    )
+
+    linked = db_service.link_assets_to_log("log1", ["a2"])
+    assert linked == 1
+    second = db_service.get_media_asset("a2")
+    assert (second.log_id, second.scene, second.shot, second.take) == (
+        "log1",
+        "1",
+        "2",
+        "3",
+    )
+
+    db_service.delete_shooting_log("log1")
+    for asset_id in ("a1", "a2"):
+        asset = db_service.get_media_asset(asset_id)
+        assert asset.log_id is None
+        assert (asset.scene, asset.shot, asset.take) == ("", "", "")
+
+
 if __name__ == "__main__":
     unittest.main()

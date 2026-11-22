@@ -83,16 +83,42 @@ class LogRepository(BaseRepository):
         try:
             with self._transaction() as conn:
                 conn.execute(
-                    "UPDATE media_assets SET log_id = NULL, scene = '', shot = '' WHERE log_id = ?",
+                    "UPDATE media_assets SET log_id = NULL, scene = '', shot = '', take = '' "
+                    "WHERE log_id = ?",
                     (log_id,),
                 )
                 conn.execute("DELETE FROM shooting_logs WHERE log_id = ?", (log_id,))
-                logger.info(
-                    f"删除拍摄日志: {log_id}（已级联清空关联素材的 scene/shot）"
-                )
+                logger.info(f"删除拍摄日志: {log_id}（已级联清空关联素材的场记字段）")
         except sqlite3.Error as exc:
             logger.error(f"删除拍摄日志失败 {log_id}: {exc}")
             raise
+
+    def link_assets(self, log_id: str, asset_ids: list[str]) -> int:
+        """把素材关联到日志，并同步日志的 scene/shot/take。
+
+        所有「后续关联素材」都必须走本方法，避免只写 log_id 造成字段漂移。
+        """
+        if not asset_ids:
+            return 0
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT scene, shot, take FROM shooting_logs WHERE log_id = ?",
+                (log_id,),
+            ).fetchone()
+            if row is None:
+                return 0
+            updated = 0
+            for asset_id in asset_ids:
+                cursor = conn.execute(
+                    "UPDATE media_assets SET log_id = ?, scene = ?, shot = ?, take = ? "
+                    "WHERE asset_id = ?",
+                    (log_id, row["scene"], row["shot"], row["take"], asset_id),
+                )
+                updated += cursor.rowcount
+            logger.info(
+                f"关联素材到日志: {log_id} - {updated} 个素材（已同步场记字段）"
+            )
+            return updated
 
     def create_shooting_with_assets(
         self, log: ShootingLog, asset_ids: list[str], sync_scene_shot: bool = False
@@ -124,8 +150,9 @@ class LogRepository(BaseRepository):
                 for asset_id in asset_ids:
                     if sync_scene_shot:
                         conn.execute(
-                            "UPDATE media_assets SET log_id = ?, scene = ?, shot = ? WHERE asset_id = ?",
-                            (log.log_id, log.scene, log.shot, asset_id),
+                            "UPDATE media_assets SET log_id = ?, scene = ?, shot = ?, take = ? "
+                            "WHERE asset_id = ?",
+                            (log.log_id, log.scene, log.shot, log.take, asset_id),
                         )
                     else:
                         conn.execute(

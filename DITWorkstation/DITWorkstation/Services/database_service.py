@@ -1116,6 +1116,13 @@ class DatabaseService:
         """
         return self.logs.create_shooting_with_assets(log, asset_ids, sync_scene_shot)
 
+    def link_assets_to_log(self, log_id: str, asset_ids: list[str]) -> int:
+        """把已有素材关联到日志，并同步 scene/shot/take。
+
+        这是「日志 → 素材」唯一允许的后续关联入口，避免只写 log_id 造成字段漂移。
+        """
+        return self.logs.link_assets(log_id, asset_ids)
+
     # ===== 素材资产 =====
 
     def _sync_asset_tags(self, conn, asset_id: str, tags: str):

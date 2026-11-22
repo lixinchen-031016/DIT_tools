@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from DITWorkstation.App.feature_flags import is_enabled, is_nav_enabled
+from DITWorkstation.App.feature_flags import is_enabled
 from DITWorkstation.App.session_context import (
     set_current_project,
     set_current_workspace,
@@ -43,12 +43,12 @@ class CommandPalette(QDialog):
         ("📦 数据备份", "backup"),
         ("🎞 RAW 提取", "raw"),
         ("✏️ 文件重命名", "rename"),
-        ("📋 拍摄日志", "log"),
         ("🔍 素材库", "library"),
     ]
 
     # 执行命令：直接「运行」常用入口
     RUN_ACTIONS: ClassVar[list[tuple[str, str]]] = [
+        ("📋 场记…", "open_shooting_log"),
         ("📊 生成报告…", "open_report"),
         ("🖥 打开文件管理器…", "open_file_manager"),
         ("📂 打开日志目录…", "open_log_dir"),
@@ -235,12 +235,11 @@ class CommandPalette(QDialog):
         self.result_list.clear()
         self._all_items = []
         for label, key in self.NAVIGATION_ACTIONS:
-            # 个人模式隐藏日志导航项；报告已改为「生成报告…」运行命令
-            if key == "log" and not is_nav_enabled(key):
-                continue
             self._all_items.append({"type": "nav", "label": label, "key": key})
         for label, key in self.RUN_ACTIONS:
             if key == "open_report" and not is_enabled("report"):
+                continue
+            if key == "open_shooting_log" and not is_enabled("shooting_log"):
                 continue
             self._all_items.append({"type": "run", "label": label, "key": key})
         try:
@@ -303,6 +302,12 @@ class CommandPalette(QDialog):
             from DITWorkstation.App import config
 
             open_in_file_manager(str(config.log_dir))
+        elif key == "open_shooting_log":
+            parent = self.parent()
+            if parent is not None and hasattr(parent, "open_shooting_log"):
+                self.close()
+                parent.open_shooting_log()
+                return
         elif key == "open_report":
             parent = self.parent()
             if parent is not None and hasattr(parent, "open_report_dialog"):

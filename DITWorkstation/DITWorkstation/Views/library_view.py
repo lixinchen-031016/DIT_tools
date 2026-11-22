@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -63,6 +64,7 @@ from DITWorkstation.Utils import (
     safe_slot,
 )
 from DITWorkstation.ViewModels import TaskViewModel
+from DITWorkstation.Views.shooting_log_view import ShootingLogView
 from DITWorkstation.Views.Styles.theme import (
     COLOR,
     FONT_SIZE,
@@ -383,12 +385,44 @@ class LibraryView(RefreshOnShowView):
         content_layout.addWidget(self.detail_panel, 2)
         content.setMinimumHeight(420)
         self.content_widget = content
-        layout.addWidget(content, 1)
 
         self.timeline = CaptureTimelineWidget()
         self.timeline.setVisible(False)
         self.timeline.period_selected.connect(self._on_timeline_period_selected)
-        layout.addWidget(self.timeline, 1)
+
+        material_page = QWidget()
+        material_layout = QVBoxLayout(material_page)
+        material_layout.setContentsMargins(0, 8, 0, 0)
+        material_layout.setSpacing(8)
+        material_layout.addWidget(content, 1)
+        material_layout.addWidget(self.timeline, 1)
+
+        self.main_tabs = QTabWidget()
+        self.main_tabs.addTab(material_page, "素材")
+
+        # 场记作为素材库的第二个标签页（团队模式），不再占用一级导航
+        self.log_view = None
+        self.log_page = None
+        if is_enabled("shooting_log"):
+            self.log_view = ShootingLogView(
+                project_provider=self.selector.get_current_project_id
+            )
+            self.log_page = QWidget()
+            log_page_layout = QVBoxLayout(self.log_page)
+            log_page_layout.setContentsMargins(0, 8, 0, 0)
+            # 场记内容较高，使用标签页内滚动，保证表单、日志列表、
+            # 关联素材/项目素材三个区块都能完整显示
+            self.log_scroll = QScrollArea()
+            self.log_scroll.setWidgetResizable(True)
+            self.log_scroll.setFrameShape(QScrollArea.NoFrame)
+            self.log_scroll.setStyleSheet(
+                "QScrollArea { background: transparent; border: none; }"
+            )
+            self.log_scroll.setWidget(self.log_view)
+            log_page_layout.addWidget(self.log_scroll)
+            self.main_tabs.addTab(self.log_page, "场记")
+
+        layout.addWidget(self.main_tabs, 1)
 
         # 底部批量 EXIF 进度
         self.batch_progress_frame = QFrame()
@@ -1027,8 +1061,17 @@ class LibraryView(RefreshOnShowView):
         self.selector.refresh()
         self._refresh_tag_completer()
         self._refresh_log_combo()
-        if self.selector.get_current_project_id():
+        project_id = self.selector.get_current_project_id()
+        if self.log_view is not None:
+            self.log_view.refresh_for_project(project_id)
+        if project_id:
             self._search()
+
+    def show_shooting_log_tab(self):
+        """切换到内嵌的「场记」标签页（供工作台/命令面板/快捷键调用）。"""
+        if self.log_view is None or self.log_page is None:
+            return
+        self.main_tabs.setCurrentWidget(self.log_page)
 
     @Slot(str)
     def _on_data_changed(self, event: str):
@@ -1039,12 +1082,16 @@ class LibraryView(RefreshOnShowView):
                 )
                 self.stale_banner.setVisible(True)
 
-    def _on_project_changed(self, _project_id):
+    def _on_project_changed(self, project_id):
         self._refresh_log_combo()
+        if self.log_view is not None:
+            self.log_view.refresh_for_project(project_id)
         self._search()
 
     def _on_workspace_changed(self, _workspace_id):
         self._refresh_log_combo()
+        if self.log_view is not None:
+            self.log_view.refresh_for_project(None)
         self._reset()
 
     def _collect_filters(self) -> dict:

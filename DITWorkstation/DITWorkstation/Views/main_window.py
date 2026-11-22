@@ -65,7 +65,6 @@ from DITWorkstation.Views.media_import_view import MediaImportView
 from DITWorkstation.Views.project_dashboard_view import ProjectDashboardView
 from DITWorkstation.Views.raw_extraction_view import RawExtractionView
 from DITWorkstation.Views.rename_view import RenameView
-from DITWorkstation.Views.shooting_log_view import ShootingLogView
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS
 
 # ===== 导航壳层布局常量（对应报告 §4.1 / §8.4）=====
@@ -80,7 +79,6 @@ _NAV_ICON_BY_KEY = {
     "dashboard": QStyle.StandardPixmap.SP_DesktopIcon,
     "import": QStyle.StandardPixmap.SP_DirOpenIcon,
     "backup": QStyle.StandardPixmap.SP_DriveHDIcon,
-    "log": QStyle.StandardPixmap.SP_FileDialogDetailedView,
     "raw": QStyle.StandardPixmap.SP_FileIcon,
     "rename": QStyle.StandardPixmap.SP_DialogResetButton,
     "library": QStyle.StandardPixmap.SP_FileDialogContentsView,
@@ -258,7 +256,6 @@ class MainWindow(QMainWindow):
             "dashboard": ProjectDashboardView,
             "import": MediaImportView,
             "backup": BackupView,
-            "log": ShootingLogView,
             "raw": RawExtractionView,
             "rename": RenameView,
             "library": LibraryView,
@@ -268,7 +265,6 @@ class MainWindow(QMainWindow):
             "dashboard": "dashboard_view",
             "import": "import_view",
             "backup": "backup_view",
-            "log": "log_view",
             "raw": "raw_view",
             "rename": "rename_view",
             "library": "library_view",
@@ -303,10 +299,10 @@ class MainWindow(QMainWindow):
             add_shortcut("Ctrl+F", self._focus_library)
         if is_nav_enabled("backup"):
             add_shortcut("Ctrl+B", self._focus_backup)
-        # Ctrl+L 跳拍摄日志仅团队模式注册（个人/极简模式无日志页）
-        if is_nav_enabled("log"):
+        # Ctrl+L 打开素材库的「场记」标签页（仅团队模式）
+        if is_enabled("shooting_log"):
             add_shortcut("Ctrl+L", self._focus_log)
-        # Ctrl+1~N 切换到对应导航页（N = 激活导航项数量：团队 7 / 个人 6 / 极简 1）
+        # Ctrl+1~N 切换到对应导航页（N = 激活导航项数量：团队 6 / 个人 6 / 极简 1）
         # 索引为「激活导航列表中的位置」（栈索引），经映射转换为列表控件行号
         for i in range(1, len(self.active_nav_items) + 1):
             add_shortcut(f"Ctrl+{i}", lambda idx=i - 1: self._select_stack_index(idx))
@@ -469,9 +465,9 @@ class MainWindow(QMainWindow):
             "• Ctrl+,：打开设置对话框",
             "• Ctrl+K：打开命令面板（运行路径/URL/搜索跳转）",
         ]
-        # Ctrl+L 跳拍摄日志仅团队模式可用
-        if is_nav_enabled("log"):
-            lines.append("• Ctrl+L：跳转到拍摄日志")
+        # Ctrl+L 打开素材库「场记」标签页
+        if is_enabled("shooting_log"):
+            lines.append("• Ctrl+L：打开素材库的「场记」标签页")
         lines += [
             "• Ctrl+Shift+H：重新启动新手向导",
             "• F5：刷新当前视图",
@@ -495,7 +491,7 @@ class MainWindow(QMainWindow):
             "<p>专业摄影数据管理应用</p>"
             "<p>支持媒体导入、多目标校验备份（ASC MHL v2 交接清单、断点续传、"
             "源卡复读校验）、存储卡自动化与擦除保护、KIOSK 跟机模式、"
-            "JPG 筛选 RAW 提取、批量重命名、拍摄日志管理、素材库与报告生成。</p>",
+            "JPG 筛选 RAW 提取、批量重命名、场记、素材库与报告生成。</p>",
         )
 
     def _show_settings(self):
@@ -587,8 +583,15 @@ class MainWindow(QMainWindow):
         self._navigate_to("backup")
 
     def _focus_log(self):
-        """Ctrl+L: 跳转到拍摄日志"""
-        self._navigate_to("log")
+        """Ctrl+L: 打开素材库的「场记」标签页"""
+        self.open_shooting_log()
+
+    def open_shooting_log(self):
+        """打开素材库的「场记」标签页（工作台/命令面板/快捷键共用）。"""
+        if self.library_view is None:
+            return
+        self._navigate_to("library")
+        self.library_view.show_shooting_log_tab()
 
     def _navigate_to(self, key: str):
         """按 key 跳转到对应导航页"""

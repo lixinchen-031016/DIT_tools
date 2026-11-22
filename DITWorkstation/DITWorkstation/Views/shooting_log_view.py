@@ -45,9 +45,13 @@ from DITWorkstation.Views.Widgets.table_factory import make_table
 
 
 class ShootingLogView(RefreshOnShowView):
-    """拍摄日志视图"""
+    """拍摄日志视图。
 
-    def __init__(self):
+    既可作为独立页面使用，也可由素材库内嵌为「场记」标签页：
+    内嵌时传入 ``project_provider``，由宿主提供当前项目，不再创建重复的项目选择器。
+    """
+
+    def __init__(self, project_provider=None):
         super().__init__()
         self.db_service = get_db_service()
         self.metadata_service = get_metadata_service()
@@ -55,18 +59,24 @@ class ShootingLogView(RefreshOnShowView):
         self.current_log_id: str = None
         self._pending_asset_ids: list[str] = []
         self._logs = []
+        self._project_provider = project_provider
         self._setup_ui()
         get_data_bus().data_changed.connect(self._on_data_changed)
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        if self._project_provider is None:
+            layout.setContentsMargins(24, 24, 24, 24)
+            layout.setSpacing(16)
+            self._setup_selector(layout)
+            layout.addWidget(self._setup_right_panel(), 3)
+            return
 
-        self._setup_selector(layout)
-
-        right_panel = self._setup_right_panel()
-        layout.addWidget(right_panel, 3)
+        # 内嵌模式：宿主已提供项目选择器，这里只渲染场记内容
+        self.selector = None
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._setup_right_panel(), 1)
 
     def _setup_selector(self, layout):
         # 左侧：工作区 + 项目两级选择控件（封装下拉/列表/新建对话框/全局信号同步）
@@ -106,7 +116,7 @@ class ShootingLogView(RefreshOnShowView):
         bottom_layout = QVBoxLayout(bottom_widget)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.addWidget(self._setup_bottom_tabs())
-        bottom_widget.setMinimumHeight(240)
+        bottom_widget.setMinimumHeight(380)
         right_layout.addWidget(bottom_widget, 3)
 
         return right_panel
@@ -254,6 +264,7 @@ class ShootingLogView(RefreshOnShowView):
         self.log_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.log_table.customContextMenuRequested.connect(self._on_log_context_menu)
         log_layout.addWidget(self.log_table)
+        self.log_table.setMinimumHeight(260)
         attach_empty_state(
             self.log_table,
             "📋",
@@ -291,6 +302,7 @@ class ShootingLogView(RefreshOnShowView):
 
     def _setup_bottom_tabs(self):
         self.bottom_tabs = QTabWidget()
+        self.bottom_tabs.setMinimumHeight(340)
         self.bottom_tabs.addTab(self._setup_linked_tab(), "关联素材")
         self.bottom_tabs.addTab(self._setup_project_tab(), "项目素材")
         return self.bottom_tabs
@@ -369,7 +381,30 @@ class ShootingLogView(RefreshOnShowView):
 
     def _on_show_refresh(self):
         """showEvent 节流后的实际刷新逻辑"""
+        if self._project_provider is not None:
+            self.refresh_for_project(self._project_provider(), force=True)
+            return
         self.selector.refresh()
+
+    def refresh_for_project(self, project_id, force: bool = False):
+        """由宿主（素材库）调用：切换到指定项目并刷新场记数据。
+
+        force=True 时即使项目未变化也重新加载（标签页重新激活时使用），
+        避免隐藏期间的数据变更在切回后不可见。
+        """
+        current_id = (
+            self.current_project.project_id
+            if self.current_project is not None
+            else None
+        )
+        if project_id == current_id:
+            if force:
+                self._load_logs()
+                self._load_project_assets()
+                if self.current_log_id:
+                    self._load_assets_for_log(self.current_log_id)
+            return
+        self._apply_project_id(project_id)
 
     @Slot(str)
     def _on_data_changed(self, event: str):
@@ -392,6 +427,9 @@ class ShootingLogView(RefreshOnShowView):
 
         全局项目广播已由 WorkspaceProjectSelector 内部处理，本方法只做本视图业务联动。
         """
+        self._apply_project_id(project_id)
+
+    def _apply_project_id(self, project_id):
         if project_id is None:
             self.current_project = None
             self.current_log_id = None
@@ -696,8 +734,7 @@ class ShootingLogView(RefreshOnShowView):
         if dialog.exec() == QDialog.Accepted:
             selected_ids = dialog.get_selected_asset_ids()
             if selected_ids:
-                for aid in selected_ids:
-                    self.db_service.update_media_asset_log_id(aid, self.current_log_id)
+                self.db_service.link_assets_to_log(self.current_log_id, selected_ids)
                 self._load_assets_for_log(self.current_log_id)
                 # 广播素材关联变更
                 get_data_bus().emit_data_changed("assets_changed")

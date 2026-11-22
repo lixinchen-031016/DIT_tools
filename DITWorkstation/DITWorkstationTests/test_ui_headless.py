@@ -543,29 +543,30 @@ def _teardown_main_window(window):
 
 
 def test_main_window_team_mode_builds_all_nav(tmp_dir, monkeypatch):
-    """团队模式：导航 7 项且与视图栈一一对应（报告为工作台动作）"""
+    """团队模式：导航 6 项且与视图栈一一对应（场记/报告为素材库内动作）"""
     window = _build_main_window(tmp_dir, monkeypatch, "team")
     try:
-        # 导航行数 = 7 个导航项 + 2 个分组标题行（工作台/工作流；报告不再是导航项）
-        assert window.nav_list.count() == 7 + 2
-        assert window.stack.count() == 7
+        # 导航行数 = 6 个导航项 + 2 个分组标题行（工作台/工作流）
+        assert window.nav_list.count() == 6 + 2
+        assert window.stack.count() == 6
         assert [k for k, _, _ in window.active_nav_items] == [
             "dashboard",
             "import",
             "backup",
-            "log",
             "raw",
             "rename",
             "library",
         ]
-        # 团队模式注册 Ctrl+L
+        # 团队模式注册 Ctrl+L（打开素材库场记标签页）
         keys = [s.key().toString() for s in window.findChildren(QShortcut)]
         assert "Ctrl+L" in keys
-        assert "Ctrl+7" in keys
+        assert "Ctrl+6" in keys
+        assert "Ctrl+7" not in keys
         assert "Ctrl+8" not in keys
-        assert "Ctrl+9" not in keys
-        # 报告视图不再实例化，报告改为工作台对话框
+        # 场记/报告均不再实例化为一级视图
+        assert "log" not in window.view_by_key
         assert "report" not in window.view_by_key
+        assert not hasattr(window, "log_view")
         assert not hasattr(window, "report_view")
     finally:
         _teardown_main_window(window)
@@ -596,7 +597,7 @@ def test_main_window_personal_mode_builds_trimmed_nav(tmp_dir, monkeypatch):
         # 个人模式下隐藏视图不被实例化，view_by_key 中无对应条目
         assert "log" not in window.view_by_key
         assert "report" not in window.view_by_key
-        assert window.log_view is None
+        assert not hasattr(window, "log_view")
     finally:
         _teardown_main_window(window)
 
@@ -1294,7 +1295,6 @@ def test_main_window_minimal_mode_builds_single_nav(tmp_dir, monkeypatch):
         for attr in (
             "dashboard_view",
             "backup_view",
-            "log_view",
             "raw_view",
             "rename_view",
             "library_view",
@@ -1332,7 +1332,6 @@ def test_main_window_minimal_navigation_safe(tmp_dir, monkeypatch):
             "raw",
             "rename",
             "library",
-            "log",
         ):
             window._navigate_to(key)
         window._refresh_current_view()
@@ -1355,6 +1354,39 @@ def test_main_window_minimal_hides_backup_menu_entries(tmp_dir, monkeypatch):
         assert visible.get("立即完整性校验…") is None
         assert visible.get("回收站…") is False
         assert visible.get("设置…") is True, "设置入口必须保留（切换模式的唯一出口）"
+    finally:
+        _teardown_main_window(window)
+
+
+def test_library_embeds_shooting_log_tab(tmp_dir, monkeypatch):
+    """团队模式：素材库内嵌「场记」标签页；个人模式隐藏该标签页。"""
+    window = _build_main_window(tmp_dir, monkeypatch, "team")
+    try:
+        lib = window.library_view
+        assert lib.main_tabs.count() == 2
+        assert lib.log_view is not None
+        window.open_shooting_log()
+        assert lib.main_tabs.currentWidget() is lib.log_page
+    finally:
+        _teardown_main_window(window)
+
+    window = _build_main_window(tmp_dir, monkeypatch, "personal")
+    try:
+        lib = window.library_view
+        assert lib.main_tabs.count() == 1
+        assert lib.log_view is None
+    finally:
+        _teardown_main_window(window)
+
+
+def test_dashboard_log_action_opens_library_tab(tmp_dir, monkeypatch):
+    """工作台「③ 拍摄日志」打开素材库场记标签页，而不是独立导航页。"""
+    window = _build_main_window(tmp_dir, monkeypatch, "team")
+    try:
+        calls = []
+        monkeypatch.setattr(window, "open_shooting_log", lambda: calls.append("log"))
+        window.dashboard_view._open_shooting_log()
+        assert calls == ["log"]
     finally:
         _teardown_main_window(window)
 

@@ -27,7 +27,7 @@ DIT 工作站是一款面向影视与摄影行业的桌面端数据管理工具�
 
 ## ✨ 功能特性
 
-DIT 工作站围绕 7 大功能模块构建完整的数据管理闭环：
+DIT 工作站围绕 6 大功能模块构建完整的数据管理闭环：
 
 | # | 模块 | 图标 | 说明 |
 |---|------|------|------|
@@ -36,15 +36,20 @@ DIT 工作站围绕 7 大功能模块构建完整的数据管理闭环：
 | 3 | 数据备份 | 📦 | 从存储卡多目标并行备份，校验和验证（XXHash64/MD5），支持导出/导入 **ASC MHL v2 规范**校验清单（兼容 Silverstack / OffShoot / YoYotta），完成后回写素材的备份位置；**数据安全概览**统一展示备份覆盖、失联/失败/待重试统计、最后校验时间与备份盘容量趋势，并提供校验已有备份与从备份恢复素材入口；备份前自动预检目标磁盘空间；可选「源卡复读校验」检测劣化存储卡；目标已存在且校验一致的文件自动跳过（断点续传），失败文件记入备份历史可一键重试；支持备份方案模板复用与相机卡自动备份 |
 | 4 | RAW 提取 | 🎞 | 根据筛选后的 JPG 文件，从 RAW 源文件夹自动匹配并提取对应 RAW，提取后可自动入库 |
 | 5 | 文件重命名 | ✏️ | 按场景/镜头/镜次规则批量重命名，支持模板变量，预览确认后执行，自动防覆盖 |
-| 6 | 拍摄日志 | 📋 | 管理场景/镜头/镜次拍摄记录，支持「从代表素材填充 EXIF」，双向关联素材与日志；支持 CSV 导入导出（标准镜头清单，按场景/镜头/镜次去重更新） |
-| 7 | 素材库 | 🔍 | 在同一个页面完成检索、预览与整理：按项目/场景/镜头/类型/关键词/日志/评级/日期/标签多维度筛选（分页展示，每页 500 条），右侧详情面板查看 EXIF/视频元数据、设置评级与标签备注，支持批量评级、软删除、丢失文件检测与重新链接、单个/批量重新读取 EXIF、导出 CSV；支持按拍摄日期时间线聚合并下钻、跨项目查重与保存搜索 |
+| 6 | 素材库 | 🔍 | 在同一个页面完成检索、预览、场记与整理：「素材」标签页支持按项目/场景/镜头/类型/关键词/日志/评级/日期/标签多维度筛选（分页展示，每页 500 条），右侧详情面板查看 EXIF/视频元数据、设置评级与标签备注，支持批量评级、软删除、丢失文件检测与重新链接、单个/批量重新读取 EXIF、导出 CSV；「场记」标签页管理场景/镜头/镜次、关联素材并导入导出镜头清单；支持按拍摄日期时间线聚合、跨项目查重与保存搜索 |
 
 ---
 
 ## 🆕 新版本亮点
 
+### 场记并入素材库（📋）
+- 「拍摄日志」不再占用一级导航：并入「素材库 → 场记」标签页，导航最终精简为 6 项（团队/个人均为 6 项）
+- 场记标签页复用原有日志表单、日志列表、素材关联、从代表素材填充 EXIF 与 CSV 导入导出
+- 关联/解除关联与删除日志统一走同一写入契约，`scene/shot/take` 与 `log_id` 始终同步，修复此前的字段漂移
+- 工作台「③ 拍摄日志」、`Ctrl+L` 与命令面板「场记…」都会直接切换到该标签页；个人模式隐藏该标签页
+
 ### 报告生成改为工作台动作（📊）
-- 「报告生成」不再占用一级导航：导航由 8 项精简为 7 项
+- 「报告生成」不再占用一级导航：与场记合并后，导航最终精简为 6 项
 - 在「项目概览」点击「④ 生成报告」或命令面板（Ctrl+K）输入「生成报告」即可打开报告对话框
 - 报告生成逻辑与 PDF 输出保持不变；个人模式仍隐藏该入口
 
@@ -55,7 +60,7 @@ DIT 工作站围绕 7 大功能模块构建完整的数据管理闭环：
 
 ### 素材库统一（🔍）
 - 原「素材检索」与「素材信息」合并为单一「素材库」：上方筛选、左侧列表、右侧详情，选中素材即可查看 EXIF/视频元数据并直接评级、加标签、批量整理
-- 导航精简为 8 项（个人模式 7 项 → 6 项），`Ctrl+F` 直达素材库并聚焦关键词框；报告生成随后改为工作台动作，最终为 7 项
+- 导航精简为 8 项（个人模式 7 项 → 6 项），`Ctrl+F` 直达素材库并聚焦关键词框；报告改为工作台动作、场记并入素材库后，最终为 6 项
 - 项目删除入口统一收口到「项目概览」；素材导出统一走单一流式 CSV 导出实现
 - 支持「全部项目」跨项目查看；文件存在性扫描、批量 EXIF、重新链接与清理仍要求选择具体项目，避免误操作
 
@@ -121,7 +126,7 @@ DIT 工作站围绕 7 大功能模块构建完整的数据管理闭环：
 - 完成后自动跳转到「媒体导入」视图
 
 ### 使用场景（团队 / 个人 / 极简模式）
-- 「设置 → 使用场景」可切换团队模式（默认，完整 7 模块工作流）、个人模式（独立创作者）与极简模式（仅媒体导入）
+- 「设置 → 使用场景」可切换团队模式（默认，完整 6 模块工作流）、个人模式（独立创作者）与极简模式（仅媒体导入）
 - 个人模式精简为 6 个模块：项目概览 / 媒体导入 / 数据备份 / RAW 提取 / 文件重命名 / 素材库
 - 个人模式仅做界面与交互裁剪：隐藏工作区操作（项目自动归入默认工作区且全部项目可见）、拍摄日志、素材评级、报告、模板、归档/恢复、审计面板与相机卡自动化；备份限单目标
 - 极简模式仅保留「媒体导入」一项导航，其余视图不实例化、菜单入口与快捷键同步隐藏；提供「媒体保存目录」自定义路径设置项，导入的素材复制到 `<保存目录>/<项目名>/`，支持团队/个人/极简三种模式随时切回
@@ -369,8 +374,8 @@ DIT_tools/
     │       ├── backup_view.py          # 数据备份视图
     │       ├── raw_extraction_view.py  # RAW 提取视图
     │       ├── rename_view.py          # 文件重命名视图
-    │       ├── shooting_log_view.py    # 拍摄日志视图
-    │       ├── library_view.py         # 素材库（检索 + 详情 + 批量整理）
+    │       ├── shooting_log_view.py    # 场记（素材库内嵌标签页）
+    │       ├── library_view.py         # 素材库（素材/场记标签页）
     │       ├── report_view.py          # 报告生成内容（由工作台对话框承载）
     │       └── Widgets/
     │           ├── workspace_dialog.py        # 工作区新建/编辑对话框
@@ -390,7 +395,7 @@ DIT_tools/
     │           ├── empty_state.py                # 空状态占位
     │           └── asset_table_model.py          # 素材列表分页模型
     ├── pytest.ini                     # 测试分类 marker 注册（ci / local_only 等）
-    ├── DITWorkstationTests/           # 云端安全测试（519 用例，明细见「测试覆盖」表）
+    ├── DITWorkstationTests/           # 云端安全测试（522 用例，明细见「测试覆盖」表）
     │   ├── conftest.py                 # 共享 fixture + CI 环境收集阶段排除规则
     │   ├── test_exif_synthetic.py      # EXIF 解析云端回归（合成数据）
     │   ├── local/                      # 本地专属测试（22 用例，CI 不收集/不触发）
@@ -447,7 +452,7 @@ python DITWorkstation/main.py
 
 | 分类 | Marker | 位置 | 用例数 | 云端流水线 | 内容 |
 |------|--------|------|--------|------------|------|
-| 云端安全 | `ci` | `DITWorkstationTests/test_*.py` | 519 | ✅ 执行 | 合成数据、mock、临时目录、offscreen Qt，无本机资源依赖 |
+| 云端安全 | `ci` | `DITWorkstationTests/test_*.py` | 522 | ✅ 执行 | 合成数据、mock、临时目录、offscreen Qt，无本机资源依赖 |
 | 本地专属 | `local_only` / `requires_local_media` / `full_library_scan` | `DITWorkstationTests/local/` | 22 | ❌ 不收集、不触发 | 真实 JPG/RAW 素材回归、全量素材扫描、真实素材端到端导入 |
 
 **三重排除规则**（任一环节都能阻止本地专属用例进入云端）：
@@ -457,11 +462,11 @@ python DITWorkstation/main.py
 3. `build/build_macos.sh` 与 `build/build_windows.bat` 的打包门禁使用同样的排除参数，避免云端 runner 依赖开发机私有素材。
 
 ```bash
-# 云端流水线 / CI 质量门禁（只跑 519 个云端安全用例）
+# 云端流水线 / CI 质量门禁（只跑 522 个云端安全用例）
 cd DITWorkstation
 pytest DITWorkstationTests/ --ignore=DITWorkstationTests/local -m "not local_only" -v
 
-# 本地全量（云端安全 + 本地专属，共 541）
+# 本地全量（云端安全 + 本地专属，共 544）
 pytest DITWorkstationTests/ -v
 
 # 本地单独运行真实素材回归（缺素材时相关用例自动跳过）
@@ -499,7 +504,7 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 | `DITWorkstationTests/test_card_automation.py` | 相机卡自动化与可配置 SOP 链 | 3 |
 | `DITWorkstationTests/test_card_verification.py` | 存储卡擦除保护状态机 | 4 |
 | `DITWorkstationTests/test_checksum.py` | 校验和服务（含跨会话持久化缓存与强制重读） | 15 |
-| `DITWorkstationTests/test_database.py` | 数据库服务（14 张业务表 CRUD + 版本化迁移 + FTS5 + 连接池 + 拍摄日期时间线） | 73 |
+| `DITWorkstationTests/test_database.py` | 数据库服务（14 张业务表 CRUD + 版本化迁移 + FTS5 + 连接池 + 拍摄日期时间线 + 场记关联同步） | 74 |
 | `DITWorkstationTests/test_exif_synthetic.py` | EXIF 解析云端回归（合成数据、有理数归一化、Pillow/rawpy 兜底、RAW 边界） | 11 |
 | `DITWorkstationTests/test_feature_flags.py` | 团队/个人/极简模式功能开关 | 28 |
 | `DITWorkstationTests/test_field_registry.py` | 数据库字段注册表与标识符白名单 | 7 |
@@ -524,18 +529,18 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 | `DITWorkstationTests/test_task_view_model.py` | TaskViewModel 状态机与线程生命周期 | 12 |
 | `DITWorkstationTests/test_templates.py` | 项目模板 CRUD 与默认模板 | 6 |
 | `DITWorkstationTests/test_thumbnail.py` | 缩略图服务（缓存、生命周期与请求去重） | 12 |
-| `DITWorkstationTests/test_ui_headless.py` | 无头 UI：布局/分页/设置/模板入口/模式切换/文件状态扫描/拍摄时间线下钻/任务中心/数据安全概览/报告对话框/启动路由 | 42 |
+| `DITWorkstationTests/test_ui_headless.py` | 无头 UI：布局/分页/设置/模板入口/模式切换/文件状态扫描/拍摄时间线下钻/任务中心/数据安全概览/素材库场记标签/报告对话框/启动路由 | 44 |
 | `DITWorkstationTests/test_utils.py` | 工具函数（format_size / sanitize_filename 等） | 39 |
 | `DITWorkstationTests/test_version_and_recycle_bin.py` | alpha 版本格式与回收站 UI 恢复入口 | 3 |
 | `DITWorkstationTests/test_volume_monitor.py` | 存储卡识别 | 7 |
 | `DITWorkstationTests/test_workers.py` | 后台线程 WorkerThread | 7 |
 | `DITWorkstationTests/test_workspace_repository.py` | 工作区及仓储门面一致性 | 7 |
 | `DITWorkstationTests/test_workspace_selector.py` | 工作区-项目选择控件（含删除工作区/项目） | 10 |
-| **合计** | 云端 519 + 本地专属 22 | **541** |
+| **合计** | 云端 522 + 本地专属 22 | **544** |
 
 测试共享 fixture（`conftest.py`）提供隔离的数据库实例、临时目录与工厂函数，保证测试间互不干扰；同一文件还负责 CI 环境下的收集阶段排除。
 
-**验证结果**（macOS arm64 / Python 3.13 / PySide6 6.11.1）：云端安全测试 `519 passed`，覆盖率 `67.45%`（门禁要求 ≥ 50%）；本地全量含真实素材回归 `541 passed`（其中 JPG 803 张 + RAW 2134 张全量扫描需显式开启）。CI 质量门禁包含 pytest、Ruff（lint + format）与 Pyright，并在 macOS / Windows 双平台执行 PyInstaller 打包与冒烟启动。测试使用 Qt `offscreen` 平台，不能替代 Windows/macOS/Linux 原生 GUI、文件系统和打包产物验证；真实素材回归与全量扫描只在本地执行，云端 runner 不具备这些私有资源。
+**验证结果**（macOS arm64 / Python 3.13 / PySide6 6.11.1）：云端安全测试 `522 passed`，覆盖率 `67.45%`（门禁要求 ≥ 50%）；本地全量含真实素材回归 `544 passed`（其中 JPG 803 张 + RAW 2134 张全量扫描需显式开启）。CI 质量门禁包含 pytest、Ruff（lint + format）与 Pyright，并在 macOS / Windows 双平台执行 PyInstaller 打包与冒烟启动。测试使用 Qt `offscreen` 平台，不能替代 Windows/macOS/Linux 原生 GUI、文件系统和打包产物验证；真实素材回归与全量扫描只在本地执行，云端 runner 不具备这些私有资源。
 
 ### 性能参考
 

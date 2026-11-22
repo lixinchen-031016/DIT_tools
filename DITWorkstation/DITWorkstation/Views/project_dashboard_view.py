@@ -204,8 +204,8 @@ class ProjectDashboardView(RefreshOnShowView):
         self.btn_backup.clicked.connect(lambda: self._jump_to(_nav_index("backup")))
 
         self.btn_log = QPushButton("③ 拍摄日志")
-        self.btn_log.setToolTip("去补录场景/镜头/镜次并关联素材")
-        self.btn_log.clicked.connect(lambda: self._jump_to(_nav_index("log")))
+        self.btn_log.setToolTip("打开素材库的「场记」标签页")
+        self.btn_log.clicked.connect(self._open_shooting_log)
 
         self.btn_report = QPushButton("④ 生成报告")
         self.btn_report.setToolTip("打开报告生成对话框，导出数据管理与 QC 报告")
@@ -345,6 +345,12 @@ class ProjectDashboardView(RefreshOnShowView):
             # 最近操作审计面板
             self.recent_label.setVisible(False)
             self.recent_ops_label.setVisible(False)
+
+    @safe_slot("打开场记失败")
+    def _open_shooting_log(self):
+        main = self.window()
+        if hasattr(main, "open_shooting_log"):
+            main.open_shooting_log()
 
     @safe_slot("打开报告生成失败")
     def open_report_dialog(self):
@@ -538,7 +544,7 @@ class ProjectDashboardView(RefreshOnShowView):
         if unlinked > 0:
             return (
                 f"⚠ 还有 {unlinked} 个素材未关联到任何拍摄日志。\n"
-                "  下一步：去「拍摄日志」选中日志后点「关联素材」补全关联。"
+                "  下一步：去「素材库 → 场记」选中日志后点「关联素材」补全关联。"
             )
         return (
             "④ 下一步：点击「生成报告」导出数据管理与 QC 报告。\n"
