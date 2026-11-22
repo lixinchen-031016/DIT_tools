@@ -15,14 +15,18 @@ class LogRepository(BaseRepository):
 
     def create_shooting(self, log: ShootingLog) -> ShootingLog:
         with self._transaction() as conn:
+            shot_id = self._database.get_or_create_shot(
+                conn, log.project_id, log.scene, log.shot, log.take
+            )
             conn.execute(
                 "INSERT INTO shooting_logs "
-                "(log_id, project_id, scene, shot, take, description, camera, lens, iso, "
-                "aperture, shutter_speed, notes, file_paths, created_at) "
+                "(log_id, project_id, shot_id, scene, shot, take, description, camera, "
+                "lens, iso, aperture, shutter_speed, notes, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     log.log_id,
                     log.project_id,
+                    shot_id,
                     log.scene,
                     log.shot,
                     log.take,
@@ -33,10 +37,10 @@ class LogRepository(BaseRepository):
                     log.aperture,
                     log.shutter_speed,
                     log.notes,
-                    "|".join(log.file_paths),
                     log.created_at.isoformat(),
                 ),
             )
+            log.shot_id = shot_id
             logger.info(
                 f"创建拍摄日志: {log.log_id} - {log.scene}/{log.shot}/{log.take}"
             )
@@ -59,10 +63,14 @@ class LogRepository(BaseRepository):
 
     def update_shooting(self, log: ShootingLog) -> None:
         with self._transaction() as conn:
+            shot_id = self._database.get_or_create_shot(
+                conn, log.project_id, log.scene, log.shot, log.take
+            )
             conn.execute(
-                "UPDATE shooting_logs SET scene=?, shot=?, take=?, description=?, camera=?, "
-                "lens=?, iso=?, aperture=?, shutter_speed=?, notes=?, file_paths=? WHERE log_id=?",
+                "UPDATE shooting_logs SET shot_id=?, scene=?, shot=?, take=?, description=?, "
+                "camera=?, lens=?, iso=?, aperture=?, shutter_speed=?, notes=? WHERE log_id=?",
                 (
+                    shot_id,
                     log.scene,
                     log.shot,
                     log.take,
@@ -73,21 +81,32 @@ class LogRepository(BaseRepository):
                     log.aperture,
                     log.shutter_speed,
                     log.notes,
-                    "|".join(log.file_paths),
                     log.log_id,
                 ),
             )
+            # 日志三元组变化时同步关联素材，避免镜像字段漂移
+            conn.execute(
+                "UPDATE media_assets SET scene=?, shot=?, take=?, shot_id=? WHERE log_id=?",
+                (log.scene, log.shot, log.take, shot_id, log.log_id),
+            )
+            self._database.delete_orphan_shots(conn, log.project_id)
+            log.shot_id = shot_id
             logger.info(f"更新拍摄日志: {log.log_id}")
 
     def delete_shooting(self, log_id: str) -> None:
         try:
             with self._transaction() as conn:
+                row = conn.execute(
+                    "SELECT project_id FROM shooting_logs WHERE log_id = ?", (log_id,)
+                ).fetchone()
                 conn.execute(
-                    "UPDATE media_assets SET log_id = NULL, scene = '', shot = '', take = '' "
-                    "WHERE log_id = ?",
+                    "UPDATE media_assets SET log_id = NULL, shot_id = NULL, "
+                    "scene = '', shot = '', take = '' WHERE log_id = ?",
                     (log_id,),
                 )
                 conn.execute("DELETE FROM shooting_logs WHERE log_id = ?", (log_id,))
+                if row is not None:
+                    self._database.delete_orphan_shots(conn, row["project_id"])
                 logger.info(f"删除拍摄日志: {log_id}（已级联清空关联素材的场记字段）")
         except sqlite3.Error as exc:
             logger.error(f"删除拍摄日志失败 {log_id}: {exc}")
@@ -102,17 +121,21 @@ class LogRepository(BaseRepository):
             return 0
         with self._transaction() as conn:
             row = conn.execute(
-                "SELECT scene, shot, take FROM shooting_logs WHERE log_id = ?",
+                "SELECT project_id, shot_id, scene, shot, take FROM shooting_logs "
+                "WHERE log_id = ?",
                 (log_id,),
             ).fetchone()
             if row is None:
                 return 0
+            shot_id = row["shot_id"] or self._database.get_or_create_shot(
+                conn, row["project_id"], row["scene"], row["shot"], row["take"]
+            )
             updated = 0
             for asset_id in asset_ids:
                 cursor = conn.execute(
-                    "UPDATE media_assets SET log_id = ?, scene = ?, shot = ?, take = ? "
-                    "WHERE asset_id = ?",
-                    (log_id, row["scene"], row["shot"], row["take"], asset_id),
+                    "UPDATE media_assets SET log_id = ?, shot_id = ?, "
+                    "scene = ?, shot = ?, take = ? WHERE asset_id = ?",
+                    (log_id, shot_id, row["scene"], row["shot"], row["take"], asset_id),
                 )
                 updated += cursor.rowcount
             logger.info(
@@ -125,14 +148,18 @@ class LogRepository(BaseRepository):
     ) -> ShootingLog:
         try:
             with self._transaction() as conn:
+                shot_id = self._database.get_or_create_shot(
+                    conn, log.project_id, log.scene, log.shot, log.take
+                )
                 conn.execute(
                     "INSERT INTO shooting_logs "
-                    "(log_id, project_id, scene, shot, take, description, camera, lens, iso, "
-                    "aperture, shutter_speed, notes, file_paths, created_at) "
+                    "(log_id, project_id, shot_id, scene, shot, take, description, camera, "
+                    "lens, iso, aperture, shutter_speed, notes, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         log.log_id,
                         log.project_id,
+                        shot_id,
                         log.scene,
                         log.shot,
                         log.take,
@@ -143,16 +170,23 @@ class LogRepository(BaseRepository):
                         log.aperture,
                         log.shutter_speed,
                         log.notes,
-                        "|".join(log.file_paths),
                         log.created_at.isoformat(),
                     ),
                 )
+                log.shot_id = shot_id
                 for asset_id in asset_ids:
                     if sync_scene_shot:
                         conn.execute(
-                            "UPDATE media_assets SET log_id = ?, scene = ?, shot = ?, take = ? "
-                            "WHERE asset_id = ?",
-                            (log.log_id, log.scene, log.shot, log.take, asset_id),
+                            "UPDATE media_assets SET log_id = ?, shot_id = ?, "
+                            "scene = ?, shot = ?, take = ? WHERE asset_id = ?",
+                            (
+                                log.log_id,
+                                shot_id,
+                                log.scene,
+                                log.shot,
+                                log.take,
+                                asset_id,
+                            ),
                         )
                     else:
                         conn.execute(
@@ -311,6 +345,6 @@ class LogRepository(BaseRepository):
             aperture=row["aperture"],
             shutter_speed=row["shutter_speed"],
             notes=row["notes"],
-            file_paths=row["file_paths"].split("|") if row["file_paths"] else [],
+            shot_id=row["shot_id"] if "shot_id" in row.keys() else None,
             created_at=datetime.fromisoformat(row["created_at"]),
         )

@@ -144,6 +144,8 @@ class RecycleRepository(BaseRepository):
                             ("默认工作区", "默认工作区", now, now),
                         )
                     self.insert_snapshot_row(conn, "projects", project)
+                    for shot in snapshot.get("shots", []):
+                        self.insert_snapshot_row(conn, "shots", shot)
                     for log in snapshot.get("shooting_logs", []):
                         self.insert_snapshot_row(conn, "shooting_logs", log)
                     for asset_snapshot in snapshot.get("assets", []):

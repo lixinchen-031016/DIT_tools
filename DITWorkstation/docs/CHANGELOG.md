@@ -1,5 +1,16 @@
 # 变更记录
 
+## 2026-11-22（设置分页与场记数据归一）
+
+- 设置对话框按用途拆分为「常规 / 备份与校验 / 自动化 / 高级」四个标签页，每页独立滚动；控件属性名、持久化行为与个人/极简模式显隐规则保持不变。
+- 功能模式改为数据驱动使用预设：`feature_flags.USAGE_PRESETS` 统一描述导航项与特性策略（`all` / `except` / `only`），新增 `get_usage_preset()`；`usage_mode` 取值与三种模式的现有行为保持兼容。
+- 数据库迁移 v11：新增 `shots` 表归一「场景 / 镜头 / 镜次」三元组，`shooting_logs` 与 `media_assets` 增加 `shot_id`，所有写入路径统一维护；重复三元组自动合并。
+- 清理遗留 `shooting_logs.file_paths`（SQLite 3.35+ 直接删除列），`ShootingLog` 模型移除 `file_paths`，归档导出/恢复改用 `shot_id`。
+- 项目软删除/恢复与永久删除纳入 `shots` 表；删除日志、解除关联或修改三元组后自动清理孤儿 shot。
+- 文档同步：README 数据库结构（15 张业务表 / 24 个显式索引 / v1–v11）与测试计数（云端 526 / 合计 548）；用户手册补充设置四页说明。
+
+测试基线：`pytest DITWorkstationTests/ --ignore=DITWorkstationTests/local -m "not local_only" -q`，`526 passed`；`ruff check` / `ruff format --check` 全通过。
+
 ## 2026-09-12（新增「极简模式」界面模式）
 
 - 功能模式体系扩展为三态：`App/feature_flags.py` 新增 `UsageMode.MINIMAL`、`MINIMAL_NAV_KEYS`（仅 `import`）、`is_minimal_mode()`；`get_active_nav_items()` 与 `is_enabled()` 改为三态裁决。

@@ -3,6 +3,7 @@
 import re
 import sqlite3
 import threading
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -186,9 +187,23 @@ class DatabaseService:
 
                 CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id);
 
+                CREATE TABLE IF NOT EXISTS shots (
+                    shot_id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    scene TEXT NOT NULL DEFAULT '',
+                    shot TEXT NOT NULL DEFAULT '',
+                    take TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    UNIQUE (project_id, scene, shot, take),
+                    FOREIGN KEY (project_id) REFERENCES projects(project_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_shots_project ON shots(project_id);
+
                 CREATE TABLE IF NOT EXISTS shooting_logs (
                     log_id TEXT PRIMARY KEY,
                     project_id TEXT NOT NULL,
+                    shot_id TEXT,
                     scene TEXT NOT NULL,
                     shot TEXT NOT NULL,
                     take TEXT NOT NULL,
@@ -199,7 +214,6 @@ class DatabaseService:
                     aperture TEXT DEFAULT '',
                     shutter_speed TEXT DEFAULT '',
                     notes TEXT DEFAULT '',
-                    file_paths TEXT DEFAULT '',
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (project_id) REFERENCES projects(project_id)
                 );
@@ -217,6 +231,7 @@ class DatabaseService:
                     scene TEXT DEFAULT '',
                     shot TEXT DEFAULT '',
                     take TEXT DEFAULT '',
+                    shot_id TEXT,
                     date_imported TEXT NOT NULL,
                     date_taken TEXT,
                     camera_make TEXT DEFAULT '',
@@ -388,7 +403,7 @@ class DatabaseService:
                 pass
 
     # 当前数据库 schema 版本：每次结构变更 +1，并在 _migrate_db 中补充对应迁移
-    _DB_VERSION = 10
+    _DB_VERSION = 11
 
     def _migrate_db(self):
         """按 PRAGMA user_version 分版本迁移数据库。
@@ -443,6 +458,10 @@ class DatabaseService:
                 self._migrate_v10(conn)
                 self._set_user_version(conn, 10)
                 logger.info("数据库迁移完成: v10")
+            if version < 11:
+                self._migrate_v11(conn)
+                self._set_user_version(conn, 11)
+                logger.info("数据库迁移完成: v11")
 
             # FTS 创建必须晚于迁移前备份，否则备份会混入新建索引表。
             # v3 数据库若因中断或旧版本缺失索引，也在这里补建并重建一次。
@@ -769,6 +788,119 @@ class DatabaseService:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_saved_searches_name ON saved_searches(name)"
         )
+
+    @staticmethod
+    def _column_exists(conn, table: str, column: str) -> bool:
+        return any(
+            row["name"] == column
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        )
+
+    @staticmethod
+    def _make_shot_id(project_id: str, scene: str, shot: str, take: str) -> str:
+        """生成稳定的场记三元组 ID（同一项目同一三元组始终得到同一 ID）。"""
+        key = f"dit-shot:{project_id}:{scene}:{shot}:{take}"
+        return uuid.uuid5(uuid.NAMESPACE_URL, key).hex
+
+    def get_or_create_shot(
+        self, conn, project_id: str, scene: str, shot: str, take: str
+    ) -> str | None:
+        """在事务内取得场记三元组 ID；三元组全空时返回 None。
+
+        这是所有写入 scene/shot/take 的路径必须调用的归一化入口：
+        shots 表是三元组的唯一事实来源，日志与素材通过 shot_id 引用。
+        """
+        scene, shot, take = scene or "", shot or "", take or ""
+        if not project_id or not (scene or shot or take):
+            return None
+        shot_id = self._make_shot_id(project_id, scene, shot, take)
+        conn.execute(
+            "INSERT OR IGNORE INTO shots "
+            "(shot_id, project_id, scene, shot, take, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (shot_id, project_id, scene, shot, take, now_local().isoformat()),
+        )
+        return shot_id
+
+    def delete_orphan_shots(self, conn, project_id: str) -> None:
+        """清理项目中已无日志/素材引用的 shot 记录（须在事务内调用）。"""
+        conn.execute(
+            "DELETE FROM shots WHERE project_id = ? "
+            "AND shot_id NOT IN (SELECT shot_id FROM shooting_logs WHERE shot_id IS NOT NULL) "
+            "AND shot_id NOT IN (SELECT shot_id FROM media_assets WHERE shot_id IS NOT NULL)",
+            (project_id,),
+        )
+
+    def _migrate_v11(self, conn):
+        """v11：场记三元组归一为 shots 表；清理遗留 shooting_logs.file_paths。"""
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS shots (
+                shot_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                scene TEXT NOT NULL DEFAULT '',
+                shot TEXT NOT NULL DEFAULT '',
+                take TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                UNIQUE (project_id, scene, shot, take),
+                FOREIGN KEY (project_id) REFERENCES projects(project_id)
+            )"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_shots_project ON shots(project_id)"
+        )
+
+        if not self._column_exists(conn, "media_assets", "shot_id"):
+            conn.execute("ALTER TABLE media_assets ADD COLUMN shot_id TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_assets_shot_id ON media_assets(shot_id)"
+        )
+
+        if not self._column_exists(conn, "shooting_logs", "shot_id"):
+            conn.execute("ALTER TABLE shooting_logs ADD COLUMN shot_id TEXT")
+
+        # 清理遗留列：SQLite 3.35+ 支持 DROP COLUMN；更旧的环境保留空列不影响读写。
+        if self._column_exists(conn, "shooting_logs", "file_paths"):
+            try:
+                conn.execute("ALTER TABLE shooting_logs DROP COLUMN file_paths")
+            except sqlite3.OperationalError as exc:
+                logger.warning(
+                    f"当前 SQLite 不支持 DROP COLUMN，保留 shooting_logs.file_paths: {exc}"
+                )
+
+        # 关联素材若自身三元组为空，则继承日志的三元组，保证归一化后仍可检索
+        conn.execute(
+            "UPDATE media_assets SET "
+            "scene = (SELECT scene FROM shooting_logs WHERE log_id = media_assets.log_id), "
+            "shot = (SELECT shot FROM shooting_logs WHERE log_id = media_assets.log_id), "
+            "take = (SELECT take FROM shooting_logs WHERE log_id = media_assets.log_id) "
+            "WHERE log_id IS NOT NULL AND scene = '' AND shot = '' AND take = ''"
+        )
+
+        valid_projects = {
+            row["project_id"] for row in conn.execute("SELECT project_id FROM projects")
+        }
+        triples = set()
+        for table in ("shooting_logs", "media_assets"):
+            for row in conn.execute(
+                f"SELECT DISTINCT project_id, scene, shot, take FROM {table} "
+                "WHERE NOT (scene = '' AND shot = '' AND take = '')"
+            ).fetchall():
+                triples.add((row["project_id"], row["scene"], row["shot"], row["take"]))
+        for project_id, scene, shot, take in triples:
+            if project_id in valid_projects:
+                self.get_or_create_shot(conn, project_id, scene, shot, take)
+
+        for table in ("shooting_logs", "media_assets"):
+            conn.execute(
+                f"UPDATE {table} SET shot_id = ("
+                "SELECT s.shot_id FROM shots s "
+                f"WHERE s.project_id = {table}.project_id "
+                f"AND s.scene = {table}.scene AND s.shot = {table}.shot "
+                f"AND s.take = {table}.take) "
+                "WHERE NOT (scene = '' AND shot = '' AND take = '')"
+            )
+
+        logger.info(f"数据库迁移 v11: 归一 {len(triples)} 个场记三元组到 shots 表")
 
     @staticmethod
     def _fts_table_exists(conn) -> bool:

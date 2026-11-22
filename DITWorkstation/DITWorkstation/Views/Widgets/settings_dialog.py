@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -176,25 +177,31 @@ class SettingsDialog(QDialog):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(14)
+        header = QWidget()
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(24, 24, 24, 8)
+        header_layout.setSpacing(6)
 
         title = QLabel("设置")
         title.setStyleSheet(TITLE_QSS)
-        layout.addWidget(title)
+        header_layout.addWidget(title)
 
         subtitle = QLabel(
             "使用场景、外观主题、数据存储、完整性校验、自动更新、存储卡与运行参数"
         )
         subtitle.setStyleSheet(SUBTITLE_QSS)
-        layout.addWidget(subtitle)
+        header_layout.addWidget(subtitle)
+        main_layout.addWidget(header)
+
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        main_layout.addWidget(self.tabs, 1)
+
+        # 设置项按用途分为四页，避免单个滚动页过长
+        general_page = self._make_tab_page(self.tabs, "常规")
+        verify_page = self._make_tab_page(self.tabs, "备份与校验")
+        automation_page = self._make_tab_page(self.tabs, "自动化")
+        advanced_page = self._make_tab_page(self.tabs, "高级")
 
         # ===== 使用场景（功能模式开关）=====
         usage_group = QGroupBox("🧭 使用场景")
@@ -260,7 +267,7 @@ class SettingsDialog(QDialog):
 
         self.minimal_dir_widget.setVisible(is_minimal_mode())
         usage_layout.addWidget(self.minimal_dir_widget)
-        layout.addWidget(usage_group)
+        general_page.addWidget(usage_group)
 
         # ===== 数据存储位置 =====
         dir_group = QGroupBox("📂 数据存储位置")
@@ -310,7 +317,7 @@ class SettingsDialog(QDialog):
                 lambda: open_in_file_manager(str(self.thumbnail_service.cache_dir)),
             ),
         )
-        layout.addWidget(dir_group)
+        general_page.addWidget(dir_group)
 
         # ===== 清理临时文件 =====
         temp_group = QGroupBox("🧹 清理临时文件")
@@ -336,7 +343,7 @@ class SettingsDialog(QDialog):
         cache_row.addWidget(self.clear_cache_btn)
         temp_layout.addLayout(cache_row)
 
-        layout.addWidget(temp_group)
+        general_page.addWidget(temp_group)
 
         # ===== 最近路径 =====
         recent_group = QGroupBox("📁 最近路径")
@@ -350,7 +357,7 @@ class SettingsDialog(QDialog):
         self.clear_recent_btn.clicked.connect(self._clear_recent)
         recent_row.addWidget(self.clear_recent_btn)
         recent_layout.addLayout(recent_row)
-        layout.addWidget(recent_group)
+        general_page.addWidget(recent_group)
 
         # ===== 备份默认选项 =====
         backup_group = QGroupBox("📦 备份默认选项")
@@ -374,7 +381,7 @@ class SettingsDialog(QDialog):
         backup_layout.addWidget(self.verify_source_reread_check)
         # 极简模式无备份模块，隐藏其专属默认项
         backup_group.setVisible(not is_minimal_mode())
-        layout.addWidget(backup_group)
+        verify_page.addWidget(backup_group)
 
         # ===== 存储卡自动识别 =====
         volume_group = QGroupBox("💾 存储卡")
@@ -518,7 +525,7 @@ class SettingsDialog(QDialog):
         volume_form.addRow(self.auto_card_project_label, self.auto_card_project_combo)
         volume_form.addRow(self.auto_card_template_label, self.auto_card_template_combo)
         volume_layout.addLayout(volume_form)
-        layout.addWidget(volume_group)
+        automation_page.addWidget(volume_group)
 
         # 个人模式隐藏相机卡自动化配置（个人模式禁止启动自动化流程，
         # 只保留「检测到存储卡跳转导入」的手动辅助能力）
@@ -575,7 +582,7 @@ class SettingsDialog(QDialog):
         integrity_layout.addWidget(integrity_hint)
         # 极简模式无备份/校验模块，隐藏该分组
         integrity_group.setVisible(not is_minimal_mode())
-        layout.addWidget(integrity_group)
+        verify_page.addWidget(integrity_group)
 
         settings_io_group = QGroupBox("设置迁移")
         settings_io_layout = QHBoxLayout(settings_io_group)
@@ -588,11 +595,26 @@ class SettingsDialog(QDialog):
         self.import_settings_btn = QPushButton("导入设置...")
         self.import_settings_btn.clicked.connect(self._import_settings)
         settings_io_layout.addWidget(self.import_settings_btn)
-        layout.addWidget(settings_io_group)
+        advanced_page.addWidget(settings_io_group)
 
-        layout.addStretch()
+        for page in (general_page, verify_page, automation_page, advanced_page):
+            page.addStretch()
+
+    @staticmethod
+    def _make_tab_page(tabs: QTabWidget, title: str) -> QVBoxLayout:
+        """向标签页创建可滚动页面，返回页面内容布局。"""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
         scroll.setWidget(content)
-        main_layout.addWidget(scroll)
+        tabs.addTab(scroll, title)
+        return layout
 
     @staticmethod
     def _style_path_label(label: QLabel):

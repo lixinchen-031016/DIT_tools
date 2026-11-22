@@ -2,7 +2,7 @@
 
 from DITWorkstation.App.feature_flags import UsageMode, get_usage_mode, set_usage_mode
 from DITWorkstation.Views.Widgets.settings_dialog import SettingsDialog
-from PySide6.QtWidgets import QComboBox, QGroupBox, QScrollArea
+from PySide6.QtWidgets import QGroupBox, QScrollArea, QTabWidget
 
 # ===== 对话框基本构造 =====
 
@@ -21,7 +21,7 @@ def test_settings_dialog_instantiation():
 def test_settings_dialog_has_usage_mode_selector():
     """验证设置对话框包含使用场景切换下拉框。"""
     dialog = SettingsDialog()
-    combo = dialog.findChild(QComboBox)
+    combo = dialog.usage_mode_combo
     assert combo is not None, "应存在模式选择下拉框"
     # 应包含两种模式
     texts = [combo.itemText(i) for i in range(combo.count())]
@@ -42,6 +42,37 @@ def test_settings_dialog_has_group_boxes():
     assert any("最近路径" in t for t in group_titles), "应包含最近路径分组"
     assert any("备份默认选项" in t for t in group_titles), "应包含备份默认选项分组"
     assert any("存储卡" in t for t in group_titles), "应包含存储卡分组"
+    dialog.close()
+
+
+def test_settings_dialog_uses_tabbed_pages():
+    """设置项分为四页标签，每页均为独立滚动页面。"""
+    dialog = SettingsDialog()
+    tabs = dialog.findChild(QTabWidget)
+    assert tabs is not None, "应存在标签页容器"
+    titles = [tabs.tabText(i) for i in range(tabs.count())]
+    assert titles == ["常规", "备份与校验", "自动化", "高级"]
+    for i in range(tabs.count()):
+        assert isinstance(tabs.widget(i), QScrollArea), f"{titles[i]} 页应可滚动"
+    dialog.close()
+
+
+def test_settings_groups_distributed_across_tabs():
+    """分组按用途落在对应标签页。"""
+    dialog = SettingsDialog()
+    tabs = dialog.findChild(QTabWidget)
+
+    def titles_in(index: int) -> list[str]:
+        return [g.title() for g in tabs.widget(index).findChildren(QGroupBox)]
+
+    assert any("使用场景" in t for t in titles_in(0))
+    assert any("数据存储" in t for t in titles_in(0))
+    assert any("清理" in t for t in titles_in(0))
+    assert any("最近路径" in t for t in titles_in(0))
+    assert any("备份默认选项" in t for t in titles_in(1))
+    assert any("完整性校验" in t for t in titles_in(1))
+    assert any("存储卡" in t for t in titles_in(2))
+    assert any("设置迁移" in t for t in titles_in(3))
     dialog.close()
 
 
@@ -104,7 +135,7 @@ def test_dialog_usage_mode_combo_display():
     # 确保为团队模式
     set_usage_mode(UsageMode.TEAM)
     dialog = SettingsDialog()
-    combo = dialog.findChild(QComboBox)
+    combo = dialog.usage_mode_combo
     current_data = combo.itemData(combo.currentIndex())
     assert current_data == UsageMode.TEAM.value, "团队模式下下拉框应默认选中团队模式"
     dialog.close()
@@ -137,7 +168,7 @@ def test_set_usage_mode_inside_dialog():
 def test_settings_dialog_has_minimal_mode_option():
     """验证「界面模式」下拉包含极简模式选项。"""
     dialog = SettingsDialog()
-    combo = dialog.findChild(QComboBox)
+    combo = dialog.usage_mode_combo
     texts = [combo.itemText(i) for i in range(combo.count())]
     datas = [combo.itemData(i) for i in range(combo.count())]
     assert any("极简模式" in t for t in texts)
@@ -151,7 +182,7 @@ def test_settings_dialog_minimal_dir_item_visibility(monkeypatch):
 
     monkeypatch.setattr(config, "usage_mode", "team")
     dialog = SettingsDialog()
-    combo = dialog.findChild(QComboBox)
+    combo = dialog.usage_mode_combo
 
     combo.blockSignals(True)
     combo.setCurrentIndex(combo.findData(UsageMode.TEAM.value))

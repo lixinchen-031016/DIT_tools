@@ -274,6 +274,7 @@ class ShootingLog:
     scene: str
     shot: str
     take: str
+    shot_id: str | None = None  # 归一化后的场记三元组 ID
     description: str = ""
     camera: str = ""
     lens: str = ""
@@ -281,7 +282,6 @@ class ShootingLog:
     aperture: str = ""
     shutter_speed: str = ""
     notes: str = ""
-    file_paths: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=now_local)
 
 
@@ -301,6 +301,7 @@ class MediaAsset:
     scene: str = ""
     shot: str = ""
     take: str = ""
+    shot_id: str | None = None  # 归一化后的场记三元组 ID
     date_imported: datetime = field(default_factory=now_local)
     date_taken: datetime | None = None
     camera_make: str = ""

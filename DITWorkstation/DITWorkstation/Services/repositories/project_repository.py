@@ -121,6 +121,12 @@ class ProjectRepository(BaseRepository):
                     "assets": [
                         self._database._asset_snapshot(conn, row) for row in asset_rows
                     ],
+                    "shots": [
+                        dict(row)
+                        for row in conn.execute(
+                            "SELECT * FROM shots WHERE project_id = ?", (project_id,)
+                        )
+                    ],
                     "shooting_logs": [
                         dict(row)
                         for row in conn.execute(
@@ -154,6 +160,7 @@ class ProjectRepository(BaseRepository):
                 conn.execute(
                     "DELETE FROM shooting_logs WHERE project_id = ?", (project_id,)
                 )
+                conn.execute("DELETE FROM shots WHERE project_id = ?", (project_id,))
                 conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
                 self._database._record_operation_in_transaction(
                     conn,
@@ -187,6 +194,7 @@ class ProjectRepository(BaseRepository):
             conn.execute(
                 "DELETE FROM shooting_logs WHERE project_id = ?", (project_id,)
             )
+            conn.execute("DELETE FROM shots WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
             logger.info(f"删除项目: {project_id}")
 

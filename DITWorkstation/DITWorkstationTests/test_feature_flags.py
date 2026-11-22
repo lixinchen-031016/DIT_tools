@@ -13,13 +13,17 @@
 import pytest
 from DITWorkstation.App import config
 from DITWorkstation.App.feature_flags import (
+    FEATURE_POLICY_EXCEPT,
+    FEATURE_POLICY_ONLY,
     MINIMAL_NAV_KEYS,
     PERSONAL_NAV_KEYS,
+    USAGE_PRESETS,
     UsageMode,
     get_active_nav_index,
     get_active_nav_items,
     get_minimal_import_target_dir,
     get_usage_mode,
+    get_usage_preset,
     is_enabled,
     is_minimal_mode,
     is_nav_enabled,
@@ -196,6 +200,28 @@ def test_unknown_feature_defaults_to_enabled(monkeypatch):
     assert is_enabled("some_future_feature")
     monkeypatch.setattr(config, "usage_mode", "personal")
     assert is_enabled("some_future_feature")
+
+
+# ===== 数据驱动使用预设 =====
+
+
+def test_usage_presets_cover_all_modes():
+    """每个 UsageMode 都有对应预设，且导航策略与特性策略一致。"""
+    assert set(USAGE_PRESETS) == set(UsageMode)
+    assert get_usage_preset().nav_keys is None  # 团队模式保留全部导航
+    assert get_usage_preset(UsageMode.PERSONAL).nav_keys == PERSONAL_NAV_KEYS
+    assert get_usage_preset("minimal").nav_keys == MINIMAL_NAV_KEYS
+    assert get_usage_preset(UsageMode.PERSONAL).feature_policy.mode == (
+        FEATURE_POLICY_EXCEPT
+    )
+    assert (
+        get_usage_preset(UsageMode.MINIMAL).feature_policy.mode == FEATURE_POLICY_ONLY
+    )
+
+
+def test_usage_preset_follows_current_mode(monkeypatch):
+    monkeypatch.setattr(config, "usage_mode", "personal")
+    assert get_usage_preset().label.startswith("个人模式")
 
 
 # ===== 极简模式 =====

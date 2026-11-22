@@ -115,6 +115,7 @@ MEDIA_ASSET_FIELDS = field_registry(
     "scene",
     "shot",
     "take",
+    "shot_id",
     FieldSpec("date_taken", serializer=_isoformat),
     "camera_make",
     "camera_model",

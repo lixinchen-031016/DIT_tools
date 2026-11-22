@@ -24,6 +24,7 @@
   navigation.get_nav_index() 需要过滤激活列表时使用局部导入。
 """
 
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
@@ -43,6 +44,43 @@ class UsageMode(str, Enum):
     TEAM = "team"
     PERSONAL = "personal"
     MINIMAL = "minimal"
+
+
+# ===== 使用预设（数据驱动）=====
+
+#: 特性策略：全部启用（含未来新增特性）
+FEATURE_POLICY_ALL = "all"
+#: 特性策略：黑名单（除列表外全部启用，未知特性按启用处理）
+FEATURE_POLICY_EXCEPT = "except"
+#: 特性策略：白名单（仅列表内启用，未知特性按关闭处理）
+FEATURE_POLICY_ONLY = "only"
+
+
+@dataclass(frozen=True)
+class FeaturePolicy:
+    """组件级特性启用策略。"""
+
+    mode: str
+    features: frozenset[str] = frozenset()
+
+    def is_enabled(self, feature: str) -> bool:
+        if self.mode == FEATURE_POLICY_ALL:
+            return True
+        if self.mode == FEATURE_POLICY_ONLY:
+            return feature in self.features
+        return feature not in self.features
+
+
+@dataclass(frozen=True)
+class UsagePreset:
+    """使用预设：导航项列表 + 组件级特性策略。
+
+    ``nav_keys`` 为 None 表示保留全部导航项；否则按 NAV_ITEMS 的相对顺序过滤。
+    """
+
+    label: str
+    nav_keys: tuple[str, ...] | None
+    feature_policy: FeaturePolicy
 
 
 # 个人模式保留的导航项（顺序与 NAV_ITEMS 一致：dashboard/import/backup/raw/rename/library）
@@ -89,6 +127,32 @@ _TEAM_ONLY_FEATURES = frozenset(
 # 特性才启用，任何未列出的特性（含未来新增特性）一律视为关闭。
 # 这样「其余所有功能模块默认隐藏/禁用」的契约不会因后续新增特性而被破坏。
 _MINIMAL_ENABLED_FEATURES: frozenset[str] = frozenset()
+
+#: 模式 → 使用预设。新增模式只需在此登记，导航过滤与特性策略自动生效。
+USAGE_PRESETS: dict[UsageMode, UsagePreset] = {
+    UsageMode.TEAM: UsagePreset(
+        label="团队模式（完整 DIT 工作流）",
+        nav_keys=None,
+        feature_policy=FeaturePolicy(FEATURE_POLICY_ALL),
+    ),
+    UsageMode.PERSONAL: UsagePreset(
+        label="个人模式（独立创作者）",
+        nav_keys=PERSONAL_NAV_KEYS,
+        feature_policy=FeaturePolicy(FEATURE_POLICY_EXCEPT, _TEAM_ONLY_FEATURES),
+    ),
+    UsageMode.MINIMAL: UsagePreset(
+        label="极简模式（仅媒体导入）",
+        nav_keys=MINIMAL_NAV_KEYS,
+        feature_policy=FeaturePolicy(FEATURE_POLICY_ONLY, _MINIMAL_ENABLED_FEATURES),
+    ),
+}
+
+
+def get_usage_preset(mode: UsageMode | str | None = None) -> UsagePreset:
+    """返回指定模式（默认当前模式）对应的使用预设。"""
+    if mode is None:
+        mode = get_usage_mode()
+    return USAGE_PRESETS[UsageMode(mode)]
 
 
 def get_usage_mode() -> UsageMode:
@@ -147,12 +211,8 @@ def get_active_nav_items() -> list[tuple[str, str, str]]:
     所有导航索引相关逻辑（导航列表、视图栈、快捷键、F5、跨视图跳转）
     都必须以本列表为准。
     """
-    mode = get_usage_mode()
-    if mode == UsageMode.MINIMAL:
-        allowed = MINIMAL_NAV_KEYS
-    elif mode == UsageMode.PERSONAL:
-        allowed = PERSONAL_NAV_KEYS
-    else:
+    allowed = get_usage_preset().nav_keys
+    if allowed is None:
         return list(NAV_ITEMS)
     return [item for item in NAV_ITEMS if item[0] in allowed]
 
@@ -182,11 +242,7 @@ def is_enabled(feature: str) -> bool:
     - 极简模式：仅启用 _MINIMAL_ENABLED_FEATURES 白名单中的特性，未知特性
       按关闭处理（保证「仅保留媒体导入」的契约）。
     """
-    if is_minimal_mode():
-        return feature in _MINIMAL_ENABLED_FEATURES
-    if is_team_mode():
-        return True
-    return feature not in _TEAM_ONLY_FEATURES
+    return get_usage_preset().feature_policy.is_enabled(feature)
 
 
 # ===== 极简模式：媒体保存目录（复制到本机时的目标根）=====

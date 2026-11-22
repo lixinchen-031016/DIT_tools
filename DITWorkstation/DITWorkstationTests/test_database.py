@@ -153,9 +153,9 @@ class TestDatabaseService(unittest.TestCase):
         logs = self.db.get_shooting_logs(project.project_id)
         self.assertEqual(len(logs), 3)
 
-    def test_shooting_log_file_association(self):
-        """TR-6.2: 拍摄日志与素材正确关联"""
-        project = self.db.create_project(name="关联测试")
+    def test_shooting_log_normalizes_scene_shot_take(self):
+        """v11：日志三元组归一写入 shots 表，并通过 shot_id 引用"""
+        project = self.db.create_project(name="场记归一测试")
 
         log = ShootingLog(
             log_id=str(uuid.uuid4())[:8],
@@ -163,13 +163,23 @@ class TestDatabaseService(unittest.TestCase):
             scene="S001",
             shot="001A",
             take="01",
-            file_paths=["/path/to/file1.cr2", "/path/to/file2.cr2"],
         )
-        self.db.create_shooting_log(log)
+        created = self.db.create_shooting_log(log)
+        self.assertIsNotNone(created.shot_id)
 
         logs = self.db.get_shooting_logs(project.project_id)
-        self.assertEqual(len(logs[0].file_paths), 2)
-        self.assertIn("/path/to/file1.cr2", logs[0].file_paths)
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0].shot_id, created.shot_id)
+
+        conn = sqlite3.connect(str(self.db.db_path))
+        try:
+            row = conn.execute(
+                "SELECT scene, shot, take FROM shots WHERE shot_id = ?",
+                (created.shot_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row, ("S001", "001A", "01"))
 
     def test_add_media_asset(self):
         """添加素材资产"""
@@ -381,8 +391,27 @@ class TestDatabaseService(unittest.TestCase):
             "lens_model",
             "focal_length",
             "video_metadata",
+            "shot_id",
         ]:
             self.assertIn(col, cols, f"迁移未补齐字段: {col}")
+
+        conn = sqlite3.connect(str(self.db.db_path))
+        try:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            log_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(shooting_logs)").fetchall()
+            }
+        finally:
+            conn.close()
+        self.assertIn("shots", tables, "v11 应创建 shots 表")
+        self.assertIn("shot_id", log_cols, "v11 应为 shooting_logs 补齐 shot_id")
+        self.assertNotIn("file_paths", log_cols, "v11 应清理 shooting_logs.file_paths")
 
         # 验证迁移后可正常写入并读取
         project = self.db.create_project(name="迁移后写入测试")

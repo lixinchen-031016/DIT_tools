@@ -16,11 +16,11 @@ class AssetRepository(BaseRepository):
 
     _INSERT_SQL = """INSERT INTO media_assets
        (asset_id, project_id, file_path, file_name, file_size, file_type,
-        asset_type, checksum_algorithm, checksum_value, scene, shot, take, date_imported,
-        date_taken, camera_make, camera_model, backup_locations, log_id,
+        asset_type, checksum_algorithm, checksum_value, scene, shot, take, shot_id,
+        date_imported, date_taken, camera_make, camera_model, backup_locations, log_id,
         is_working_copy, original_path, width, height, duration_seconds,
         lens_model, focal_length, video_metadata, rating, tags, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 
     @staticmethod
     def _asset_values(asset: MediaAsset) -> tuple:
@@ -37,6 +37,7 @@ class AssetRepository(BaseRepository):
             asset.scene,
             asset.shot,
             asset.take,
+            asset.shot_id,
             asset.date_imported.isoformat(),
             asset.date_taken.isoformat() if asset.date_taken else None,
             asset.camera_make,
@@ -81,8 +82,16 @@ class AssetRepository(BaseRepository):
     def _insert_asset(conn, asset: MediaAsset) -> None:
         conn.execute(AssetRepository._INSERT_SQL, AssetRepository._asset_values(asset))
 
+    def _ensure_shot_id(self, conn, asset: MediaAsset) -> None:
+        """三元组变化后确保 shot_id 指向归一化记录。"""
+        asset.shot_id = self._database.get_or_create_shot(
+            conn, asset.project_id, asset.scene, asset.shot, asset.take
+        )
+
     def create(self, asset: MediaAsset) -> MediaAsset:
         with self._transaction() as conn:
+            if asset.shot_id is None:
+                self._ensure_shot_id(conn, asset)
             self._insert_asset(conn, asset)
             self.sync_tags(conn, asset.asset_id, asset.tags)
             self._database._sync_asset_fts(
@@ -102,6 +111,9 @@ class AssetRepository(BaseRepository):
             return 0
         try:
             with self._transaction() as conn:
+                for asset in assets:
+                    if asset.shot_id is None:
+                        self._ensure_shot_id(conn, asset)
                 conn.executemany(
                     self._INSERT_SQL, [self._asset_values(asset) for asset in assets]
                 )
@@ -152,6 +164,20 @@ class AssetRepository(BaseRepository):
                         OperationStatus.NOT_FOUND, f"素材不存在: {asset_id}"
                     )
                 conn.execute(sql, params)
+                if {"scene", "shot", "take"} & set(kwargs):
+                    row = conn.execute(
+                        "SELECT project_id, scene, shot, take FROM media_assets "
+                        "WHERE asset_id = ?",
+                        (asset_id,),
+                    ).fetchone()
+                    shot_id = self._database.get_or_create_shot(
+                        conn, row["project_id"], row["scene"], row["shot"], row["take"]
+                    )
+                    conn.execute(
+                        "UPDATE media_assets SET shot_id = ? WHERE asset_id = ?",
+                        (shot_id, asset_id),
+                    )
+                    self._database.delete_orphan_shots(conn, row["project_id"])
                 if "tags" in kwargs:
                     self.sync_tags(conn, asset_id, kwargs.get("tags") or "")
                 self._database._refresh_asset_fts(conn, asset_id)
@@ -741,7 +767,8 @@ class AssetRepository(BaseRepository):
             with self._transaction() as conn:
                 if log_id is None:
                     conn.execute(
-                        "UPDATE media_assets SET log_id = NULL, scene = '', shot = '' WHERE asset_id = ?",
+                        "UPDATE media_assets SET log_id = NULL, shot_id = NULL, "
+                        "scene = '', shot = '', take = '' WHERE asset_id = ?",
                         (asset_id,),
                     )
                 else:
@@ -824,6 +851,7 @@ class AssetRepository(BaseRepository):
             scene=row["scene"],
             shot=row["shot"],
             take=row["take"],
+            shot_id=row["shot_id"] if "shot_id" in row.keys() else None,
             date_imported=datetime.fromisoformat(row["date_imported"]),
             date_taken=datetime.fromisoformat(row["date_taken"])
             if row["date_taken"]

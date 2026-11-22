@@ -131,6 +131,7 @@ DIT 工作站围绕 6 大功能模块构建完整的数据管理闭环：
 - 个人模式仅做界面与交互裁剪：隐藏工作区操作（项目自动归入默认工作区且全部项目可见）、拍摄日志、素材评级、报告、模板、归档/恢复、审计面板与相机卡自动化；备份限单目标
 - 极简模式仅保留「媒体导入」一项导航，其余视图不实例化、菜单入口与快捷键同步隐藏；提供「媒体保存目录」自定义路径设置项，导入的素材复制到 `<保存目录>/<项目名>/`，支持团队/个人/极简三种模式随时切回
 - 不删除任何数据库数据，三种模式共享同一数据库格式；切换写入 `settings.json` 的 `app_config.usage_mode`，保存目录写入 `app_config.minimal_import_target_dir`，重启后生效
+- 设置对话框按用途分为「常规 / 备份与校验 / 自动化 / 高级」四个标签页，模式切换与媒体保存目录位于「常规」页
 
 ### 极简模式（仅媒体导入）
 - 适用场景：只需要「把存储卡素材汇总到本机某个目录」的轻量使用者
@@ -236,7 +237,7 @@ DIT 工作站围绕 6 大功能模块构建完整的数据管理闭环：
 - 支持编辑 / 删除方案；方案同时用于「相机卡自动化」的自动备份
 
 ### 数据库迁移版本化
-- 迁移机制使用 `PRAGMA user_version` 版本化管理（v1 素材字段补齐；v2 标签回填与项目模板；v3 FTS5 索引版本；v4 备份方案模板；v5 回收站、重命名历史与审计字段；v6 任务历史与备份快照；v7 容量趋势快照；v8 拍摄日期时间线索引；v9 跨会话校验和缓存；v10 保存搜索/智能集合），升级路径明确、幂等可重复执行
+- 迁移机制使用 `PRAGMA user_version` 版本化管理（v1 素材字段补齐；v2 标签回填与项目模板；v3 FTS5 索引版本；v4 备份方案模板；v5 回收站、重命名历史与审计字段；v6 任务历史与备份快照；v7 容量趋势快照；v8 拍摄日期时间线索引；v9 跨会话校验和缓存；v10 保存搜索/智能集合；v11 场记三元组归一与遗留列清理），升级路径明确、幂等可重复执行
 - **迁移前自动备份**：升级前自动生成 `*.pre-migration.bak` 数据库备份，升级失败可回滚，数据不丢失
 
 ### 日志轮转
@@ -284,6 +285,11 @@ DIT 工作站围绕 6 大功能模块构建完整的数据管理闭环：
 
 ### 数据库迁移 v10
 - 新增 `saved_searches` 表（保存搜索/智能集合持久化），支持按名称/更新时间排序检索。
+
+### 数据库迁移 v11
+- 新增 `shots` 表，把「场景 / 镜头 / 镜次」三元组归一为唯一记录；`shooting_logs` 与 `media_assets` 通过 `shot_id` 引用，重复三元组自动合并。
+- 迁移时回填历史数据：关联素材若三元组为空则继承所属日志；日志与素材的 `shot_id` 按项目内三元组自动写入。
+- 清理遗留 `shooting_logs.file_paths` 列（SQLite 3.35+ 直接删除；更旧环境保留空列但不读不写）。
 
 ---
 
@@ -338,7 +344,7 @@ DIT_tools/
     │   ├── Models/
     │   │   └── __init__.py         # 数据模型（dataclass + Enum + RATING_LABELS）
     │   ├── Services/               # 业务逻辑层
-    │   │   ├── database_service.py     # 数据库服务（SQLite，14 张业务表 + 连接池 + FTS5）
+    │   │   ├── database_service.py     # 数据库服务（SQLite，15 张业务表 + 连接池 + FTS5）
     │   │   ├── checksum_service.py     # 校验和服务（内存 + 跨会话持久化缓存）
     │   │   ├── media_import_service.py # 媒体导入服务
     │   │   ├── metadata_service.py     # 元数据读取服务（EXIF/视频）
@@ -395,7 +401,7 @@ DIT_tools/
     │           ├── empty_state.py                # 空状态占位
     │           └── asset_table_model.py          # 素材列表分页模型
     ├── pytest.ini                     # 测试分类 marker 注册（ci / local_only 等）
-    ├── DITWorkstationTests/           # 云端安全测试（522 用例，明细见「测试覆盖」表）
+    ├── DITWorkstationTests/           # 云端安全测试（526 用例，明细见「测试覆盖」表）
     │   ├── conftest.py                 # 共享 fixture + CI 环境收集阶段排除规则
     │   ├── test_exif_synthetic.py      # EXIF 解析云端回归（合成数据）
     │   ├── local/                      # 本地专属测试（22 用例，CI 不收集/不触发）
@@ -452,7 +458,7 @@ python DITWorkstation/main.py
 
 | 分类 | Marker | 位置 | 用例数 | 云端流水线 | 内容 |
 |------|--------|------|--------|------------|------|
-| 云端安全 | `ci` | `DITWorkstationTests/test_*.py` | 522 | ✅ 执行 | 合成数据、mock、临时目录、offscreen Qt，无本机资源依赖 |
+| 云端安全 | `ci` | `DITWorkstationTests/test_*.py` | 526 | ✅ 执行 | 合成数据、mock、临时目录、offscreen Qt，无本机资源依赖 |
 | 本地专属 | `local_only` / `requires_local_media` / `full_library_scan` | `DITWorkstationTests/local/` | 22 | ❌ 不收集、不触发 | 真实 JPG/RAW 素材回归、全量素材扫描、真实素材端到端导入 |
 
 **三重排除规则**（任一环节都能阻止本地专属用例进入云端）：
@@ -462,11 +468,11 @@ python DITWorkstation/main.py
 3. `build/build_macos.sh` 与 `build/build_windows.bat` 的打包门禁使用同样的排除参数，避免云端 runner 依赖开发机私有素材。
 
 ```bash
-# 云端流水线 / CI 质量门禁（只跑 522 个云端安全用例）
+# 云端流水线 / CI 质量门禁（只跑 526 个云端安全用例）
 cd DITWorkstation
 pytest DITWorkstationTests/ --ignore=DITWorkstationTests/local -m "not local_only" -v
 
-# 本地全量（云端安全 + 本地专属，共 544）
+# 本地全量（云端安全 + 本地专属，共 548）
 pytest DITWorkstationTests/ -v
 
 # 本地单独运行真实素材回归（缺素材时相关用例自动跳过）
@@ -504,9 +510,9 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 | `DITWorkstationTests/test_card_automation.py` | 相机卡自动化与可配置 SOP 链 | 3 |
 | `DITWorkstationTests/test_card_verification.py` | 存储卡擦除保护状态机 | 4 |
 | `DITWorkstationTests/test_checksum.py` | 校验和服务（含跨会话持久化缓存与强制重读） | 15 |
-| `DITWorkstationTests/test_database.py` | 数据库服务（14 张业务表 CRUD + 版本化迁移 + FTS5 + 连接池 + 拍摄日期时间线 + 场记关联同步） | 74 |
+| `DITWorkstationTests/test_database.py` | 数据库服务（15 张业务表 CRUD + 版本化迁移 + FTS5 + 连接池 + 拍摄日期时间线 + 场记三元组归一） | 74 |
 | `DITWorkstationTests/test_exif_synthetic.py` | EXIF 解析云端回归（合成数据、有理数归一化、Pillow/rawpy 兜底、RAW 边界） | 11 |
-| `DITWorkstationTests/test_feature_flags.py` | 团队/个人/极简模式功能开关 | 28 |
+| `DITWorkstationTests/test_feature_flags.py` | 团队/个人/极简模式功能开关（含数据驱动预设） | 30 |
 | `DITWorkstationTests/test_field_registry.py` | 数据库字段注册表与标识符白名单 | 7 |
 | `DITWorkstationTests/test_help_viewer.py` | 应用内用户手册查看器 | 5 |
 | `DITWorkstationTests/test_hook_service.py` | post-ingest 钩子（跨平台环境变量注入） | 4 |
@@ -522,7 +528,7 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 | `DITWorkstationTests/test_report.py` | 报告生成服务（素材/备份/审计 PDF 与 CSV） | 9 |
 | `DITWorkstationTests/test_session_context.py` | EventBus + 全局项目/工作区状态联动 | 10 |
 | `DITWorkstationTests/test_settings.py` | 应用设置持久化 | 21 |
-| `DITWorkstationTests/test_settings_dialog.py` | 设置对话框交互与持久化 | 12 |
+| `DITWorkstationTests/test_settings_dialog.py` | 设置对话框交互、标签分页与持久化 | 14 |
 | `DITWorkstationTests/test_settings_sop_widgets.py` | 高级 SOP 配置控件 | 5 |
 | `DITWorkstationTests/test_source_reread.py` | 源卡复读校验（检测劣化存储卡） | 3 |
 | `DITWorkstationTests/test_tags.py` | 素材标签关联表与检索 | 9 |
@@ -536,11 +542,11 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 | `DITWorkstationTests/test_workers.py` | 后台线程 WorkerThread | 7 |
 | `DITWorkstationTests/test_workspace_repository.py` | 工作区及仓储门面一致性 | 7 |
 | `DITWorkstationTests/test_workspace_selector.py` | 工作区-项目选择控件（含删除工作区/项目） | 10 |
-| **合计** | 云端 522 + 本地专属 22 | **544** |
+| **合计** | 云端 526 + 本地专属 22 | **548** |
 
 测试共享 fixture（`conftest.py`）提供隔离的数据库实例、临时目录与工厂函数，保证测试间互不干扰；同一文件还负责 CI 环境下的收集阶段排除。
 
-**验证结果**（macOS arm64 / Python 3.13 / PySide6 6.11.1）：云端安全测试 `522 passed`，覆盖率 `67.45%`（门禁要求 ≥ 50%）；本地全量含真实素材回归 `544 passed`（其中 JPG 803 张 + RAW 2134 张全量扫描需显式开启）。CI 质量门禁包含 pytest、Ruff（lint + format）与 Pyright，并在 macOS / Windows 双平台执行 PyInstaller 打包与冒烟启动。测试使用 Qt `offscreen` 平台，不能替代 Windows/macOS/Linux 原生 GUI、文件系统和打包产物验证；真实素材回归与全量扫描只在本地执行，云端 runner 不具备这些私有资源。
+**验证结果**（macOS arm64 / Python 3.13 / PySide6 6.11.1）：云端安全测试 `526 passed`，覆盖率 `67.45%`（门禁要求 ≥ 50%）；本地全量含真实素材回归 `548 passed`（其中 JPG 803 张 + RAW 2134 张全量扫描需显式开启）。CI 质量门禁包含 pytest、Ruff（lint + format）与 Pyright，并在 macOS / Windows 双平台执行 PyInstaller 打包与冒烟启动。测试使用 Qt `offscreen` 平台，不能替代 Windows/macOS/Linux 原生 GUI、文件系统和打包产物验证；真实素材回归与全量扫描只在本地执行，云端 runner 不具备这些私有资源。
 
 ### 性能参考
 
@@ -655,10 +661,11 @@ App（配置/会话）→ Models（数据模型）→ Services（业务逻辑）
 ### 数据库结构
 
 - **模式**：SQLite，启用 WAL（Write-Ahead Logging）模式
-- **表**：14 张业务表（另有 1 张可选的 FTS5 虚拟表）
+- **表**：15 张业务表（另有 1 张可选的 FTS5 虚拟表）
   - `workspaces` — 工作区（工作区-项目两级结构的父级）
   - `projects` — 项目（归属于工作区）
-  - `shooting_logs` — 拍摄日志
+  - `shots` — 场记三元组（场景 / 镜头 / 镜次，项目内唯一）
+  - `shooting_logs` — 拍摄日志（通过 `shot_id` 引用场记三元组）
   - `media_assets` — 媒体素材（含 EXIF、评级、备份位置等字段）
   - `asset_tags` — 素材标签关联表
   - `backup_jobs` — 备份作业记录（含失败文件与任务快照）
@@ -670,8 +677,8 @@ App（配置/会话）→ Models（数据模型）→ Services（业务逻辑）
   - `task_history` — 后台任务历史与恢复上下文
   - `storage_health_snapshots` — 备份目标容量历史
   - `checksum_cache` — 跨会话校验和缓存（按路径、大小、修改时间和算法校验有效性）
-- **索引**：21 个显式索引，覆盖常用查询字段、拍摄日期时间线聚合和校验和缓存淘汰以保证检索性能
-- **迁移**：`PRAGMA user_version` 版本化迁移（v1–v9），幂等可重复执行；升级前自动生成 `*.pre-migration.bak` 备份，失败可回滚
+- **索引**：24 个显式索引，覆盖常用查询字段、拍摄日期时间线聚合、场记三元组和校验和缓存淘汰以保证检索性能
+- **迁移**：`PRAGMA user_version` 版本化迁移（v1–v11），幂等可重复执行；升级前自动生成 `*.pre-migration.bak` 备份，失败可回滚
 
 ---
 

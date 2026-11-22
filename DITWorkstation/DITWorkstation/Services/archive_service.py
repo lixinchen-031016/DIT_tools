@@ -247,7 +247,7 @@ class ArchiveService:
             "aperture": log.aperture,
             "shutter_speed": log.shutter_speed,
             "notes": log.notes,
-            "file_paths": list(log.file_paths),
+            "shot_id": log.shot_id,
             "created_at": log.created_at.isoformat(),
         }
 
@@ -389,7 +389,7 @@ class ArchiveService:
                     aperture=d.get("aperture", ""),
                     shutter_speed=d.get("shutter_speed", ""),
                     notes=d.get("notes", ""),
-                    file_paths=d.get("file_paths", []),
+                    shot_id=d.get("shot_id"),
                 )
                 old_log_to_new[d["log_id"]] = log.log_id
                 self.db_service.create_shooting_log(log)
