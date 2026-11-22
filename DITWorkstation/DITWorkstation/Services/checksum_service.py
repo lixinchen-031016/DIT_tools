@@ -163,24 +163,20 @@ class ChecksumService:
 
         return checksum
 
-    def compute_file_checksum_fresh(
+    def _uncached_checksum(
         self,
         file_path: str,
         algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
+        progress_callback: Callable[[float], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
     ) -> FileChecksum:
-        """强制重读文件计算校验和（绕过内存/持久化缓存）。
-
-        用途：拷贝完成后的源文件复读校验——缓存命中的哈希来自拷贝时
-        的同一次读盘，无法发现拷贝后源介质内容变化/劣化。
-        结果仍写回缓存（mtime 未变时覆盖为最新值，语义一致）。
-        """
+        """绕过缓存读取文件真实内容并计算校验和（结果写回缓存）。"""
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError(f"文件不存在: {file_path}")
         stat = path.stat()
         hash_value = self._compute_hash(
-            path, algorithm, stat.st_size, None, cancel_check
+            path, algorithm, stat.st_size, progress_callback, cancel_check
         )
         checksum = FileChecksum(
             file_path=str(path),
@@ -191,6 +187,23 @@ class ChecksumService:
         )
         self._remember(checksum)
         return checksum
+
+    def compute_file_checksum_fresh(
+        self,
+        file_path: str,
+        algorithm: ChecksumAlgorithm = ChecksumAlgorithm.XXHASH64,
+        cancel_check: Callable[[], bool] | None = None,
+        progress_callback: Callable[[float], None] | None = None,
+    ) -> FileChecksum:
+        """强制重读文件计算校验和（绕过内存/持久化缓存）。
+
+        用途：拷贝完成后的源文件复读校验、完整性验证——缓存命中的哈希
+        来自更早的一次读盘，无法发现内容变化/劣化。
+        结果仍写回缓存（mtime 未变时覆盖为最新值，语义一致）。
+        """
+        return self._uncached_checksum(
+            file_path, algorithm, progress_callback, cancel_check
+        )
 
     def _is_cache_valid(self, cached: FileChecksum, path: Path) -> bool:
         """检查缓存是否有效：文件大小与修改时间均一致才视为有效。
@@ -318,11 +331,11 @@ class ChecksumService:
         if not path.exists():
             raise FileNotFoundError(f"文件不存在: {file_path}")
 
-        computed = self.compute_file_checksum(
-            str(path),
-            algorithm,
-            progress_callback,
-            cancel_check,
+        # 完整性验证必须读取真实内容：Windows/FAT 等文件系统的 mtime 粒度
+        # 可能较粗，同尺寸就地修改后 size+mtime 缓存键可能仍然命中，
+        # 使用缓存会漏报损坏。
+        computed = self._uncached_checksum(
+            str(path), algorithm, progress_callback, cancel_check
         )
         return computed.hash_value == expected_hash
 
@@ -348,8 +361,9 @@ class ChecksumService:
 
         for i, (source_path, target_path) in enumerate(file_pairs):
             try:
-                source_checksum = self.compute_file_checksum(source_path, algorithm)
-                target_checksum = self.compute_file_checksum(target_path, algorithm)
+                # 批量验证同样是完整性判定，必须绕过缓存读取真实内容
+                source_checksum = self._uncached_checksum(source_path, algorithm)
+                target_checksum = self._uncached_checksum(target_path, algorithm)
                 verified = source_checksum.hash_value == target_checksum.hash_value
 
                 results.append(

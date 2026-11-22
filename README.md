@@ -401,7 +401,7 @@ DIT_tools/
     │           ├── empty_state.py                # 空状态占位
     │           └── asset_table_model.py          # 素材列表分页模型
     ├── pytest.ini                     # 测试分类 marker 注册（ci / local_only 等）
-    ├── DITWorkstationTests/           # 云端安全测试（537 用例，明细见「测试覆盖」表）
+    ├── DITWorkstationTests/           # 云端安全测试（538 用例，明细见「测试覆盖」表）
     │   ├── conftest.py                 # 共享 fixture + CI 环境收集阶段排除规则
     │   ├── test_exif_synthetic.py      # EXIF 解析云端回归（合成数据）
     │   ├── local/                      # 本地专属测试（22 用例，CI 不收集/不触发）
@@ -458,7 +458,7 @@ python DITWorkstation/main.py
 
 | 分类 | Marker | 位置 | 用例数 | 云端流水线 | 内容 |
 |------|--------|------|--------|------------|------|
-| 云端安全 | `ci` | `DITWorkstationTests/test_*.py` | 537 | ✅ 执行 | 合成数据、mock、临时目录、offscreen Qt，无本机资源依赖 |
+| 云端安全 | `ci` | `DITWorkstationTests/test_*.py` | 538 | ✅ 执行 | 合成数据、mock、临时目录、offscreen Qt，无本机资源依赖 |
 | 本地专属 | `local_only` / `requires_local_media` / `full_library_scan` | `DITWorkstationTests/local/` | 22 | ❌ 不收集、不触发 | 真实 JPG/RAW 素材回归、全量素材扫描、真实素材端到端导入 |
 
 **三重排除规则**（任一环节都能阻止本地专属用例进入云端）：
@@ -468,11 +468,11 @@ python DITWorkstation/main.py
 3. `build/build_macos.sh` 与 `build/build_windows.bat` 的打包门禁使用同样的排除参数，避免云端 runner 依赖开发机私有素材。
 
 ```bash
-# 云端流水线 / CI 质量门禁（只跑 537 个云端安全用例）
+# 云端流水线 / CI 质量门禁（只跑 538 个云端安全用例）
 cd DITWorkstation
 pytest DITWorkstationTests/ --ignore=DITWorkstationTests/local -m "not local_only" -v
 
-# 本地全量（云端安全 + 本地专属，共 559）
+# 本地全量（云端安全 + 本地专属，共 560）
 pytest DITWorkstationTests/ -v
 
 # 本地单独运行真实素材回归（缺素材时相关用例自动跳过）
@@ -509,7 +509,7 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 | `DITWorkstationTests/test_camera_identity.py` | EXIF 相机品牌机型识别 | 7 |
 | `DITWorkstationTests/test_card_automation.py` | 相机卡自动化与可配置 SOP 链 | 3 |
 | `DITWorkstationTests/test_card_verification.py` | 存储卡擦除保护状态机 | 4 |
-| `DITWorkstationTests/test_checksum.py` | 校验和服务（含跨会话持久化缓存与强制重读） | 15 |
+| `DITWorkstationTests/test_checksum.py` | 校验和服务（跨会话缓存、强制重读与完整性验证绕过过期缓存） | 16 |
 | `DITWorkstationTests/test_database.py` | 数据库服务（15 张业务表 CRUD + 版本化迁移 + FTS5 + 连接池 + 拍摄日期时间线 + 场记三元组归一） | 74 |
 | `DITWorkstationTests/test_exif_synthetic.py` | EXIF 解析云端回归（合成数据、有理数归一化、Pillow/rawpy 兜底、RAW 边界） | 11 |
 | `DITWorkstationTests/test_feature_flags.py` | 团队/个人/极简模式功能开关（含数据驱动预设） | 31 |
@@ -542,11 +542,11 @@ python build/benchmark_database_workloads.py --assets 10000,50000,100000 --file-
 | `DITWorkstationTests/test_workers.py` | 后台线程 WorkerThread | 7 |
 | `DITWorkstationTests/test_workspace_repository.py` | 工作区及仓储门面一致性 | 7 |
 | `DITWorkstationTests/test_workspace_selector.py` | 工作区-项目选择控件（含删除工作区/项目） | 10 |
-| **合计** | 云端 537 + 本地专属 22 | **559** |
+| **合计** | 云端 538 + 本地专属 22 | **560** |
 
 测试共享 fixture（`conftest.py`）提供隔离的数据库实例、临时目录与工厂函数，保证测试间互不干扰；同一文件还负责 CI 环境下的收集阶段排除。
 
-**验证结果**（macOS arm64 / Python 3.13 / PySide6 6.11.1）：云端安全测试 `537 passed`，覆盖率 `67.45%`（门禁要求 ≥ 50%）；本地全量含真实素材回归 `559 passed`（其中 JPG 803 张 + RAW 2134 张全量扫描需显式开启）。CI 质量门禁包含 pytest、Ruff（lint + format）与 Pyright，并在 macOS / Windows 双平台执行 PyInstaller 打包与冒烟启动。测试使用 Qt `offscreen` 平台，不能替代 Windows/macOS/Linux 原生 GUI、文件系统和打包产物验证；真实素材回归与全量扫描只在本地执行，云端 runner 不具备这些私有资源。
+**验证结果**（macOS arm64 / Python 3.13 / PySide6 6.11.1）：云端安全测试 `538 passed`，覆盖率 `67.45%`（门禁要求 ≥ 50%）；本地全量含真实素材回归 `560 passed`（其中 JPG 803 张 + RAW 2134 张全量扫描需显式开启）。CI 质量门禁包含 pytest、Ruff（lint + format）与 Pyright，并在 macOS / Windows 双平台执行 PyInstaller 打包与冒烟启动。测试使用 Qt `offscreen` 平台，不能替代 Windows/macOS/Linux 原生 GUI、文件系统和打包产物验证；真实素材回归与全量扫描只在本地执行，云端 runner 不具备这些私有资源。
 
 ### 性能参考
 

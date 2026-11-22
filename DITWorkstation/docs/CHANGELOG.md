@@ -10,9 +10,10 @@
 - 跨平台修复：重命名模板、项目名作为目录名时统一净化（Windows 非法字符、保留设备名、超长名、路径分隔符与 `..` 逃逸）；仅大小写变化的重命名不再误判为冲突。
 - 跨平台修复：`sanitize_filename` 清理控制字符并按 UTF-8 字节截断；文件扫描跳过 Windows 隐藏/系统目录；Windows 卷检测优先使用 `os.listdrives()`。
 - 跨平台修复：hook 输出按 UTF-8 / 系统编码 / GBK 依次解码，避免 `UnicodeDecodeError`；Windows 报告目录使用系统「文档」已知文件夹；选择网络盘或云同步目录作为数据库目录时给出风险提示。
-- 文档同步：README 数据库结构（15 张业务表 / 24 个显式索引 / v1–v11）与测试计数（云端 537 / 合计 559）；用户手册补充设置四页说明。
+- 跨平台修复：完整性验证与批量验证改为绕过缓存读取真实内容，避免 Windows/FAT 等粗粒度 mtime 下「同尺寸就地修改」命中过期缓存而漏报损坏；新增回归测试覆盖 size/mtime 不变的损坏场景。
+- 文档同步：README 数据库结构（15 张业务表 / 24 个显式索引 / v1–v11）与测试计数（云端 538 / 合计 560）；用户手册补充设置四页说明。
 
-测试基线：`pytest DITWorkstationTests/ --ignore=DITWorkstationTests/local -m "not local_only" -q`，`537 passed`；`ruff check` / `ruff format --check` 全通过。
+测试基线：`pytest DITWorkstationTests/ --ignore=DITWorkstationTests/local -m "not local_only" -q`，`538 passed`；`ruff check` / `ruff format --check` 全通过。
 
 ## 2026-09-12（新增「极简模式」界面模式）
 

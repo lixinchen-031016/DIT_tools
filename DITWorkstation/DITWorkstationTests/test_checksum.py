@@ -77,6 +77,24 @@ class TestChecksumService(unittest.TestCase):
         )
         self.assertFalse(result)
 
+    def test_verify_file_bypasses_stale_cache(self):
+        """size/mtime 未变化时，完整性验证仍必须读取真实内容。
+
+        复现 Windows/FAT 等时间戳粒度较粗的场景：就地修改后恢复 mtime，
+        旧实现会命中过期缓存而误判为通过。
+        """
+        checksum = self.service.compute_file_checksum(self.test_file)
+        stat = os.stat(self.test_file)
+        with open(self.test_file, "r+b") as f:
+            f.seek(10)
+            f.write(b"CORRUPTED")
+        os.utime(self.test_file, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+
+        result = self.service.verify_file(
+            self.test_file, checksum.hash_value, checksum.algorithm
+        )
+        self.assertFalse(result)
+
     def test_file_not_found(self):
         """TR-2.2: 文件不存在时抛出异常"""
         with self.assertRaises(FileNotFoundError):
