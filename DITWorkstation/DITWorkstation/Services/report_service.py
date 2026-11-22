@@ -29,6 +29,7 @@ from DITWorkstation.Models import (
     Project,
     ShootingLog,
 )
+from DITWorkstation.Services.csv_export import write_csv_rows
 from DITWorkstation.Utils import format_size, logger, now_local
 
 
@@ -609,11 +610,6 @@ class ReportService:
         Returns:
             实际写入的路径
         """
-        import csv
-
-        path = Path(output_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-
         headers = [
             "文件名",
             "文件路径",
@@ -645,49 +641,52 @@ class ReportService:
         def _dt(value) -> str:
             return value.isoformat() if value else ""
 
-        count = 0
-        with open(path, "w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(headers)
+        def _rows():
             for a in assets:
-                if cancel_check and cancel_check():
-                    raise InterruptedError("CSV 导出已取消")
-                writer.writerow(
-                    [
-                        a.file_name,
-                        a.file_path,
-                        a.file_type,
-                        a.asset_type,
-                        a.file_size,
-                        a.scene,
-                        a.shot,
-                        a.take,
-                        RATING_LABELS.get(
-                            a.rating, RATING_LABELS[AssetRating.NONE.value]
-                        ),
-                        _dt(a.date_taken),
-                        a.camera_make,
-                        a.camera_model,
-                        a.lens_model,
-                        a.focal_length,
-                        f"{a.width}x{a.height}" if a.width and a.height else "",
-                        f"{a.duration_seconds:.3f}".rstrip("0").rstrip(".")
-                        if a.duration_seconds
-                        else "",
-                        a.checksum_algorithm,
-                        a.checksum_value,
-                        " | ".join(a.backup_locations),
-                        a.original_path,
-                        a.log_id or "",
-                        "是" if a.is_working_copy else "否",
-                        a.tags,
-                        a.notes,
-                        _dt(a.date_imported),
-                    ]
-                )
-                count += 1
-                if progress_callback:
-                    progress_callback(count, total, f"导出: {a.file_name}")
+                yield [
+                    a.file_name,
+                    a.file_path,
+                    a.file_type,
+                    a.asset_type,
+                    a.file_size,
+                    a.scene,
+                    a.shot,
+                    a.take,
+                    RATING_LABELS.get(a.rating, RATING_LABELS[AssetRating.NONE.value]),
+                    _dt(a.date_taken),
+                    a.camera_make,
+                    a.camera_model,
+                    a.lens_model,
+                    a.focal_length,
+                    f"{a.width}x{a.height}" if a.width and a.height else "",
+                    f"{a.duration_seconds:.3f}".rstrip("0").rstrip(".")
+                    if a.duration_seconds
+                    else "",
+                    a.checksum_algorithm,
+                    a.checksum_value,
+                    " | ".join(a.backup_locations),
+                    a.original_path,
+                    a.log_id or "",
+                    "是" if a.is_working_copy else "否",
+                    a.tags,
+                    a.notes,
+                    _dt(a.date_imported),
+                ]
+
+        progress = None
+        if progress_callback:
+            progress = lambda count, row: progress_callback(
+                count, total, f"导出: {row[0]}"
+            )
+
+        path = Path(output_path)
+        count = write_csv_rows(
+            path,
+            headers,
+            _rows(),
+            cancel_check=cancel_check,
+            progress_callback=progress,
+        )
 
         logger.info(f"素材 CSV 导出成功: {path}（{count} 条）")
         return str(path)

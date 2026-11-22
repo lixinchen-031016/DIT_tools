@@ -179,7 +179,7 @@ class AppConfig:
     )
 
     # 检索分页
-    search_page_size: int = 500  # 素材检索每页显示的条数
+    search_page_size: int = 500  # 素材库每页显示的条数
 
     # 支持的RAW格式
     raw_extensions: list[str] = field(

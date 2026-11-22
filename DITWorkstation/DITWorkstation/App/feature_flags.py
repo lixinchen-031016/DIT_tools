@@ -45,15 +45,14 @@ class UsageMode(str, Enum):
     MINIMAL = "minimal"
 
 
-# 个人模式保留的导航项（顺序与 NAV_ITEMS 一致：dashboard/import/backup/raw/rename/search/asset_info）
+# 个人模式保留的导航项（顺序与 NAV_ITEMS 一致：dashboard/import/backup/raw/rename/library）
 PERSONAL_NAV_KEYS = (
     "dashboard",
     "import",
     "backup",
     "raw",
     "rename",
-    "search",
-    "asset_info",
+    "library",
 )
 
 # 极简模式保留的导航项：仅「媒体导入」一项（其余模块隐藏且不实例化）。
@@ -142,7 +141,7 @@ def is_minimal_mode() -> bool:
 def get_active_nav_items() -> list[tuple[str, str, str]]:
     """返回当前模式激活的导航项列表。
 
-    团队模式返回全部 9 项；个人模式返回 7 项（隐藏 log / report）；
+    团队模式返回全部 7 项；个人模式返回 6 项（隐藏 log）；
     极简模式仅返回 1 项（import）。相对顺序与 NAV_ITEMS 保持一致。
     所有导航索引相关逻辑（导航列表、视图栈、快捷键、F5、跨视图跳转）
     都必须以本列表为准。

@@ -12,9 +12,10 @@ CSV 列（英文列头，兼容中文字段别名）：
 
 import csv
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Literal
 
 from DITWorkstation.Models import ShootingLog
+from DITWorkstation.Services.csv_export import write_csv_rows
 from DITWorkstation.Utils import logger, now_local
 
 # 业务键：场景+镜头+镜次 唯一
@@ -83,16 +84,16 @@ def export_logs_csv(logs: list, target_path: str) -> bool:
     if not logs:
         logger.info("拍摄日志导出：无数据，跳过生成文件")
         return False
+
+    def _rows():
+        for log in logs:
+            yield [
+                getattr(log, field, "") if getattr(log, field, "") else ""
+                for field in CSV_FIELDS
+            ]
+
     try:
-        with open(target_path, "w", encoding="utf-8-sig", newline="") as fh:
-            writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
-            writer.writeheader()
-            for log in logs:
-                row: dict[LogCsvField, Any] = {
-                    cast(LogCsvField, f): getattr(log, f, "") for f in CSV_FIELDS
-                }
-                row["iso"] = row["iso"] if row["iso"] else ""
-                writer.writerow(row)
+        write_csv_rows(target_path, list(CSV_FIELDS), _rows())
         logger.info(f"拍摄日志导出完成: {target_path} ({len(logs)} 条)")
         return True
     except (OSError, PermissionError) as exc:

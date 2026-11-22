@@ -1,6 +1,5 @@
 """日志查看器对话框：同时支持查看系统日志文件与应用操作审计日志。"""
 
-import csv
 from datetime import datetime
 from pathlib import Path
 
@@ -22,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from DITWorkstation.App import config
+from DITWorkstation.Services.csv_export import write_csv_rows
 from DITWorkstation.Utils import format_size, get_db_service, get_report_service, logger
 from DITWorkstation.Views.Styles.theme import (
     COLOR,
@@ -355,35 +355,33 @@ class LogViewerDialog(QDialog):
         )
         if not path:
             return
+        headers = [
+            "时间",
+            "项目",
+            "事件",
+            "详情",
+            "状态",
+            "对象类型",
+            "对象 ID",
+            "恢复 ID",
+        ]
+
+        def _rows():
+            for row in range(self.operation_table.rowCount()):
+                op = self.operation_table.item(row, 0).data(Qt.UserRole)
+                yield [
+                    self.operation_table.item(row, 0).text(),
+                    self.operation_table.item(row, 1).text(),
+                    op.get("event", ""),
+                    op.get("detail", ""),
+                    op.get("status", ""),
+                    op.get("object_type", ""),
+                    op.get("object_id", ""),
+                    op.get("recovery_id", ""),
+                ]
+
         try:
-            with open(path, "w", encoding="utf-8-sig", newline="") as handle:
-                writer = csv.writer(handle)
-                writer.writerow(
-                    [
-                        "时间",
-                        "项目",
-                        "事件",
-                        "详情",
-                        "状态",
-                        "对象类型",
-                        "对象 ID",
-                        "恢复 ID",
-                    ]
-                )
-                for row in range(self.operation_table.rowCount()):
-                    op = self.operation_table.item(row, 0).data(Qt.UserRole)
-                    writer.writerow(
-                        [
-                            self.operation_table.item(row, 0).text(),
-                            self.operation_table.item(row, 1).text(),
-                            op.get("event", ""),
-                            op.get("detail", ""),
-                            op.get("status", ""),
-                            op.get("object_type", ""),
-                            op.get("object_id", ""),
-                            op.get("recovery_id", ""),
-                        ]
-                    )
+            write_csv_rows(path, headers, _rows())
             self.info_label.setText(
                 f"已导出 {self.operation_table.rowCount()} 条操作审计日志：{path}"
             )

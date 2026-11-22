@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from DITWorkstation.App.feature_flags import is_nav_enabled
+from DITWorkstation.App.feature_flags import is_enabled, is_nav_enabled
 from DITWorkstation.App.session_context import (
     set_current_project,
     set_current_workspace,
@@ -44,13 +44,12 @@ class CommandPalette(QDialog):
         ("🎞 RAW 提取", "raw"),
         ("✏️ 文件重命名", "rename"),
         ("📋 拍摄日志", "log"),
-        ("🔍 素材检索", "search"),
-        ("ℹ️ 素材信息", "asset_info"),
-        ("📊 报告生成", "report"),
+        ("🔍 素材库", "library"),
     ]
 
     # 执行命令：直接「运行」常用入口
     RUN_ACTIONS: ClassVar[list[tuple[str, str]]] = [
+        ("📊 生成报告…", "open_report"),
         ("🖥 打开文件管理器…", "open_file_manager"),
         ("📂 打开日志目录…", "open_log_dir"),
         ("⚙️ 打开设置…", "open_settings"),
@@ -236,11 +235,13 @@ class CommandPalette(QDialog):
         self.result_list.clear()
         self._all_items = []
         for label, key in self.NAVIGATION_ACTIONS:
-            # 个人模式隐藏 log/report 导航项
-            if key in ("log", "report") and not is_nav_enabled(key):
+            # 个人模式隐藏日志导航项；报告已改为「生成报告…」运行命令
+            if key == "log" and not is_nav_enabled(key):
                 continue
             self._all_items.append({"type": "nav", "label": label, "key": key})
         for label, key in self.RUN_ACTIONS:
+            if key == "open_report" and not is_enabled("report"):
+                continue
             self._all_items.append({"type": "run", "label": label, "key": key})
         try:
             for ws in self.db_service.get_workspaces():
@@ -295,13 +296,25 @@ class CommandPalette(QDialog):
         # 不匹配任何模式，留在面板中等待用户选择
 
     def _run_command(self, key: str) -> None:
-        """执行快速命令（打开目录、设置等）。"""
+        """执行快速命令（打开目录、设置、报告等）。"""
         if key == "open_file_manager":
             open_in_file_manager(str(Path.home()))
         elif key == "open_log_dir":
             from DITWorkstation.App import config
 
             open_in_file_manager(str(config.log_dir))
+        elif key == "open_report":
+            parent = self.parent()
+            if parent is not None and hasattr(parent, "open_report_dialog"):
+                self.close()
+                parent.open_report_dialog()
+                return
+            # 兜底：没有主窗口委托时直接打开对话框
+            from DITWorkstation.Views.Widgets.report_dialog import ReportDialog
+
+            self.close()
+            ReportDialog().exec()
+            return
         elif key == "open_settings":
             from DITWorkstation.Views.Widgets.settings_dialog import SettingsDialog
 

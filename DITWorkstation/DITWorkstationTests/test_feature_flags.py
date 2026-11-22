@@ -5,7 +5,7 @@
 - 非法 usage_mode 值回退团队模式
 - set_usage_mode 持久化到 app_config
 - apply_saved_config 后模式恢复
-- 团队模式 9 项导航 / 个人模式 7 项导航 / 极简模式 1 项导航（顺序正确）
+- 团队模式 7 项导航 / 个人模式 6 项导航 / 极简模式 1 项导航（顺序正确）
 - 个人模式关闭团队特性，团队模式全部开启，极简模式仅开启白名单特性
 - 极简模式媒体保存目录的读写与持久化
 """
@@ -108,14 +108,14 @@ def test_old_settings_without_usage_mode_stays_team():
 def test_team_mode_activates_all_nav_items():
     active = get_active_nav_items()
     assert [k for k, _, _ in active] == [k for k, _, _ in NAV_ITEMS]
-    assert len(active) == 9
+    assert len(active) == 7
 
 
-def test_personal_mode_activates_seven_nav_items(monkeypatch):
+def test_personal_mode_activates_six_nav_items(monkeypatch):
     monkeypatch.setattr(config, "usage_mode", "personal")
     active = get_active_nav_items()
     assert [k for k, _, _ in active] == list(PERSONAL_NAV_KEYS)
-    assert len(active) == 7
+    assert len(active) == 6
     # 顺序必须与 NAV_ITEMS 中的相对顺序一致
     full_order = [k for k, _, _ in NAV_ITEMS]
     assert [k for k in full_order if k in PERSONAL_NAV_KEYS] == list(PERSONAL_NAV_KEYS)
@@ -123,7 +123,8 @@ def test_personal_mode_activates_seven_nav_items(monkeypatch):
 
 def test_is_nav_enabled(monkeypatch):
     assert is_nav_enabled("log")
-    assert is_nav_enabled("report")
+    # 报告生成已改为工作台动作，不再是一级导航项
+    assert not is_nav_enabled("report")
     monkeypatch.setattr(config, "usage_mode", "personal")
     assert not is_nav_enabled("log")
     assert not is_nav_enabled("report")
@@ -141,9 +142,9 @@ def test_get_nav_index_uses_active_list(monkeypatch):
     monkeypatch.setattr(config, "usage_mode", "personal")
     assert get_nav_index("log") is None
     assert get_nav_index("report") is None
-    # 个人模式激活列表：dashboard=0 import=1 backup=2 raw=3 rename=4 search=5 asset_info=6
+    # 个人模式激活列表：dashboard=0 import=1 backup=2 raw=3 rename=4 library=5
     assert get_nav_index("raw") == 3
-    assert get_nav_index("asset_info") == 6
+    assert get_nav_index("library") == 5
     assert get_active_nav_index("backup") == 2
 
 
@@ -226,10 +227,8 @@ def test_minimal_mode_activates_only_import_nav(monkeypatch):
         "backup",
         "raw",
         "rename",
-        "search",
-        "asset_info",
+        "library",
         "log",
-        "report",
     ):
         assert not is_nav_enabled(key), f"极简模式下 {key} 不应可见"
 

@@ -124,11 +124,11 @@ class MediaImportView(RefreshOnShowView):
         left_layout.setSpacing(8)
 
         # 工作区 + 项目两级选择控件（封装下拉/列表/新建对话框/全局信号同步）
+        # 项目删除统一收口到「项目概览」，本视图只负责选择与新建
         self.selector = WorkspaceProjectSelector(
             project_widget="list",
             show_edit_workspace=False,
             show_new_project=True,
-            show_delete_project=True,
             db_service=self.db_service,
         )
         left_layout.addWidget(self.selector)
@@ -1208,7 +1208,7 @@ class MediaImportView(RefreshOnShowView):
             for d in fail_details[:5]:
                 self._log(f"  失败: {d['path']} - {d.get('error', '未知错误')}")
 
-        # 广播数据变更，通知日志/检索/素材信息视图刷新
+        # 广播数据变更，通知日志/素材库/拍摄日志视图刷新
         if imported > 0:
             get_data_bus().emit_data_changed("assets_changed")
 

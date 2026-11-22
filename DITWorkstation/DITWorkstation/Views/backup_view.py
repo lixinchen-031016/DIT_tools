@@ -29,6 +29,7 @@ from DITWorkstation.App.session_context import get_data_bus
 from DITWorkstation.Models import BackupJob, BackupTemplate, ChecksumAlgorithm
 from DITWorkstation.Services.backup_service import BackupService
 from DITWorkstation.Services.media_import_service import MediaImportService
+from DITWorkstation.Services.project_health_service import ProjectHealthService
 from DITWorkstation.Utils import (
     find_overwrite_conflicts,
     format_size,
@@ -49,6 +50,7 @@ from DITWorkstation.Views.Styles.theme import (
     SECONDARY_BUTTON_QSS,
 )
 from DITWorkstation.Views.Widgets import (
+    CapacityTrendWidget,
     PageHeader,
     RefreshOnShowView,
     StatusBanner,
@@ -70,6 +72,8 @@ class BackupView(RefreshOnShowView):
         # 注入共享 db_service，使备份完成后能持久化 job + 回写 asset.backup_locations
         self.db_service = db_service or get_db_service()
         self.backup_service = BackupService(db_service=self.db_service)
+        # 数据安全概览：备份覆盖、失联素材、最后校验与容量趋势的统一入口
+        self.health_service = ProjectHealthService(self.db_service)
         # 复用 db_service 与 checksum_service，与备份共享哈希缓存
         self.import_service = MediaImportService(db_service=self.db_service)
         self.current_job: BackupJob = None
@@ -86,7 +90,8 @@ class BackupView(RefreshOnShowView):
         self._backup_templates = []
         self._setup_ui()
         self._verify_progress.connect(self._on_verify_progress)
-        # 项目切换由共享控件处理（broadcast_none=False 保留"不关联"语义）
+        # 项目切换后刷新数据安全概览（选择器由共享控件统一管理）
+        self.selector.project_changed.connect(self._on_security_project_changed)
 
     def _setup_ui(self):
         """组装备份配置区和执行结果区。"""
@@ -104,6 +109,144 @@ class BackupView(RefreshOnShowView):
             "数据备份", "从存储卡安全拷贝素材，支持多目标并行备份与校验和验证"
         )
         layout.addWidget(self.page_header)
+
+    def _build_security_overview(self):
+        """数据安全概览：把校验、恢复、健康状态与容量趋势收口到备份页。"""
+        group = QGroupBox("数据安全概览")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(8)
+
+        self.security_summary_label = QLabel(
+            "请选择关联项目，查看备份覆盖、失联素材、失败任务与容量预警。"
+        )
+        self.security_summary_label.setWordWrap(True)
+        self.security_summary_label.setStyleSheet(
+            f"background-color: {COLOR.BG_CARD}; color: {COLOR.TEXT_PRIMARY}; "
+            f"border: 1px solid {COLOR.BORDER}; border-radius: {RADIUS.INPUT}px; "
+            f"padding: 10px 12px; font-size: {FONT_SIZE.SM}px;"
+        )
+        layout.addWidget(self.security_summary_label)
+
+        action_row = QHBoxLayout()
+        self.refresh_security_btn = QPushButton("刷新安全状态")
+        self.refresh_security_btn.setToolTip(
+            "重新检查备份覆盖、失联素材、失败任务、最后校验时间与备份盘容量"
+        )
+        self.refresh_security_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
+        self.refresh_security_btn.clicked.connect(
+            lambda: self._refresh_security_overview(capture_capacity=True)
+        )
+        action_row.addWidget(self.refresh_security_btn)
+
+        self.verify_backup_btn = QPushButton("校验已有备份")
+        self.verify_backup_btn.setToolTip(
+            "对已关联项目素材的 backup_locations 做完整性校验："
+            "检查备份文件是否存在，并与入库时的校验和比对，检测位错误/丢失"
+        )
+        self.verify_backup_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
+        self.verify_backup_btn.clicked.connect(self._verify_existing_backup)
+        action_row.addWidget(self.verify_backup_btn)
+
+        self.restore_btn = QPushButton("从备份恢复素材…")
+        self.restore_btn.setToolTip(
+            "把已备份素材从备份卷复制回工作盘（回拷），可选校验和验证"
+        )
+        self.restore_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
+        self.restore_btn.clicked.connect(self._open_restore_wizard)
+        action_row.addWidget(self.restore_btn)
+        action_row.addStretch()
+        layout.addLayout(action_row)
+
+        # 容量趋势默认收起，避免把「开始备份」等主操作挤出首屏
+        self.capacity_toggle = QCheckBox("显示容量趋势")
+        self.capacity_toggle.setToolTip("展开备份盘剩余容量历史趋势图")
+        layout.addWidget(self.capacity_toggle)
+        self.capacity_trend = CapacityTrendWidget()
+        self.capacity_trend.setMaximumHeight(220)
+        self.capacity_trend.setVisible(False)
+        self.capacity_toggle.toggled.connect(self.capacity_trend.setVisible)
+        layout.addWidget(self.capacity_trend)
+        return group
+
+    def _on_security_project_changed(self, _project_id):
+        self._refresh_security_overview(capture_capacity=False)
+
+    @safe_slot("刷新数据安全状态失败")
+    def _refresh_security_overview(self, capture_capacity: bool = False):
+        """刷新数据安全概览；项目未选择时给出明确说明。"""
+        project_id = self.selector.get_current_project_id()
+        if not project_id:
+            self.security_summary_label.setText(
+                "未选择关联项目：当前仅显示备份作业记录。"
+                "选择项目后可查看备份覆盖、失联素材、失败任务与容量预警。"
+            )
+            self.capacity_trend.set_snapshots([])
+            self.capacity_trend.set_message("选择项目后显示备份盘容量趋势。")
+            return
+
+        try:
+            stats = self.db_service.get_project_stats(project_id)
+            report = self.health_service.get_health_report(
+                project_id, capture_capacity=capture_capacity
+            )
+        except Exception as e:
+            logger.warning(f"读取数据安全状态失败: {e}")
+            self.security_summary_label.setText(f"读取数据安全状态失败：{e}")
+            return
+
+        asset_count = int(stats.get("asset_count", 0) or 0)
+        backed_up = int(stats.get("backed_up_count", 0) or 0)
+        issues = report.get("issues", {})
+        check = report.get("last_integrity_check")
+        check_text = (
+            "从未校验"
+            if not check
+            else (
+                check["created_at"].strftime("%Y-%m-%d %H:%M")
+                if check.get("created_at")
+                else "时间未知"
+            )
+        )
+        capacity_lines = []
+        for item in report.get("capacities", []):
+            name = Path(item["path"]).name or item["path"]
+            if item.get("available"):
+                capacity_lines.append(f"{name}：剩余 {format_size(item['free_bytes'])}")
+            else:
+                capacity_lines.append(f"{name}：不可达")
+        forecast = report.get("capacity_forecast", {})
+        if forecast.get("warning"):
+            days = forecast.get("days_remaining")
+            warning_text = "容量不足"
+            if days is not None:
+                warning_text += f"，预计 {days} 天内耗尽"
+            capacity_lines.append(f"⚠ {warning_text}")
+
+        severity = report.get("severity", "healthy")
+        color = COLOR.SUCCESS if severity == "healthy" else COLOR.WARNING
+        self.security_summary_label.setStyleSheet(
+            f"background-color: {COLOR.BG_CARD}; color: {color}; "
+            f"border: 1px solid {COLOR.BORDER}; border-radius: {RADIUS.INPUT}px; "
+            f"padding: 10px 12px; font-size: {FONT_SIZE.SM}px;"
+        )
+        self.security_summary_label.setText(
+            f"备份覆盖：{backed_up}/{asset_count} 个素材  |  "
+            f"备份作业：{int(stats.get('backup_job_count', 0) or 0)} 次  |  最后校验：{check_text}\n"
+            f"未备份 {issues.get('unbacked_assets', 0)}  |  "
+            f"失联路径 {issues.get('missing_assets', 0)}  |  "
+            f"失败任务 {issues.get('failed_tasks', 0)}  |  "
+            f"待重试 {issues.get('retry_files', 0)}"
+            + ("\n" + "；".join(capacity_lines) if capacity_lines else "")
+        )
+        self.capacity_trend.set_snapshots(report.get("capacity_history", []))
+
+    @safe_slot("从备份恢复素材失败")
+    def _open_restore_wizard(self):
+        from DITWorkstation.Views.Widgets.restore_wizard import RestoreWizard
+
+        RestoreWizard(self, db_service=self.db_service).exec()
+        self._load_backup_history()
+        self._refresh_security_overview(capture_capacity=False)
 
     def _build_configuration(self):
         """创建项目、路径、模板和备份执行配置区。"""
@@ -125,6 +268,9 @@ class BackupView(RefreshOnShowView):
         )
         project_layout.addWidget(self.selector, 1)
         config_layout.addWidget(project_group)
+
+        # 数据安全概览：备份覆盖 / 失联素材 / 最后校验 / 容量趋势 / 恢复入口
+        config_layout.addWidget(self._build_security_overview())
 
         # 源路径选择
         source_group = QGroupBox("源路径（存储卡）")
@@ -277,19 +423,10 @@ class BackupView(RefreshOnShowView):
         self.mhl_verify_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         self.mhl_verify_btn.clicked.connect(self._verify_mhl)
 
-        self.verify_backup_btn = QPushButton("校验已有备份")
-        self.verify_backup_btn.setToolTip(
-            "对已关联项目素材的 backup_locations 做完整性校验："
-            "检查备份文件是否存在，并与入库时的校验和比对，检测位错误/丢失"
-        )
-        self.verify_backup_btn.setStyleSheet(SECONDARY_BUTTON_QSS)
-        self.verify_backup_btn.clicked.connect(self._verify_existing_backup)
-
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.cancel_btn)
         btn_layout.addWidget(self.mhl_btn)
         btn_layout.addWidget(self.mhl_verify_btn)
-        btn_layout.addWidget(self.verify_backup_btn)
         btn_layout.addStretch()
         config_layout.addLayout(btn_layout)
 
@@ -379,6 +516,7 @@ class BackupView(RefreshOnShowView):
             self.selector.refresh()
             self._load_backup_history()
             self._load_backup_templates()
+            self._refresh_security_overview(capture_capacity=False)
         except Exception as e:
             self._log(f"刷新工作区/项目列表失败: {e}")
 
@@ -950,6 +1088,7 @@ class BackupView(RefreshOnShowView):
         if stats["errors"]:
             parts.append(f"其他异常：{len(stats['errors'])} 条")
         QMessageBox.information(self, "备份校验结果", "\n".join(parts))
+        self._refresh_security_overview(capture_capacity=False)
 
     @safe_slot("导出 MHL 失败")
     def _export_mhl(self):
@@ -1146,7 +1285,7 @@ class BackupView(RefreshOnShowView):
             except Exception as e:
                 self._log(f"自动登记素材失败（不影响备份结果）: {e}")
 
-        # 广播 assets_changed，让 asset_info_view / search_view 知道 backup_locations 已更新
+        # 广播 assets_changed，让素材库知道 backup_locations 已更新
         if job.status.value in ("completed", "partial"):
             try:
                 get_data_bus().emit_data_changed("assets_changed")
@@ -1184,6 +1323,7 @@ class BackupView(RefreshOnShowView):
         # 刷新备份历史表（含失败文件与最新状态）
         try:
             self._load_backup_history()
+            self._refresh_security_overview(capture_capacity=True)
         except Exception as e:
             self._log(f"刷新备份历史失败: {e}")
 

@@ -342,7 +342,7 @@ class RenameView(RefreshOnShowView):
         except Exception as e:
             logger.warning(f"保存重命名回退记录失败: {e}")
 
-        # 广播 assets_changed，让 asset_info_view / search_view 刷新路径
+        # 广播 assets_changed，让素材库刷新路径
         if synced > 0:
             try:
                 get_data_bus().emit_data_changed("assets_changed")

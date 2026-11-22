@@ -47,10 +47,10 @@ def test_selector_horizontal_layout_no_buttons_below(tmp_dir):
     assert isinstance(sel.layout(), QHBoxLayout)
 
 
-# ===== 素材检索分页 =====
+# ===== 素材库：分页 =====
 
 
-def test_search_view_pagination(tmp_dir, monkeypatch):
+def test_library_view_pagination(tmp_dir, monkeypatch):
     from DITWorkstation.App.session_context import reset_session_state
     from DITWorkstation.Models import MediaAsset
     from DITWorkstation.Utils import common, reset_singletons
@@ -74,11 +74,12 @@ def test_search_view_pagination(tmp_dir, monkeypatch):
         ]
         db.add_media_assets_batch(assets)
 
-        from DITWorkstation.Views.search_view import SearchView
+        from DITWorkstation.Views.library_view import LibraryView
 
-        view = SearchView()
-        view.project_combo.clear()
-        view.project_combo.addItem("分页项目", project.project_id)
+        view = LibraryView()
+        monkeypatch.setattr(
+            view.selector, "get_current_project_id", lambda: project.project_id
+        )
 
         def wait_until(predicate, timeout_ms=3000):
             loop = QEventLoop()
@@ -94,16 +95,16 @@ def test_search_view_pagination(tmp_dir, monkeypatch):
         view._search()
         wait_until(lambda: view._total == 1200)
         assert view._total == 1200
-        assert view.result_table.rowCount() == 500
-        assert view.page_label.text() == "第 1 / 3 页"
-        assert not view.prev_page_btn.isEnabled()
-        assert view.next_page_btn.isEnabled()
+        assert view.asset_model.rowCount() == 500
+        assert view.asset_page_label.text() == "第 1 / 3 页"
+        assert not view.prev_asset_page_btn.isEnabled()
+        assert view.next_asset_page_btn.isEnabled()
 
         view._search(go_to_page=2)
-        wait_until(lambda: view.page_label.text() == "第 3 / 3 页")
-        assert view.result_table.rowCount() == 200
-        assert view.page_label.text() == "第 3 / 3 页"
-        assert view.next_page_btn.isEnabled() is False
+        wait_until(lambda: view.asset_page_label.text() == "第 3 / 3 页")
+        assert view.asset_model.rowCount() == 200
+        assert view.asset_page_label.text() == "第 3 / 3 页"
+        assert view.next_asset_page_btn.isEnabled() is False
 
         # 标签自动补全来自 asset_tags
         completer = view.tag_edit.completer()
@@ -114,7 +115,7 @@ def test_search_view_pagination(tmp_dir, monkeypatch):
         reset_session_state()
 
 
-def test_search_view_capture_timeline_drills_into_taken_date(tmp_dir, monkeypatch):
+def test_library_view_capture_timeline_drills_into_taken_date(tmp_dir, monkeypatch):
     from datetime import datetime
 
     from DITWorkstation.App.session_context import reset_session_state
@@ -145,11 +146,12 @@ def test_search_view_capture_timeline_drills_into_taken_date(tmp_dir, monkeypatc
                     date_taken=taken,
                 )
             )
-        from DITWorkstation.Views.search_view import SearchView
+        from DITWorkstation.Views.library_view import LibraryView
 
-        view = SearchView()
-        view.project_combo.clear()
-        view.project_combo.addItem("时间线项目", project.project_id)
+        view = LibraryView()
+        monkeypatch.setattr(
+            view.selector, "get_current_project_id", lambda: project.project_id
+        )
 
         def wait_until(predicate, timeout_ms=3000):
             loop = QEventLoop()
@@ -169,7 +171,7 @@ def test_search_view_capture_timeline_drills_into_taken_date(tmp_dir, monkeypatc
 
         first_card = view.timeline.cards_layout.itemAt(0).widget()
         first_card.click()
-        wait_until(lambda: view._total == 2 and view.result_table.rowCount() == 2)
+        wait_until(lambda: view._total == 2 and view.asset_model.rowCount() == 2)
         assert view._current_filters["taken_from"] == "2026-08-01"
         assert view.view_mode_combo.currentIndex() == 0
     finally:
@@ -541,12 +543,12 @@ def _teardown_main_window(window):
 
 
 def test_main_window_team_mode_builds_all_nav(tmp_dir, monkeypatch):
-    """团队模式：导航 9 项且与视图栈一一对应"""
+    """团队模式：导航 7 项且与视图栈一一对应（报告为工作台动作）"""
     window = _build_main_window(tmp_dir, monkeypatch, "team")
     try:
-        # 导航行数 = 9 个导航项 + 3 个分组标题行（工作台/工作流/输出与管理）
-        assert window.nav_list.count() == 9 + 3
-        assert window.stack.count() == 9
+        # 导航行数 = 7 个导航项 + 2 个分组标题行（工作台/工作流；报告不再是导航项）
+        assert window.nav_list.count() == 7 + 2
+        assert window.stack.count() == 7
         assert [k for k, _, _ in window.active_nav_items] == [
             "dashboard",
             "import",
@@ -554,38 +556,41 @@ def test_main_window_team_mode_builds_all_nav(tmp_dir, monkeypatch):
             "log",
             "raw",
             "rename",
-            "search",
-            "asset_info",
-            "report",
+            "library",
         ]
         # 团队模式注册 Ctrl+L
         keys = [s.key().toString() for s in window.findChildren(QShortcut)]
         assert "Ctrl+L" in keys
-        assert "Ctrl+9" in keys
+        assert "Ctrl+7" in keys
+        assert "Ctrl+8" not in keys
+        assert "Ctrl+9" not in keys
+        # 报告视图不再实例化，报告改为工作台对话框
+        assert "report" not in window.view_by_key
+        assert not hasattr(window, "report_view")
     finally:
         _teardown_main_window(window)
 
 
 def test_main_window_personal_mode_builds_trimmed_nav(tmp_dir, monkeypatch):
-    """个人模式：导航 7 项（无日志/报告），视图栈与导航数量一致"""
+    """个人模式：导航 6 项（无日志），视图栈与导航数量一致"""
     window = _build_main_window(tmp_dir, monkeypatch, "personal")
     try:
-        # 导航行数 = 7 个导航项 + 2 个分组标题行（工作台/工作流；无报告组）
-        assert window.nav_list.count() == 7 + 2
-        assert window.stack.count() == 7
+        # 导航行数 = 6 个导航项 + 2 个分组标题行（工作台/工作流）
+        assert window.nav_list.count() == 6 + 2
+        assert window.stack.count() == 6
         assert [k for k, _, _ in window.active_nav_items] == [
             "dashboard",
             "import",
             "backup",
             "raw",
             "rename",
-            "search",
-            "asset_info",
+            "library",
         ]
         keys = [s.key().toString() for s in window.findChildren(QShortcut)]
-        # 个人模式不注册 Ctrl+L，Ctrl+数字不越界（最多 Ctrl+7）
+        # 个人模式不注册 Ctrl+L，Ctrl+数字不越界（最多 Ctrl+6）
         assert "Ctrl+L" not in keys
-        assert "Ctrl+7" in keys
+        assert "Ctrl+6" in keys
+        assert "Ctrl+7" not in keys
         assert "Ctrl+8" not in keys
         assert "Ctrl+9" not in keys
         # 个人模式下隐藏视图不被实例化，view_by_key 中无对应条目
@@ -605,7 +610,6 @@ def test_main_window_personal_f5_and_navigation_safe(tmp_dir, monkeypatch):
             window._refresh_current_view()  # 不应抛异常
         # 跳转到隐藏页面：get_nav_index 返回 None，静默忽略不越界
         window._navigate_to("log")
-        window._navigate_to("report")
         # 分组标题行存在后，列表行号 ≠ 栈索引；经映射比较
         assert (
             window._stack_index_to_row[window.stack.currentIndex()]
@@ -733,10 +737,10 @@ def test_backup_view_personal_single_target(tmp_dir, monkeypatch):
         view.deleteLater()
 
 
-# ===== 功能模式：检索/素材信息页不访问隐藏控件 =====
+# ===== 功能模式：素材库不访问隐藏控件 =====
 
 
-def test_search_view_personal_ignores_hidden_filters(tmp_dir, monkeypatch):
+def test_library_view_personal_ignores_hidden_filters(tmp_dir, monkeypatch):
     """个人模式：日志/评级筛选隐藏，搜索显式传入 log_id=None / rating=None"""
     from DITWorkstation.App import config
 
@@ -746,13 +750,13 @@ def test_search_view_personal_ignores_hidden_filters(tmp_dir, monkeypatch):
 
     common._shared_db_service = db
     try:
-        from DITWorkstation.Views.search_view import SearchView
+        from DITWorkstation.Views.library_view import LibraryView
 
-        view = SearchView()
+        view = LibraryView()
         assert view.log_combo.isHidden()
         assert view.rating_combo.isHidden()
-        assert view.result_table.isColumnHidden(5)  # 关联日志列
-        assert view.result_table.isColumnHidden(6)  # 评级列
+        assert view.asset_table.isColumnHidden(5)  # 关联日志列
+        assert view.asset_table.isColumnHidden(6)  # 评级列
         # 即使隐藏控件被写入值，filters 也强制为 None
         view.log_combo.addItem("某日志", "log-1")
         view.log_combo.setCurrentIndex(1)
@@ -770,8 +774,8 @@ def test_search_view_personal_ignores_hidden_filters(tmp_dir, monkeypatch):
         reset_session_state()
 
 
-def test_asset_info_view_personal_hides_ratings(tmp_dir, monkeypatch):
-    """个人模式：素材信息页隐藏评级行与批量评级按钮"""
+def test_library_view_personal_hides_ratings(tmp_dir, monkeypatch):
+    """个人模式：素材库详情面板隐藏评级行与批量评级按钮"""
     from DITWorkstation.App import config
 
     monkeypatch.setattr(config, "usage_mode", "personal")
@@ -780,9 +784,9 @@ def test_asset_info_view_personal_hides_ratings(tmp_dir, monkeypatch):
 
     common._shared_db_service = db
     try:
-        from DITWorkstation.Views.asset_info_view import AssetInfoView
+        from DITWorkstation.Views.library_view import LibraryView
 
-        view = AssetInfoView()
+        view = LibraryView()
         assert view.rating_label.isHidden()
         for _value, btn in view._rating_buttons:
             assert btn.isHidden()
@@ -800,17 +804,17 @@ def test_asset_info_view_personal_hides_ratings(tmp_dir, monkeypatch):
         reset_session_state()
 
 
-# ===== 素材信息页：文件存在性验证 + 批量清理丢失素材 =====
+# ===== 素材库：文件存在性验证 + 批量清理丢失素材 =====
 
 
-def test_asset_info_view_marks_and_cleans_missing_files(tmp_dir, monkeypatch):
-    """素材信息页自动校验文件存在性并标识/清理「文件已丢失」记录（含二次确认）"""
+def test_library_view_marks_and_cleans_missing_files(tmp_dir, monkeypatch):
+    """素材库自动校验文件存在性并标识/清理「文件已丢失」记录（含二次确认）"""
     import PySide6.QtWidgets as QW
     from DITWorkstation.App import config
     from DITWorkstation.App.session_context import reset_session_state
     from DITWorkstation.Models import MediaAsset
     from DITWorkstation.Utils import common, reset_singletons
-    from DITWorkstation.Views.asset_info_view import AssetInfoView
+    from DITWorkstation.Views.library_view import LibraryView
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
 
@@ -840,14 +844,14 @@ def test_asset_info_view_marks_and_cleans_missing_files(tmp_dir, monkeypatch):
         )
     )
     try:
-        view = AssetInfoView()
+        view = LibraryView()
         # 让选择器返回测试项目（避免依赖全局会话状态）
         monkeypatch.setattr(
             view.selector,
             "get_current_project_id",
             lambda: project.project_id,
         )
-        view._load_assets()
+        view._search()
 
         def wait_until(predicate, timeout_ms=2000):
             elapsed = 0
@@ -866,7 +870,7 @@ def test_asset_info_view_marks_and_cleans_missing_files(tmp_dir, monkeypatch):
         for r in range(view.asset_model.rowCount()):
             aid = view.asset_model.data(view.asset_model.index(r, 0), Qt.UserRole)
             status_by_id[aid] = view.asset_model.data(
-                view.asset_model.index(r, 4), Qt.DisplayRole
+                view.asset_model.index(r, 9), Qt.DisplayRole
             )
         assert status_by_id["a_present"] == "✓ 正常"
         assert status_by_id["a_missing"] == "⚠ 文件已丢失"
@@ -1293,9 +1297,7 @@ def test_main_window_minimal_mode_builds_single_nav(tmp_dir, monkeypatch):
             "log_view",
             "raw_view",
             "rename_view",
-            "search_view",
-            "asset_info_view",
-            "report_view",
+            "library_view",
         ):
             assert getattr(window, attr) is None, f"{attr} 在极简模式应为 None"
         # 依赖备份视图的后台服务不应创建
@@ -1329,10 +1331,8 @@ def test_main_window_minimal_navigation_safe(tmp_dir, monkeypatch):
             "backup",
             "raw",
             "rename",
-            "search",
-            "asset_info",
+            "library",
             "log",
-            "report",
         ):
             window._navigate_to(key)
         window._refresh_current_view()
@@ -1344,16 +1344,106 @@ def test_main_window_minimal_navigation_safe(tmp_dir, monkeypatch):
 
 
 def test_main_window_minimal_hides_backup_menu_entries(tmp_dir, monkeypatch):
-    """极简模式：隐藏依赖备份模块的菜单入口，保留设置入口。"""
+    """极简模式：不再有依赖备份模块的菜单入口，保留设置入口。"""
     window = _build_main_window(tmp_dir, monkeypatch, "minimal")
     try:
         visible = {
             a.text(): a.isVisible() for a in window.findChildren(QAction) if a.text()
         }
-        assert visible.get("从备份恢复素材…") is False
-        assert visible.get("立即完整性校验…") is False
+        # 恢复/立即校验已收口到数据备份页，不再出现在菜单中
+        assert visible.get("从备份恢复素材…") is None
+        assert visible.get("立即完整性校验…") is None
         assert visible.get("回收站…") is False
         assert visible.get("设置…") is True, "设置入口必须保留（切换模式的唯一出口）"
+    finally:
+        _teardown_main_window(window)
+
+
+def test_dashboard_report_action_opens_dialog(tmp_dir, monkeypatch):
+    """报告生成是工作台动作：按钮/命令面板通过主窗口委托打开对话框。"""
+    window = _build_main_window(tmp_dir, monkeypatch, "team")
+    try:
+        calls = []
+        monkeypatch.setattr(
+            window.dashboard_view,
+            "open_report_dialog",
+            lambda: calls.append("report"),
+        )
+        window.open_report_dialog()
+        assert calls == ["report"]
+        # 团队模式报告入口可见；个人模式隐藏由 _apply_usage_mode_visibility 负责
+        assert not window.dashboard_view.btn_report.isHidden()
+    finally:
+        _teardown_main_window(window)
+
+
+def test_report_dialog_wraps_report_view(tmp_dir, monkeypatch):
+    """报告对话框内嵌 ReportView，关闭时不影响未运行的任务。"""
+    from DITWorkstation.App.session_context import reset_session_state
+    from DITWorkstation.Utils import common, reset_singletons
+    from DITWorkstation.Views.Widgets.report_dialog import ReportDialog
+
+    reset_singletons()
+    reset_session_state()
+    db = DatabaseService(db_path=tmp_dir / "report.db")
+    common._shared_db_service = db
+    try:
+        dialog = ReportDialog()
+        assert dialog.windowTitle() == "生成报告"
+        assert dialog.report_view is not None
+        assert hasattr(dialog.report_view, "generate_btn")
+        dialog.close()
+        dialog.deleteLater()
+    finally:
+        reset_singletons()
+        reset_session_state()
+
+
+def test_backup_view_security_overview_aggregates_health(tmp_dir, monkeypatch):
+    """数据备份页聚合备份覆盖、校验、恢复入口与容量趋势。"""
+    from DITWorkstation.App.session_context import reset_session_state
+    from DITWorkstation.Utils import common, reset_singletons
+    from DITWorkstation.Views.backup_view import BackupView
+
+    reset_singletons()
+    reset_session_state()
+    db = DatabaseService(db_path=tmp_dir / "security.db")
+    common._shared_db_service = db
+    project = db.create_project(name="数据安全项目")
+    try:
+        view = BackupView(db_service=db)
+        monkeypatch.setattr(
+            view.selector, "get_current_project_id", lambda: project.project_id
+        )
+        view._refresh_security_overview(capture_capacity=False)
+
+        assert "备份覆盖" in view.security_summary_label.text()
+        assert "最后校验" in view.security_summary_label.text()
+        assert view.capacity_trend is not None
+        assert view.capacity_trend.isHidden()  # 默认收起，避免挤出主操作
+        # 校验 / 恢复 / 刷新入口统一在数据安全概览内
+        assert view.verify_backup_btn.parent() is not None
+        assert view.restore_btn.parent() is not None
+        assert view.refresh_security_btn.parent() is not None
+        view.close()
+        view.deleteLater()
+    finally:
+        reset_singletons()
+        reset_session_state()
+
+
+def test_dashboard_health_panels_moved_to_backup(tmp_dir, monkeypatch):
+    """工作台只保留统计/SOP/最近操作，健康与容量趋势已迁移到数据备份页。"""
+    window = _build_main_window(tmp_dir, monkeypatch, "team")
+    try:
+        dash = window.dashboard_view
+        assert not hasattr(dash, "health_summary_label")
+        assert not hasattr(dash, "capacity_trend")
+        assert hasattr(window.backup_view, "security_summary_label")
+        assert hasattr(window.backup_view, "capacity_trend")
+        # 备份页刷新路径（含数据安全概览）不应访问已移除的工作台控件
+        window.backup_view._on_show_refresh()
+        dash._refresh()  # 不应再访问已移除的健康控件
     finally:
         _teardown_main_window(window)
 

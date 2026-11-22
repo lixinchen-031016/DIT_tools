@@ -1284,7 +1284,7 @@ class DatabaseService:
     def get_missing_file_asset_ids(self, project_id: str) -> list[str]:
         """返回当前项目中文件已丢失（路径为空或磁盘上不存在）的素材 asset_id 列表。
 
-        实时扫描磁盘，是「文件存在性验证」的事实来源，供素材信息列表的
+        实时扫描磁盘，是「文件存在性验证」的事实来源，供素材库列表的
         “文件已丢失”标识与「一键清理丢失素材」功能共用，确保二者结论一致。
 
         Args:

@@ -1,7 +1,6 @@
 """项目概览看板视图 - 聚合展示当前项目进度，提供 SOP 下一步引导"""
 
 import zipfile
-from pathlib import Path
 
 from PySide6.QtCore import Signal, Slot
 from PySide6.QtGui import QColor
@@ -25,7 +24,6 @@ from DITWorkstation.App.session_context import (
     set_current_project,
 )
 from DITWorkstation.Services.archive_service import ArchiveService
-from DITWorkstation.Services.project_health_service import ProjectHealthService
 from DITWorkstation.Utils import (
     format_size,
     get_db_service,
@@ -45,7 +43,6 @@ from DITWorkstation.Views.Styles.theme import (
     TITLE_QSS,
 )
 from DITWorkstation.Views.Widgets import (
-    CapacityTrendWidget,
     RefreshOnShowView,
     WorkspaceProjectSelector,
 )
@@ -126,7 +123,6 @@ class ProjectDashboardView(RefreshOnShowView):
         super().__init__()
         self.db_service = get_db_service()
         self.archive_service = ArchiveService(db_service=self.db_service)
-        self.health_service = ProjectHealthService(self.db_service)
         self.task_vm = TaskViewModel(self, task_store=self.db_service)
         self.task_vm.error.connect(self._on_task_error)
         self.task_vm.finished.connect(self._on_task_finished)
@@ -212,8 +208,8 @@ class ProjectDashboardView(RefreshOnShowView):
         self.btn_log.clicked.connect(lambda: self._jump_to(_nav_index("log")))
 
         self.btn_report = QPushButton("④ 生成报告")
-        self.btn_report.setToolTip("去生成项目数据管理与 QC 报告")
-        self.btn_report.clicked.connect(lambda: self._jump_to(_nav_index("report")))
+        self.btn_report.setToolTip("打开报告生成对话框，导出数据管理与 QC 报告")
+        self.btn_report.clicked.connect(self.open_report_dialog)
 
         for btn in (self.btn_import, self.btn_backup, self.btn_log, self.btn_report):
             btn.setStyleSheet(f"""
@@ -321,36 +317,6 @@ class ProjectDashboardView(RefreshOnShowView):
         )
         layout.addWidget(self.recent_ops_label)
 
-        self.health_label = QLabel("项目健康")
-        self.health_label.setStyleSheet(
-            f"font-size: {FONT_SIZE.LG}px; font-weight: 600; color: {COLOR.TEXT_PRIMARY}; margin-top: 8px;"
-        )
-        layout.addWidget(self.health_label)
-        health_row = QHBoxLayout()
-        self.health_summary_label = QLabel("请选择项目以查看健康状态")
-        self.health_summary_label.setWordWrap(True)
-        self.health_summary_label.setStyleSheet(
-            f"background-color: {COLOR.BG_CARD}; color: {COLOR.TEXT_PRIMARY}; "
-            f"border: 1px solid {COLOR.BORDER}; border-radius: {RADIUS.BUTTON}px; "
-            f"padding: 12px 16px; font-size: {FONT_SIZE.SM}px;"
-        )
-        health_row.addWidget(self.health_summary_label, 1)
-        self.refresh_health_btn = QPushButton("刷新健康状态")
-        self.refresh_health_btn.setToolTip(
-            "检查失联素材、失败任务、待重试文件和备份盘剩余容量"
-        )
-        self.refresh_health_btn.clicked.connect(self._refresh_health)
-        health_row.addWidget(self.refresh_health_btn)
-        layout.addLayout(health_row)
-
-        self.capacity_label = QLabel("备份盘容量趋势")
-        self.capacity_label.setStyleSheet(
-            f"font-size: {FONT_SIZE.LG}px; font-weight: 600; color: {COLOR.TEXT_PRIMARY}; margin-top: 8px;"
-        )
-        layout.addWidget(self.capacity_label)
-        self.capacity_trend = CapacityTrendWidget()
-        layout.addWidget(self.capacity_trend)
-
         layout.addStretch()
 
         self._apply_usage_mode_visibility()
@@ -379,12 +345,13 @@ class ProjectDashboardView(RefreshOnShowView):
             # 最近操作审计面板
             self.recent_label.setVisible(False)
             self.recent_ops_label.setVisible(False)
-        if not is_enabled("audit_panel"):
-            self.health_label.setVisible(False)
-            self.health_summary_label.setVisible(False)
-            self.refresh_health_btn.setVisible(False)
-            self.capacity_label.setVisible(False)
-            self.capacity_trend.setVisible(False)
+
+    @safe_slot("打开报告生成失败")
+    def open_report_dialog(self):
+        """打开报告生成对话框（报告是工作台动作，不占用一级导航）。"""
+        from DITWorkstation.Views.Widgets.report_dialog import ReportDialog
+
+        ReportDialog(self).exec()
 
     @safe_slot("从模板新建项目失败")
     def _create_from_template(self):
@@ -445,9 +412,6 @@ class ProjectDashboardView(RefreshOnShowView):
             self.card_backups.set_value("—", "")
             self.card_logs.set_value("—", "")
             self.card_size.set_value("—", "")
-            self.health_summary_label.setText("请选择项目以查看健康状态")
-            self.capacity_trend.set_snapshots([])
-            self.refresh_health_btn.setEnabled(False)
             if is_enabled("shooting_log"):
                 self.sop_hint.setText(
                     "💡 请先选择或创建项目。可在「媒体导入」或「拍摄日志」视图新建项目，"
@@ -462,7 +426,6 @@ class ProjectDashboardView(RefreshOnShowView):
             return
 
         self._set_guide_enabled(True)
-        self.refresh_health_btn.setEnabled(True)
 
         try:
             stats = self.db_service.get_project_stats(project_id)
@@ -509,52 +472,6 @@ class ProjectDashboardView(RefreshOnShowView):
         self.sop_hint.setText(
             self._build_sop_hint(asset_count, backed_up, log_count, backup_job_count)
         )
-        self._refresh_health(capture_capacity=False)
-
-    @safe_slot("刷新项目健康状态失败")
-    def _refresh_health(self, _checked=False, capture_capacity=True):
-        project_id = self.selector.get_current_project_id()
-        if not project_id:
-            return
-        report = self.health_service.get_health_report(
-            project_id, capture_capacity=capture_capacity
-        )
-        issues = report["issues"]
-        check = report["last_integrity_check"]
-        check_text = (
-            "从未校验"
-            if not check
-            else (
-                check["created_at"].strftime("%Y-%m-%d %H:%M")
-                if check.get("created_at")
-                else "时间未知"
-            )
-        )
-        capacity_lines = []
-        for item in report["capacities"]:
-            if item["available"]:
-                capacity_lines.append(
-                    f"{Path(item['path']).name or item['path']}：剩余 {format_size(item['free_bytes'])}"
-                )
-            else:
-                capacity_lines.append(
-                    f"{Path(item['path']).name or item['path']}：不可达"
-                )
-        forecast = report.get("capacity_forecast", {})
-        if forecast.get("warning"):
-            days = forecast.get("days_remaining")
-            warning_text = "容量不足"
-            if days is not None:
-                warning_text += f"，预计 {days} 天内耗尽"
-            capacity_lines.append(f"⚠ {warning_text}")
-        state = "正常" if report["severity"] == "healthy" else "需要关注"
-        self.health_summary_label.setText(
-            f"状态：{state}  |  未备份 {issues['unbacked_assets']}  |  失联路径 {issues['missing_assets']}  | "
-            f"失败任务 {issues['failed_tasks']}  |  待重试 {issues['retry_files']}\n"
-            f"最后校验：{check_text}"
-            + ("  |  " + "；".join(capacity_lines) if capacity_lines else "")
-        )
-        self.capacity_trend.set_snapshots(report.get("capacity_history", []))
 
     def _refresh_recent_operations(self):
         """刷新「最近操作」审计日志摘要（最近 5 条）。"""
@@ -624,8 +541,8 @@ class ProjectDashboardView(RefreshOnShowView):
                 "  下一步：去「拍摄日志」选中日志后点「关联素材」补全关联。"
             )
         return (
-            "④ 下一步：去「报告生成」生成项目数据管理与 QC 报告。\n"
-            "  完成后可去「素材检索」复核全部数据。"
+            "④ 下一步：点击「生成报告」导出数据管理与 QC 报告。\n"
+            "  完成后可去「素材库」复核全部数据。"
         )
 
     def _build_sop_hint_personal(
@@ -649,7 +566,7 @@ class ProjectDashboardView(RefreshOnShowView):
             )
         return (
             "✅ 素材已全部完成备份。\n"
-            "  可在「素材检索」定位素材，或用「RAW提取」「文件重命名」继续整理。"
+            "  可在「素材库」定位素材，或用「RAW提取」「文件重命名」继续整理。"
         )
 
     def _set_guide_enabled(self, enabled: bool):

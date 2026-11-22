@@ -58,15 +58,13 @@ from DITWorkstation.Services.integrity_scheduler import (
 from DITWorkstation.Services.volume_monitor import VolumeMonitor
 from DITWorkstation.Utils import get_db_service, logger
 from DITWorkstation.Utils.workers import WorkerThread
-from DITWorkstation.Views.asset_info_view import AssetInfoView
 from DITWorkstation.Views.backup_view import BackupView
 from DITWorkstation.Views.first_run_wizard import SOP_GUIDE_TEXT, FirstRunWizard
+from DITWorkstation.Views.library_view import LibraryView
 from DITWorkstation.Views.media_import_view import MediaImportView
 from DITWorkstation.Views.project_dashboard_view import ProjectDashboardView
 from DITWorkstation.Views.raw_extraction_view import RawExtractionView
 from DITWorkstation.Views.rename_view import RenameView
-from DITWorkstation.Views.report_view import ReportView
-from DITWorkstation.Views.search_view import SearchView
 from DITWorkstation.Views.shooting_log_view import ShootingLogView
 from DITWorkstation.Views.Styles.theme import COLOR, FONT_SIZE, RADIUS
 
@@ -85,9 +83,7 @@ _NAV_ICON_BY_KEY = {
     "log": QStyle.StandardPixmap.SP_FileDialogDetailedView,
     "raw": QStyle.StandardPixmap.SP_FileIcon,
     "rename": QStyle.StandardPixmap.SP_DialogResetButton,
-    "search": QStyle.StandardPixmap.SP_FileDialogContentsView,
-    "asset_info": QStyle.StandardPixmap.SP_FileDialogInfoView,
-    "report": QStyle.StandardPixmap.SP_DialogSaveButton,
+    "library": QStyle.StandardPixmap.SP_FileDialogContentsView,
 }
 
 
@@ -153,7 +149,7 @@ class MainWindow(QMainWindow):
           所有 setCurrentRow 调用方一律经由映射转换，行为与改造前一致。
         """
         # 左侧导航栏（顺序由「当前激活导航列表」决定：
-        # 团队 9 项 / 个人 7 项 / 极简 1 项）
+        # 团队 7 项 / 个人 6 项 / 极简 1 项）
         self.active_nav_items = get_active_nav_items()
         self.nav_list = QListWidget()
         self.nav_list.setFixedWidth(NAV_WIDTH_EXPANDED)
@@ -265,9 +261,7 @@ class MainWindow(QMainWindow):
             "log": ShootingLogView,
             "raw": RawExtractionView,
             "rename": RenameView,
-            "search": SearchView,
-            "asset_info": AssetInfoView,
-            "report": ReportView,
+            "library": LibraryView,
         }
         # key → 实例属性名（供测试与外部代码按名称访问）
         attr_by_key = {
@@ -277,9 +271,7 @@ class MainWindow(QMainWindow):
             "log": "log_view",
             "raw": "raw_view",
             "rename": "rename_view",
-            "search": "search_view",
-            "asset_info": "asset_info_view",
-            "report": "report_view",
+            "library": "library_view",
         }
 
         self.stack = QStackedWidget()
@@ -307,14 +299,14 @@ class MainWindow(QMainWindow):
 
         add_shortcut("Ctrl+I", self._focus_import)
         # Ctrl+F / Ctrl+B 仅目标页在当前模式激活时注册，避免访问未实例化视图
-        if is_nav_enabled("search"):
-            add_shortcut("Ctrl+F", self._focus_search)
+        if is_nav_enabled("library"):
+            add_shortcut("Ctrl+F", self._focus_library)
         if is_nav_enabled("backup"):
             add_shortcut("Ctrl+B", self._focus_backup)
         # Ctrl+L 跳拍摄日志仅团队模式注册（个人/极简模式无日志页）
         if is_nav_enabled("log"):
             add_shortcut("Ctrl+L", self._focus_log)
-        # Ctrl+1~N 切换到对应导航页（N = 激活导航项数量：团队 9 / 个人 7 / 极简 1）
+        # Ctrl+1~N 切换到对应导航页（N = 激活导航项数量：团队 7 / 个人 6 / 极简 1）
         # 索引为「激活导航列表中的位置」（栈索引），经映射转换为列表控件行号
         for i in range(1, len(self.active_nav_items) + 1):
             add_shortcut(f"Ctrl+{i}", lambda idx=i - 1: self._select_stack_index(idx))
@@ -401,17 +393,8 @@ class MainWindow(QMainWindow):
         log_viewer_action.setToolTip("在应用内查看日志文件内容")
         log_viewer_action.triggered.connect(self._show_log_viewer)
 
-        restore_action = settings_menu.addAction("从备份恢复素材…")
-        restore_action.setToolTip("把已备份素材从备份卷复制回工作盘（回拷）")
-        restore_action.triggered.connect(self._show_restore_wizard)
-        # 依赖备份视图：备份页未激活时（极简模式）隐藏入口。
-        # 菜单构建早于视图栈实例化，故按导航可用性判断而非视图实例。
-        restore_action.setVisible(is_nav_enabled("backup"))
-
-        verify_action = settings_menu.addAction("立即完整性校验…")
-        verify_action.setToolTip("手动触发一次备份完整性校验")
-        verify_action.triggered.connect(self._trigger_integrity_check)
-        verify_action.setVisible(is_nav_enabled("backup"))
+        # 备份校验与回拷入口已收口到「数据备份 → 数据安全概览」，
+        # 避免同一能力在菜单与视图各有一个入口。
 
         task_history_action = settings_menu.addAction("任务中心…")
         task_history_action.setToolTip("查看后台任务历史、错误摘要和可恢复任务")
@@ -478,8 +461,8 @@ class MainWindow(QMainWindow):
             f"• Ctrl+1~{nav_count}：切换到对应导航页",
             "• Ctrl+I：跳转到媒体导入",
         ]
-        if is_nav_enabled("search"):
-            lines.append("• Ctrl+F：跳转到素材检索")
+        if is_nav_enabled("library"):
+            lines.append("• Ctrl+F：跳转到素材库并聚焦搜索框")
         if is_nav_enabled("backup"):
             lines.append("• Ctrl+B：跳转到数据备份")
         lines += [
@@ -512,7 +495,7 @@ class MainWindow(QMainWindow):
             "<p>专业摄影数据管理应用</p>"
             "<p>支持媒体导入、多目标校验备份（ASC MHL v2 交接清单、断点续传、"
             "源卡复读校验）、存储卡自动化与擦除保护、KIOSK 跟机模式、"
-            "JPG 筛选 RAW 提取、批量重命名、拍摄日志管理、素材检索与报告生成。</p>",
+            "JPG 筛选 RAW 提取、批量重命名、拍摄日志管理、素材库与报告生成。</p>",
         )
 
     def _show_settings(self):
@@ -534,43 +517,11 @@ class MainWindow(QMainWindow):
 
         LogViewerDialog(self).exec()
 
-    def _show_restore_wizard(self):
-        """打开「从备份恢复素材」向导。"""
-        if self.backup_view is None:
+    def open_report_dialog(self):
+        """打开报告生成对话框（工作台动作；供命令面板等入口复用）。"""
+        if self.dashboard_view is None:
             return
-        from DITWorkstation.Views.Widgets.restore_wizard import RestoreWizard
-
-        RestoreWizard(self, db_service=self.backup_view.db_service).exec()
-
-    def _trigger_integrity_check(self):
-        """手动触发一次完整性校验（立即执行，走任务线程避免卡 UI）。"""
-        if self.backup_view is None:
-            return
-        from DITWorkstation.Services.integrity_scheduler import IntegrityScheduler
-
-        integrity = IntegrityScheduler(
-            self.backup_view.backup_service, self.backup_view.db_service
-        )
-        worker = WorkerThread(integrity.run_all_projects)
-        self._integrity_worker = worker
-
-        def _done(results):
-            self._set_task_status("完整性校验完成", COLOR.SUCCESS)
-            total = len(results) if isinstance(results, dict) else 0
-            QMessageBox.information(
-                self,
-                "完整性校验",
-                f"校验完成，共检查 {total} 个项目。\n详细结果已写入操作审计日志。",
-            )
-
-        def _err(error):
-            QMessageBox.warning(self, "校验失败", str(error))
-
-        worker.finished.connect(_done)
-        worker.error.connect(_err)
-        worker.thread_finished.connect(worker.deleteLater)
-        worker.start()
-        self._set_task_status("正在执行完整性校验…", COLOR.WARNING)
+        self.dashboard_view.open_report_dialog()
 
     def _show_task_center(self):
         """打开后台任务历史中心。"""
@@ -620,12 +571,12 @@ class MainWindow(QMainWindow):
         if row is not None:
             self.nav_list.setCurrentRow(row)
 
-    def _focus_search(self):
-        """Ctrl+F: 跳转到素材检索并聚焦搜索框"""
-        if self.search_view is None:
+    def _focus_library(self):
+        """Ctrl+F: 跳转到素材库并聚焦关键词输入框"""
+        if self.library_view is None:
             return
-        self._navigate_to("search")
-        self.search_view.keyword_edit.setFocus()
+        self._navigate_to("library")
+        self.library_view.keyword_edit.setFocus()
 
     def _focus_import(self):
         """Ctrl+I: 跳转到媒体导入"""
@@ -683,8 +634,7 @@ class MainWindow(QMainWindow):
             (self.import_view, "worker"),
             (self.raw_view, "worker"),
             (self.rename_view, "_worker"),
-            (self.report_view, "worker"),
-            (self.asset_info_view, "_batch_worker"),
+            (self.library_view, "_batch_worker"),
         ):
             if view is None:
                 continue
@@ -779,8 +729,7 @@ class MainWindow(QMainWindow):
             (self.import_view, "媒体导入"),
             (self.raw_view, "RAW提取"),
             (self.rename_view, "文件重命名"),
-            (self.report_view, "报告生成"),
-            (self.asset_info_view, "批量EXIF读取"),
+            (self.library_view, "批量EXIF读取"),
         ):
             if v is not None:
                 view_name_map[id(v)] = name

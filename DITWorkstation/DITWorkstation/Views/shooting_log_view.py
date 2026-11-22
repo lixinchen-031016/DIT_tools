@@ -70,11 +70,11 @@ class ShootingLogView(RefreshOnShowView):
 
     def _setup_selector(self, layout):
         # 左侧：工作区 + 项目两级选择控件（封装下拉/列表/新建对话框/全局信号同步）
+        # 项目删除统一收口到「项目概览」，本视图只负责选择与新建
         self.selector = WorkspaceProjectSelector(
             project_widget="list",
             show_edit_workspace=False,
             show_new_project=True,
-            show_delete_project=True,
             db_service=self.db_service,
         )
         layout.addWidget(self.selector, 1)
